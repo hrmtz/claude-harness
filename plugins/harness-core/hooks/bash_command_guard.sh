@@ -11,6 +11,25 @@ CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -z "$CMD" ] && exit 0
 
 # ----------------------------------------
+# Pre-process: strip documentation-context argument bodies before pattern match.
+# Issue #1: commit messages / issue bodies that DESCRIBE dangerous patterns by
+# name should not trip the guard — patterns reflect actual command invocation
+# intent, not literal mentions in -m/--message/-b/--body/--title args.
+# Note: `bash -c 'inner cmd'` and `sh -c '...'` are NOT stripped because those
+# inner strings ARE real command invocations.
+# ----------------------------------------
+SCRUBBED="$CMD"
+if command -v perl >/dev/null 2>&1; then
+    SCRUBBED=$(perl -0777 -pe '
+        s/(--?(?:m|message|b|body|title))\s+"(?:[^"\\]|\\.)*"/${1} _MSG_REDACTED_/g;
+        s/(--?(?:m|message|b|body|title))\s+'\''(?:[^'\''\\]|\\.)*'\''/${1} _MSG_REDACTED_/g;
+    ' <<< "$CMD")
+else
+    # Fallback (single-line only; multi-line heredoc messages may slip past).
+    SCRUBBED=$(echo "$CMD" | sed -E 's/(-{1,2}(m|message|b|body|title))[[:space:]]+"[^"]*"/\1 _MSG_REDACTED_/g; s/(-{1,2}(m|message|b|body|title))[[:space:]]+'\''[^'\'']*'\''/\1 _MSG_REDACTED_/g')
+fi
+
+# ----------------------------------------
 # Block pattern catalog (regex → reason)
 # ----------------------------------------
 # POSIX ERE-safe patterns、separator は ::: (regex alternation `|` との衝突回避)
@@ -33,7 +52,7 @@ VIOLATION_MSGS=""
 for entry in "${PATTERNS_REASONS[@]}"; do
     pattern="${entry%%:::*}"
     reason="${entry#*:::}"
-    if echo "$CMD" | grep -qE "$pattern"; then
+    if echo "$SCRUBBED" | grep -qE "$pattern"; then
         VIOLATION_FOUND=1
         VIOLATION_MSGS="${VIOLATION_MSGS}- ${reason}\n"
         prefix=$(echo "$pattern" | head -c 40)
