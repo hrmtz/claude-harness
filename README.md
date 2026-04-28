@@ -1,5 +1,7 @@
 # claude-harness
 
+> 🇯🇵 [日本語版 README はこちら](./README_ja.md)
+
 Operational harness for [Claude Code](https://claude.com/claude-code), distilled from 6+ months of self-hosted production use.
 
 > **Why a "harness"?** LLM agents fail in patterned ways — credential leaks, recovery loops, premature script generation. Behavioral rules in `CLAUDE.md` catch some of these, but the same incidents repeat. This marketplace ships **structural** fixes (hooks, guards, reflexive context injection) that don't rely on the agent remembering.
