@@ -3,7 +3,8 @@
   "name": "claude-harness",
   "description": "Operational harness for Claude Code: defense-in-depth credential leak prevention, workflow guardrails, and behavioral rails distilled from production self-hosted use.",
   "owner": {
-    "name": "moingmoing"
+    "name": "hrmtz",
+    "url": "https://github.com/hrmtz"
   },
   "plugins": [
     {
