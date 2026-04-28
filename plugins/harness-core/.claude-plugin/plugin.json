@@ -1,0 +1,7 @@
+{
+  "name": "harness-core",
+  "description": "Defense-in-depth hooks for Claude Code: credential leak prevention, dangerous bash command guard, admission-keyword workflow reminders.",
+  "author": {
+    "name": "moingmoing"
+  }
+}

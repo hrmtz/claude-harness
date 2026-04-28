@@ -1,0 +1,9 @@
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local hook test artifacts
+*.log
+state/

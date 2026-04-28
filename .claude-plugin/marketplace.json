@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-harness",
+  "description": "Operational harness for Claude Code: defense-in-depth credential leak prevention, workflow guardrails, and behavioral rails distilled from production self-hosted use.",
+  "owner": {
+    "name": "moingmoing"
+  },
+  "plugins": [
+    {
+      "name": "harness-core",
+      "description": "Three defense-in-depth hooks: credential value scrub (PostToolUse), admission keyword reminder (UserPromptSubmit), bash command guard (PreToolUse). Built after repeated credential leak incidents — structural fix when behavioral rules in CLAUDE.md keep failing.",
+      "source": "./plugins/harness-core",
+      "category": "security"
+    }
+  ]
+}
