@@ -16,11 +16,9 @@ More plugins are planned (formation skill for long-running tmux pane workers, CL
 
 ```bash
 # in Claude Code
-/plugin marketplace add github:<your-fork>/claude-harness-marketplace
+/plugin marketplace add github:hrmtz/claude-harness
 /plugin install harness-core@claude-harness
 ```
-
-> Replace `<your-fork>` with this repo's owner once forked / cloned to GitHub.
 
 After install, Claude Code auto-wires the hooks via `${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json`. No manual `~/.claude/settings.json` edit needed.
 
@@ -41,8 +39,8 @@ sops -d secrets.enc.yaml
 If you'd rather copy the files directly:
 
 ```bash
-git clone https://github.com/<your-fork>/claude-harness-marketplace
-cp -r claude-harness-marketplace/plugins/harness-core/hooks/* ~/.claude/hooks/
+git clone https://github.com/hrmtz/claude-harness
+cp -r claude-harness/plugins/harness-core/hooks/* ~/.claude/hooks/
 # then add to ~/.claude/settings.json — see plugins/harness-core/README.md
 ```
 
@@ -57,7 +55,7 @@ Read that first if you want to understand *why* these hooks exist before install
 ## Status
 
 - ✅ `harness-core` (this commit) — production-tested locally
-- ⏳ `harness-formation` — pending public release of [njslyr7](https://github.com/<your-fork>/njslyr7) (tmux pane peer-worker daemon)
+- ⏳ `harness-formation` — pending public release of `njslyr7` (tmux pane peer-worker daemon)
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
 ## License

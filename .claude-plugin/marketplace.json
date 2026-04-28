@@ -10,7 +10,8 @@
       "name": "harness-core",
       "description": "Three defense-in-depth hooks: credential value scrub (PostToolUse), admission keyword reminder (UserPromptSubmit), bash command guard (PreToolUse). Built after repeated credential leak incidents — structural fix when behavioral rules in CLAUDE.md keep failing.",
       "source": "./plugins/harness-core",
-      "category": "security"
+      "category": "security",
+      "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-core"
     }
   ]
 }
