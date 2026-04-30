@@ -12,6 +12,7 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 |---|---|---|
 | **harness-core** | 3 hooks: credential value scrub (PostToolUse) + dangerous bash guard (PreToolUse) + admission-keyword workflow reminder (UserPromptSubmit) | Every Bash call + every user prompt |
 | **harness-magi** | Three-perspective preflight review skill (MELCHIOR/BALTHASAR/CASPAR personas, parallel `Task` spawn). Front-loads architectural / operational / commercial blind spots before high-stakes changes execute | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
+| **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
 
 Companion repository: [**njslyr7**](https://github.com/hrmtz/njslyr7) ships the `formation` skill + CLI for long-running peer-pane workers in tmux. Install separately via `bash <(curl ...)/install.sh` from that repo.
 
@@ -61,6 +62,7 @@ Read that first if you want to understand *why* these hooks exist before install
 
 - ✅ `harness-core` — production-tested locally
 - ✅ `harness-magi` — pure-prompt skill, ships immediately
+- ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
 - 🔗 `formation` skill — lives in [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7) (separate repo, separate install)
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
