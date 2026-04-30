@@ -80,6 +80,44 @@ Cron line:
 */1 * * * * /path/to/harness-rails/bin/safety-rails-watcher >> /var/log/safety-rails-watcher.log 2>&1
 ```
 
+### 4. `hooks/pipeline_preflight_gate.sh` — PreToolUse hard block
+
+A behavioral memory rule ("smoke 1 batch before bulk") gets ignored under cognitive load. This hook makes it structural by **blocking** Claude's `Bash` tool calls that hit dangerous integration patterns until the operator has logged a pre-flight ack.
+
+Trigger patterns (built from a 12-bug cascade incident, 2026-04-30):
+
+| Trigger | Pattern | Why |
+|---|---|---|
+| `cloud-instance-create` | `vastai create instance` / `hcloud server create` / `aws ec2 run-instances` / `gcloud compute instances create` | hourly billing locks in; smoke 1 instance with target workload before fleet rent |
+| `multi-component-pipe` | `curl …` + `zcat/gunzip/unzstd` + `python/jq/awk` + `psql … COPY` chained | 4-stage pipe has 4+ failure modes (partial transfer, EOF, parser-format mismatch, COPY back-pressure) |
+| `cross-host-pg-stream` | `ssh + pg_dump` / `COPY … FROM STDIN BINARY` | network bandwidth ceiling + TCP single-stream limit; measure raw bandwidth before parallelism |
+| `bulk-parallel-loop` | `for X in 0 1 2 3 …; do … &; done` (N≥4 backgrounded) | for-loop with N≥4 amplifies any single-unit bug N times; verify N=1 happy path first |
+
+Bypass: complete pre-flight (sample 1 row, measure bandwidth, smoke 1 unit end-to-end, list assumptions) and:
+
+```bash
+mkdir -p ~/.local/state/pipeline-preflight
+echo "preflight done $(date -u +%Y-%m-%dT%H:%M:%SZ): assumptions verified" \
+  > ~/.local/state/pipeline-preflight/<trigger>.ack
+```
+
+Validity: 30 minutes. Re-create after major changes (new offer, new file format, new host).
+
+Install on `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Bash",
+      "hooks": [
+        { "type": "command", "command": "bash ~/.claude/hooks/pipeline_preflight_gate.sh", "timeout": 5 }
+      ]
+    }]
+  }
+}
+```
+
 ## Install
 
 Plugin path: `plugins/harness-rails/` (this directory).
