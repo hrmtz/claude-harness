@@ -76,6 +76,15 @@ if echo "$CMD" | grep -qE 'for[[:space:]]+[a-zA-Z_]+[[:space:]]+in[[:space:]]+(0
   why="for-loop with N≥4 & jobs amplifies any single-unit bug N times. Run loop with N=1 first to verify the single-unit happy path."
 fi
 
+# (5) Destroy / cleanup of running cloud instance — counterpart to (1)
+# Symmetric guard: cleanup forgetting (= bleeding $$) AND reflex destroy
+# (= losing in-flight insurance) are both reactive defaults under load.
+# This trigger forces a 1-line cost-benefit ack before destroy.
+if echo "$CMD" | grep -qE '^[[:space:]]*(vastai destroy instance|hcloud server delete|aws ec2 terminate-instances|gcloud compute instances delete)'; then
+  trigger="cloud-instance-destroy"
+  why="destroy is irreversible. State 1 line on (a) what changed since last assessment, (b) what alternatives (kill zombie procs / wait N min / pivot script) were considered, (c) why ETA after destroy is better than ETA after fix."
+fi
+
 [ -z "$trigger" ] && exit 0
 
 # --- check ack file ---
