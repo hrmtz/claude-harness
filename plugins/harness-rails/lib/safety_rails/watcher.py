@@ -111,14 +111,23 @@ def _notify_discord(project: str, anom: Anomaly) -> None:
         f"{icon} **safety-rails [{project}/{anom.job}]** level={anom.level}\n"
         f"```\nhost:    {socket.gethostname()}\nstatus:  {anom.detail}\n```"
     )
-    # try discord-bot post (per-project channel) → fallback discord-notify
-    discord_bot = subprocess.run(
-        ["which", "discord-bot"], capture_output=True, text=True
-    )
-    if discord_bot.returncode == 0:
-        subprocess.run(["discord-bot", "post", project, msg], check=False)
-    else:
-        subprocess.run(["discord-notify", msg], check=False)
+    # try discord-bot post (per-project channel) → fallback discord-notify → log only
+    for cmd in (["discord-bot", "post", project, msg], ["discord-notify", msg]):
+        try:
+            r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if r.returncode == 0:
+                return
+        except FileNotFoundError:
+            continue  # try next
+    # all notify tools missing — log to stderr (cron captures to log file)
+    print(f"[NOTIFY-FAIL] {msg}", file=sys.stderr)
+
+
+def _has_command(name: str) -> bool:
+    try:
+        return subprocess.run(["which", name], capture_output=True).returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def _gh_issue(project_repo: str, anom: Anomaly) -> None:
@@ -132,12 +141,17 @@ def _gh_issue(project_repo: str, anom: Anomaly) -> None:
     else:
         label += ",priority:low"
 
+    if not _has_command("gh"):
+        return  # gh not installed, silent skip
     # check if open issue with same title exists (de-dup)
-    check = subprocess.run(
-        ["gh", "issue", "list", "--repo", project_repo, "--state", "open",
-         "--search", title, "--json", "number"],
-        capture_output=True, text=True,
-    )
+    try:
+        check = subprocess.run(
+            ["gh", "issue", "list", "--repo", project_repo, "--state", "open",
+             "--search", title, "--json", "number"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return
     if check.returncode == 0 and check.stdout.strip() not in ("", "[]"):
         return  # issue already open, skip duplicate
 
@@ -157,11 +171,14 @@ def _gh_issue(project_repo: str, anom: Anomaly) -> None:
         f"   - kill + alternative algorithm\n"
         f"   - continue with degraded performance\n"
     )
-    subprocess.run(
-        ["gh", "issue", "create", "--repo", project_repo,
-         "--title", title, "--label", label, "--body", body],
-        check=False,
-    )
+    try:
+        subprocess.run(
+            ["gh", "issue", "create", "--repo", project_repo,
+             "--title", title, "--label", label, "--body", body],
+            check=False, capture_output=True,
+        )
+    except FileNotFoundError:
+        pass
 
 
 def _project_to_repo(project: str) -> Optional[str]:
