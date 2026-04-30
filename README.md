@@ -11,8 +11,11 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 | Plugin | What it does | Trigger |
 |---|---|---|
 | **harness-core** | 3 hooks: credential value scrub (PostToolUse) + dangerous bash guard (PreToolUse) + admission-keyword workflow reminder (UserPromptSubmit) | Every Bash call + every user prompt |
+| **harness-magi** | Three-perspective preflight review skill (MELCHIOR/BALTHASAR/CASPAR personas, parallel `Task` spawn). Front-loads architectural / operational / commercial blind spots before high-stakes changes execute | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
 
-More plugins are planned (formation skill for long-running tmux pane workers, CLAUDE.md persona templates) — see `docs/ROADMAP.md` once published.
+Companion repository: [**njslyr7**](https://github.com/hrmtz/njslyr7) ships the `formation` skill + CLI for long-running peer-pane workers in tmux. Install separately via `bash <(curl ...)/install.sh` from that repo.
+
+More plugins are planned (CLAUDE.md persona templates, repo-init skeleton). See [GitHub issues](https://github.com/hrmtz/claude-harness/issues) for status.
 
 ## Install
 
@@ -56,8 +59,9 @@ Read that first if you want to understand *why* these hooks exist before install
 
 ## Status
 
-- ✅ `harness-core` (this commit) — production-tested locally
-- ⏳ `harness-formation` — pending public release of `njslyr7` (tmux pane peer-worker daemon)
+- ✅ `harness-core` — production-tested locally
+- ✅ `harness-magi` — pure-prompt skill, ships immediately
+- 🔗 `formation` skill — lives in [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7) (separate repo, separate install)
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
 ## License

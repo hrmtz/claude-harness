@@ -13,6 +13,20 @@
       "source": "./plugins/harness-core",
       "category": "security",
       "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-core"
+    },
+    {
+      "name": "harness-magi",
+      "description": "Three-perspective preflight review skill (MELCHIOR/BALTHASAR/CASPAR personas, parallel Task spawn) for high-stakes changes — front-loads post-hoc optimization insights before walltime / cost / destructive state is committed. Triggers on walltime >= 2h, >= 100M row DML, non-reversible cutover, new pipeline layer, >= $10 spend, or long-poll scripts.",
+      "source": "./plugins/harness-magi",
+      "category": "workflow",
+      "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-magi"
+    },
+    {
+      "name": "harness-rails",
+      "description": "Operational safety rails for long-running operations. Pre-flight algorithm fitness CLI (working set vs RAM ceiling, with concrete alternatives), in-flight heartbeat helper + cron watcher (stale + ETA overrun detection), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill. Built after a 23h sunk-cost incident where philosophy-level early-bleeding-detection lived only in CLAUDE.md memory, not in structural rails.",
+      "source": "./plugins/harness-rails",
+      "category": "workflow",
+      "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-rails"
     }
   ]
 }

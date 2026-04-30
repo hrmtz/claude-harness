@@ -1,0 +1,76 @@
+#!/bin/bash
+# safety-rails-preflight — pre-flight algorithm fitness CLI
+#
+# Usage:
+#   safety-rails-preflight hnsw --rows 165000000 --dim 1024 --ram-gb 125
+#   safety-rails-preflight ivfflat --rows 50000000 --dim 1024 --ram-gb 64
+#   safety-rails-preflight diskann --rows 165000000 --dim 1024 --ram-gb 125
+#
+# Exit codes:
+#   0 — fits in RAM, OK to proceed
+#   2 — rejected (peak mem exceeds RAM threshold), alternatives printed
+
+set -euo pipefail
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec python3 -c "
+import sys
+sys.path.insert(0, '${PLUGIN_DIR}/lib')
+
+import argparse
+from safety_rails import preflight
+
+GB = 1024**3
+
+ap = argparse.ArgumentParser()
+sub = ap.add_subparsers(dest='algorithm', required=True)
+
+for algo in ('hnsw', 'ivfflat', 'diskann'):
+    p = sub.add_parser(algo)
+    p.add_argument('--rows', type=int, required=True)
+    p.add_argument('--dim', type=int, required=True)
+    p.add_argument('--bytes-per-dim', type=int, default=2)
+    p.add_argument('--ram-gb', type=int, required=True)
+    p.add_argument('--safety-factor', type=float, default=0.8)
+    if algo == 'hnsw':
+        p.add_argument('--m', type=int, default=16)
+        p.add_argument('--ef-construction', type=int, default=64)
+        p.add_argument('--parallel-workers', type=int, default=4)
+    if algo == 'ivfflat':
+        p.add_argument('--nlist', type=int, default=1000)
+
+args = ap.parse_args(sys.argv[1:])
+ram_bytes = args.ram_gb * GB
+
+if args.algorithm == 'hnsw':
+    r = preflight.hnsw_build(
+        n_rows=args.rows, dim=args.dim, bytes_per_dim=args.bytes_per_dim,
+        m=args.m, ef_construction=args.ef_construction,
+        ram_bytes=ram_bytes, parallel_workers=args.parallel_workers,
+        safety_factor=args.safety_factor,
+    )
+elif args.algorithm == 'ivfflat':
+    r = preflight.ivfflat_build(
+        n_rows=args.rows, dim=args.dim, bytes_per_dim=args.bytes_per_dim,
+        nlist=args.nlist, ram_bytes=ram_bytes, safety_factor=args.safety_factor,
+    )
+else:  # diskann
+    r = preflight.diskann_sbq_build(
+        n_rows=args.rows, dim=args.dim, ram_bytes=ram_bytes,
+        safety_factor=args.safety_factor,
+    )
+
+print(f'== {r.operation} ==')
+print(f'  peak mem:  {r.peak_mem_gb:>8.1f} GB')
+print(f'  RAM:       {r.ram_gb:>8.1f} GB')
+print(f'  headroom:  {r.headroom_gb:>+8.1f} GB ({\"FITS\" if not r.rejected else \"OVER\"})')
+for note in r.notes:
+    print(f'  note: {note}')
+if r.rejected:
+    print(f'')
+    print(f'REJECT: {r.reason}')
+    print(f'')
+    print(f'alternatives:')
+    for alt in r.alternatives:
+        print(f'  - {alt}')
+    sys.exit(2)
+" "$@"

@@ -7,3 +7,9 @@
 # Local hook test artifacts
 *.log
 state/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/

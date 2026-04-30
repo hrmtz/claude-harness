@@ -1,0 +1,8 @@
+{
+  "name": "harness-rails",
+  "description": "Operational safety rails for long-running operations: pre-flight resource calc (working set vs RAM ceiling), memory scan (surface relevant past lessons by operation keyword), in-flight anomaly detection (heartbeat + cron watcher) with Discord + gh issue auto-emit. Built after a 23h sunk-cost incident where philosophy-level early-bleeding-detection failed because it lived only in memory, not in structural rails.",
+  "author": {
+    "name": "hrmtz",
+    "url": "https://github.com/hrmtz"
+  }
+}

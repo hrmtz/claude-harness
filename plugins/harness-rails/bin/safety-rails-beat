@@ -1,0 +1,88 @@
+#!/bin/bash
+# safety-rails-beat — bash shim for heartbeat write (no Python knowledge required)
+#
+# Usage:
+#   safety-rails-beat write --project PRS-LLM --job hnsw_shard_build \
+#                           --eta-hours 4 [--metric-key foo --metric-val bar]
+#
+# Typically called inside long-running shell loops:
+#   while ...; do
+#     safety-rails-beat write --project PRS-LLM --job foo --eta-hours 8
+#     do_unit_of_work
+#     sleep 30
+#   done
+#
+# For Python scripts use the heartbeat.beat() context manager directly.
+
+set -euo pipefail
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec python3 -c "
+import sys
+sys.path.insert(0, '${PLUGIN_DIR}/lib')
+
+import argparse, json, os, time
+from pathlib import Path
+
+ap = argparse.ArgumentParser()
+sub = ap.add_subparsers(dest='cmd', required=True)
+
+w = sub.add_parser('write')
+w.add_argument('--project', required=True)
+w.add_argument('--job', required=True)
+w.add_argument('--eta-hours', type=float, required=True)
+w.add_argument('--started-ts', type=float, default=None,
+               help='unix epoch when the job began; defaults to first-call ts cached in state file')
+w.add_argument('--metric', action='append', default=[],
+               help='key=value pair, can repeat')
+
+c = sub.add_parser('clear')
+c.add_argument('--project', required=True)
+c.add_argument('--job', required=True)
+
+args = ap.parse_args(sys.argv[1:])
+
+run_dir = Path(os.path.expanduser('~/.local/run/safety-rails')) / args.project
+run_dir.mkdir(parents=True, exist_ok=True)
+hb_path = run_dir / f'{args.job}.json'
+started_path = run_dir / f'{args.job}.started'
+
+if args.cmd == 'clear':
+    hb_path.unlink(missing_ok=True)
+    started_path.unlink(missing_ok=True)
+    sys.exit(0)
+
+# resolve started_ts: prefer explicit arg, else read from sticky state, else now
+now = time.time()
+if args.started_ts is not None:
+    started = args.started_ts
+elif started_path.exists():
+    try:
+        started = float(started_path.read_text().strip())
+    except Exception:
+        started = now
+else:
+    started = now
+started_path.write_text(str(started))
+
+metric = {}
+for kv in args.metric:
+    if '=' in kv:
+        k, v = kv.split('=', 1)
+        try:
+            metric[k] = float(v)
+        except ValueError:
+            metric[k] = v
+
+data = {
+    'ts': now,
+    'pid': os.getpid(),
+    'started_ts': started,
+    'eta_hours': args.eta_hours,
+}
+if metric:
+    data['metric'] = metric
+
+tmp = hb_path.with_suffix(hb_path.suffix + '.tmp')
+tmp.write_text(json.dumps(data))
+tmp.rename(hb_path)
+" "$@"
