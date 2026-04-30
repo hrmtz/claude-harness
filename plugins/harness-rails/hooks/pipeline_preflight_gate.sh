@@ -31,6 +31,13 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || true)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || true)
 [ -z "$CMD" ] && exit 0
 
+# Whitelist commands whose -m/--body args often quote patterns described
+# in prose (commit messages, gh issue/PR bodies, gh release notes etc).
+# Hooks should not trip on documentation describing the patterns.
+if echo "$CMD" | grep -qE '^[[:space:]]*(git[[:space:]]|gh[[:space:]]|cd[[:space:]][^|;&]*[[:space:]]*(&&|;)[[:space:]]*(git|gh)[[:space:]])'; then
+  exit 0
+fi
+
 # --- detect trigger patterns ---
 trigger=""
 why=""
