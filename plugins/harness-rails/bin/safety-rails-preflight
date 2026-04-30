@@ -11,7 +11,8 @@
 #   2 — rejected (peak mem exceeds RAM threshold), alternatives printed
 
 set -euo pipefail
-PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+PLUGIN_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 exec python3 -c "
 import sys
 sys.path.insert(0, '${PLUGIN_DIR}/lib')
