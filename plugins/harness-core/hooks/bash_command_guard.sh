@@ -48,6 +48,9 @@ declare -a PATTERNS_REASONS=(
     '(^|[^a-zA-Z_/])(head|tail)([[:space:]]+[^[:space:]&|;<>]+)+\.enc\.(yaml|json):::sops edit でそのまま開ける、preview 不要'
     'curl.*(-H[[:space:]]|--header[[:space:]]).*Bearer[[:space:]]+[A-Za-z0-9_+/=-]{30,}:::-H "Authorization: Bearer \$TOKEN" で env 経由 (cmdline 焼付回避)'
     'rclone.*--s3-access-key-id[[:space:]]+[A-Za-z0-9]+:::sops exec-env r2.enc.yaml '"'"'rclone ...'"'"' で env 経由'
+    # 2026-05-03 incident #14: rclone -vv が "Setting access_key_id=..." を plaintext で log 出力
+    # → verbose flag が env 値 expose、sops exec-env 組合せで credential leak path
+    'rclone[[:space:]].*([[:space:]]|^)(-vv|-vvv|--verbose|-d|--debug)([[:space:]]|$):::rclone は plain (no -v) か -v 単発以下に。-vv/--debug は env 値 plaintext print。進捗 monitor は --stats=15s --progress 単独で十分'
     'curl.*\?api[_-]?key=:::-H "Authorization: Bearer \$KEY" で URL log 焼付回避'
     'tail[[:space:]].+(rclone\.conf|\.netrc|\.aws/credentials):::sops exec-env で値直接参照 (file 内容露出不要)'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
