@@ -1,0 +1,22 @@
+{
+  "description": "harness-rails — operational safety rails (pipeline preflight gate + phase review gate, both PreToolUse Bash)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pipeline_preflight_gate.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/phase_review_gate.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

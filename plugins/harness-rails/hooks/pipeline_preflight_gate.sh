@@ -46,6 +46,7 @@ why=""
 if echo "$CMD" | grep -qE '^[[:space:]]*(vastai create instance|hcloud server create|aws ec2 run-instances|gcloud compute instances create)'; then
   trigger="cloud-instance-create"
   why="cloud rental locks in a per-hour billing clock; 'just rent and try' compounds into hours of debug + cost. Smoke 1 small instance with target workload first."
+  shuzo="rental clock 始まる前に smoke 1 unit。それで本番が読める、慌てるな。"
 fi
 
 # (2) Multi-component pipeline involving HTTP fetch + decompress + parser + DB COPY
@@ -56,14 +57,18 @@ if echo "$CMD" | grep -qE 'curl[[:space:]].*https?://' && \
    echo "$CMD" | grep -qE '\|[[:space:]]*(psql|sudo[[:space:]]*-u[[:space:]]*postgres[[:space:]]*psql)'; then
   trigger="multi-component-pipe"
   why="pipe of curl|decompress|parser|DB COPY has 4+ failure modes (partial transfer, EOF, parser-format mismatch, COPY back-pressure). Smoke 1 unit (1 file, 1 row sample) end-to-end first."
+  shuzo="pipe N 段、1 段ずつ smoke で 12 bug 防げる。1 unit で happy path 確認、それから本番。いける！"
 fi
 
-# (3) Cross-host PG dump pipe
-if echo "$CMD" | grep -qE 'ssh[[:space:]]+[^|]*\bpg_dump\b' || \
-   echo "$CMD" | grep -qE 'pg_dump[^|]*\|[[:space:]]*ssh' || \
+# (3) Cross-host PG dump stream — require pipe involvement (true streaming)
+# 修正 (2026-05-03): SQL 内の 'pg_dump' string literal で false positive 起きてた。
+# pipe を必須化することで pg_dump as command (executed) に絞り、quoted SQL は除外。
+if echo "$CMD" | grep -qE '\bpg_dump\b[^|]*\|[[:space:]]*(psql|ssh)\b' || \
+   echo "$CMD" | grep -qE '(^|[[:space:]&|;])ssh[[:space:]]+[^|;&]*\bpg_dump\b[^|;&]*\|' || \
    echo "$CMD" | grep -qE '\bCOPY[[:space:]]+.*\bFROM[[:space:]]+STDIN[[:space:]]+WITH[[:space:]]+\(FORMAT[[:space:]]+BINARY\)'; then
   trigger="cross-host-pg-stream"
   why="cross-host PG stream subject to network bandwidth ceiling + TCP single-stream limit. Measure mars→target raw bandwidth before designing parallelism."
+  shuzo="bandwidth 計測 → 設計、慎重に進めば速い。1 file dd で raw measure、それから本番だ。"
 fi
 
 # (4) Bulk parallel loop kicking N≥4 backgrounded jobs
@@ -74,6 +79,7 @@ if echo "$CMD" | grep -qE 'for[[:space:]]+[a-zA-Z_]+[[:space:]]+in[[:space:]]+(0
    echo "$CMD" | grep -qE 'do.*&'; then
   trigger="bulk-parallel-loop"
   why="for-loop with N≥4 & jobs amplifies any single-unit bug N times. Run loop with N=1 first to verify the single-unit happy path."
+  shuzo="N=1 で happy path 確認 → それから N 倍。1 unit のバグが N 倍に増殖する前に潰せ、いける！"
 fi
 
 # (5) Destroy / cleanup of running cloud instance — counterpart to (1)
@@ -83,6 +89,7 @@ fi
 if echo "$CMD" | grep -qE '^[[:space:]]*(vastai destroy instance|hcloud server delete|aws ec2 terminate-instances|gcloud compute instances delete)'; then
   trigger="cloud-instance-destroy"
   why="destroy is irreversible. State 1 line on (a) what changed since last assessment, (b) what alternatives (kill zombie procs / wait N min / pivot script) were considered, (c) why ETA after destroy is better than ETA after fix."
+  shuzo="1 行 cost-benefit 言語化 → それで安全に destroy できる。判断した責任を 1 文で書け。"
 fi
 
 [ -z "$trigger" ] && exit 0
@@ -101,6 +108,9 @@ if [ -f "$ACK_FILE" ]; then
 fi
 
 # --- BLOCK with instructions ---
+# 修造 default (各 trigger で override 済の場合はそれ使う)
+shuzo="${shuzo:-諦めるな、smoke 1 unit やれば見える。}"
+
 cat >&2 <<EOF
 🚧 pipeline-preflight-gate: $trigger
 
@@ -128,5 +138,7 @@ References:
   - feedback_magi_preflight_for_major_updates
   - feedback_no_repeat_mistakes
   - 2026-04-30 vast.ai R2 sync incident: 12 bugs, 6h debug, \$2.50+ sunk before discovering chunks_extracted has no paper_id
+
+🔥 修造: $shuzo
 EOF
 exit 2
