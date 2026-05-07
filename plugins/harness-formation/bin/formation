@@ -1,0 +1,315 @@
+#!/bin/bash
+# formation - spawn and coordinate long-running peer Claude Code panes.
+#
+# A "worker" is a separate tmux pane running its own Claude Code CLI, given
+# a briefing file and an addressable id. Worker reports flow back via an
+# append-only jsonl mailbox. The parent pane (lead) polls `formation inbox`
+# when idle. Phones / external clients reach workers via `/remote-control`
+# using the session-name assigned at spawn.
+#
+# Intended for tasks that justify minutes-to-hours of wall time where Task
+# tool subagents are insufficient (observability, mid-flight redirection,
+# human-in-the-loop acks).
+
+set -euo pipefail
+
+# Resolve real script path (follow symlinks) so lib/ lookup works when this
+# binary is symlinked into ~/.local/bin.
+SELF="${BASH_SOURCE[0]}"
+while [[ -L "$SELF" ]]; do SELF="$(readlink -f "$SELF")"; done
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+
+NJSLYR_HOME="${NJSLYR_HOME:-$HOME/.njslyr7}"
+FORMATION_DIR="$NJSLYR_HOME/formation"
+REGISTRY="$FORMATION_DIR/registry.jsonl"
+
+# shellcheck source=/dev/null
+source "$LIB_DIR/mailbox.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/wake.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/redact.sh"
+
+mkdir -p "$FORMATION_DIR"
+touch "$REGISTRY"
+
+REFUSE_LOG="$NJSLYR_HOME/mailbox/refuse.log"
+
+refuse_credential() {
+  # $1 = channel (mailbox/msg/briefing), $2 = from_id, $3 = context
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$(dirname "$REFUSE_LOG")"
+  printf '%s\t%s\tfrom=%s\t%s\n' "$ts" "$1" "$2" "$3" >> "$REFUSE_LOG"
+  echo "formation: refusing — body matches credential pattern." >&2
+  echo "formation: reference a SOPS-encrypted file instead, e.g." >&2
+  echo "           sops -d config/secrets.enc.yaml | jq -r .key" >&2
+  echo "formation: attempted send logged at $REFUSE_LOG" >&2
+}
+
+self_id() {
+  # Identify the caller. Priority: env > tmux pane user-option > pane_id.
+  if [[ -n "${FORMATION_SELF:-}" ]]; then
+    echo "$FORMATION_SELF"; return
+  fi
+  local opt=""
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    opt="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
+  fi
+  if [[ -n "$opt" ]]; then
+    echo "$opt"
+  elif [[ -n "${TMUX_PANE:-}" ]]; then
+    echo "pane-${TMUX_PANE#%}"
+  else
+    echo "shell-$$"
+  fi
+}
+
+line_push() {
+  local msg="$1"
+  local script
+  for script in \
+    "$HOME/projects/multi-agent-njslyr/scripts/line_push.sh" \
+    "$HOME/project/multi-agent-njslyr/scripts/line_push.sh"; do
+    if [[ -x "$script" ]]; then
+      bash "$script" "$msg" >/dev/null 2>&1 || true
+      return 0
+    fi
+  done
+  return 0
+}
+
+registry_add() {
+  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4"
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
+         --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
+    '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts}' \
+    >> "$REGISTRY"
+}
+
+registry_get() {
+  local worker_id="$1"
+  jq -c --arg id "$worker_id" 'select(.id == $id)' "$REGISTRY" | tail -n1
+}
+
+registry_remove() {
+  local worker_id="$1"
+  local tmp="$REGISTRY.tmp"
+  jq -c --arg id "$worker_id" 'select(.id != $id)' "$REGISTRY" > "$tmp"
+  mv "$tmp" "$REGISTRY"
+}
+
+usage() {
+  cat <<'USAGE'
+formation - long-running peer Claude Code panes
+
+Parent (lead) commands:
+  formation spawn <briefing.md> [name]    Split pane, launch claude, inject briefing
+  formation msg <worker_id> <text>        Send instruction to worker pane
+  formation status                        List active workers and last pane line
+  formation inbox                         Read unread reports addressed to self
+  formation reap <worker_id>              Kill worker pane and drop registry row
+
+Worker-side commands (invoked by the worker claude via Bash):
+  formation report <text>                 Append status to parent mailbox
+  formation done <summary>                Mark finished (mailbox + LINE push)
+  formation ask <question>                Request ack (mailbox + LINE push)
+
+Env:
+  NJSLYR_HOME      default ~/.njslyr7
+  FORMATION_SELF   override caller id (else tmux @formation_id, else pane-%N)
+
+Credential safety:
+  spawn / msg / report / done / ask all run is_credential_like on their body.
+  Matches exit 3 and append to ~/.njslyr7/mailbox/refuse.log. To send a
+  credential, encrypt it with SOPS and reference the decrypt command.
+
+Remote access:
+  Each worker runs its claude with --session-name formation-<id>. Connect from
+  phone/web via /remote-control (alias /rc) and attach to that session.
+USAGE
+}
+
+cmd_spawn() {
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn <briefing.md> [name]" >&2; exit 2; }
+  local briefing="$1" name="${2:-}"
+  briefing="$(realpath "$briefing")"
+  [[ -f "$briefing" ]] || { echo "briefing not found: $briefing" >&2; exit 2; }
+
+  if is_credential_like "$(cat "$briefing")"; then
+    refuse_credential briefing "$(self_id)" "file=$briefing"
+    echo "formation: the briefing itself contains a credential-shaped string." >&2
+    echo "formation: replace the literal value with a SOPS decrypt command and re-spawn." >&2
+    exit 3
+  fi
+
+  if [[ -z "$name" ]]; then
+    name="worker-$(date +%s | tail -c 5)"
+  fi
+  if registry_get "$name" | grep -q .; then
+    echo "worker already exists: $name" >&2; exit 2
+  fi
+
+  local parent_id; parent_id="$(self_id)"
+  local pane_id session_name="formation-$name"
+  pane_id="$(tmux split-window -d -P -F '#{pane_id}' \
+              -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id")"
+
+  tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
+  tmux select-pane -t "$pane_id" -T "$name"
+
+  tmux send-keys -t "$pane_id" "claude --name $session_name --permission-mode bypassPermissions" Enter
+
+  # Wait for claude prompt. Poll up to 30s.
+  local i
+  for i in $(seq 1 30); do
+    sleep 1
+    if tmux capture-pane -p -t "$pane_id" | grep -q '│ >'; then
+      break
+    fi
+  done
+
+  # Seed prompt: identity + briefing reference + immediate action.
+  local seed
+  seed="$(cat <<EOF
+Formation bootstrap. Your worker id is '$name'. Parent pane id is '$parent_id'.
+Briefing: $briefing
+Read it, then run 'formation report "<1-line status>"' to acknowledge receipt before starting work. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies.
+EOF
+)"
+  # Use double-tap submit (claude textarea swallows single Enter intermittently).
+  tmux_send_submit "$pane_id" "$seed"
+
+  registry_add "$name" "$pane_id" "$session_name" "$briefing"
+
+  # Auto-start mailbox relay daemon: inotifywait on mailbox, inject new msgs
+  # addressed to this worker into its tmux pane. Without this, the worker
+  # only notices new mailbox entries when it idly polls; user has to poke.
+  local relay_log="/tmp/njslyr7_relay_${name}.log"
+  local relay_pid_file="$FORMATION_DIR/$name.relay_pid"
+  nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
+    > "$relay_log" 2>&1 &
+  local relay_pid=$!
+  echo "$relay_pid" > "$relay_pid_file"
+
+  # Healthcheck: confirm the relay daemon is still alive a moment later.
+  # Common failure: lib/mailbox_relay.sh missing on disk, or a syntax error
+  # there. The nohup launch returns 0 either way, so without this check the
+  # spawn output would falsely report relay_pid=NNN.
+  sleep 0.3
+  if ! kill -0 "$relay_pid" 2>/dev/null; then
+    echo "warn: relay daemon for $name died immediately; tail $relay_log" >&2
+    rm -f "$relay_pid_file"
+    echo "$name  pane=$pane_id  session=$session_name  relay=DEAD log=$relay_log"
+    return 1
+  fi
+
+  echo "$name  pane=$pane_id  session=$session_name  relay_pid=$relay_pid log=$relay_log"
+}
+
+cmd_msg() {
+  [[ $# -ge 2 ]] || { echo "usage: formation msg <worker_id> <text>" >&2; exit 2; }
+  local worker_id="$1"; shift
+  local text="$*"
+  if is_credential_like "$text"; then
+    refuse_credential msg "$(self_id)" "to=$worker_id"
+    exit 3
+  fi
+  local row; row="$(registry_get "$worker_id")"
+  [[ -n "$row" ]] || { echo "no such worker: $worker_id" >&2; exit 2; }
+  local pane_id; pane_id="$(echo "$row" | jq -r '.pane_id')"
+  tmux_send_submit "$pane_id" "$text"
+}
+
+cmd_status() {
+  if [[ ! -s "$REGISTRY" ]]; then
+    echo "(no workers)"; return
+  fi
+  while IFS= read -r row; do
+    local id pane last
+    id="$(echo "$row" | jq -r '.id')"
+    pane="$(echo "$row" | jq -r '.pane_id')"
+    last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1)"
+    printf '%-20s %-8s  %s\n' "$id" "$pane" "${last:-(pane closed)}"
+  done < "$REGISTRY"
+}
+
+cmd_inbox() {
+  local self; self="$(self_id)"
+  local unread
+  unread="$(mailbox_read "$self")"
+  if [[ -z "$unread" ]]; then
+    echo "(empty)"
+    return
+  fi
+  echo "$unread" | jq -r '"[\(.seq)] \(.ts) from:\(.from)\n  \(.body)\n"'
+  mailbox_mark_read "$self"
+}
+
+cmd_reap() {
+  [[ $# -ge 1 ]] || { echo "usage: formation reap <worker_id>" >&2; exit 2; }
+  local worker_id="$1"
+  local row; row="$(registry_get "$worker_id")"
+  [[ -n "$row" ]] || { echo "no such worker: $worker_id" >&2; exit 2; }
+  local pane_id; pane_id="$(echo "$row" | jq -r '.pane_id')"
+
+  # Stop relay daemon first; otherwise it keeps inotifywait open on a
+  # pane that is about to die.
+  local relay_pid_file="$FORMATION_DIR/$worker_id.relay_pid"
+  if [[ -f "$relay_pid_file" ]]; then
+    local rpid; rpid="$(cat "$relay_pid_file" 2>/dev/null || true)"
+    if [[ -n "$rpid" ]]; then
+      # Order matters: kill the inotifywait child first while its parent
+      # bash is still alive so pkill -P can find it. If we kill bash first,
+      # inotifywait gets reparented to init and leaks past reap.
+      pkill -P "$rpid" 2>/dev/null || true
+      kill "$rpid" 2>/dev/null || true
+    fi
+    rm -f "$relay_pid_file"
+  fi
+
+  tmux kill-pane -t "$pane_id" 2>/dev/null || true
+  registry_remove "$worker_id"
+  rm -f "$MAILBOX_CURSOR_DIR/$worker_id.txt"
+  echo "reaped $worker_id"
+}
+
+cmd_report() {
+  [[ $# -ge 1 ]] || { echo "usage: formation report <text>" >&2; exit 2; }
+  local from; from="$(self_id)"
+  local to="${FORMATION_PARENT:-lead}"
+  mailbox_send "$from" "$to" "$*"
+}
+
+cmd_done() {
+  [[ $# -ge 1 ]] || { echo "usage: formation done <summary>" >&2; exit 2; }
+  local from; from="$(self_id)"
+  local to="${FORMATION_PARENT:-lead}"
+  local msg="[DONE] $*"
+  mailbox_send "$from" "$to" "$msg"
+  line_push "[formation/$from] $msg"
+}
+
+cmd_ask() {
+  [[ $# -ge 1 ]] || { echo "usage: formation ask <question>" >&2; exit 2; }
+  local from; from="$(self_id)"
+  local to="${FORMATION_PARENT:-lead}"
+  local msg="[ASK] $*"
+  mailbox_send "$from" "$to" "$msg"
+  line_push "[formation/$from] $msg  (reply via /rc formation-$from)"
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  spawn)  cmd_spawn  "$@" ;;
+  msg)    cmd_msg    "$@" ;;
+  status) cmd_status "$@" ;;
+  inbox)  cmd_inbox  "$@" ;;
+  reap)   cmd_reap   "$@" ;;
+  report) cmd_report "$@" ;;
+  done)   cmd_done   "$@" ;;
+  ask)    cmd_ask    "$@" ;;
+  help|-h|--help) usage ;;
+  *) echo "unknown: $cmd" >&2; usage; exit 2 ;;
+esac
