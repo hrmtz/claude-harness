@@ -12,6 +12,10 @@
 
 source "$(dirname "$0")/lib.sh"
 
+# Read stdin once; export for lib.sh (Codex compat).
+HOOK_INPUT=$(cat)
+export HOOK_INPUT
+
 PROMPT_LOWER=$(parse_prompt | tr '[:upper:]' '[:lower:]')
 
 [ -z "$PROMPT_LOWER" ] && exit 0

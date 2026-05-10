@@ -67,6 +67,11 @@ declare -a PATTERNS_REASONS=(
     'sops[[:space:]]+exec-env[[:space:]].+[^a-zA-Z_]eval[[:space:]]:::eval 抜きで script 化、sops exec-env <file> <script-path>'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][^'\''"]*[[:space:]]>[[:space:]]*[^[:space:]&|]:::redirect は plain text のみ、credential 値は file 化しない'
     'env[[:space:]]+>[[:space:]]*[^[:space:]&|]:::env | cut -d= -f1 > file で key 名のみ retain'
+
+    # 2026-05-04 incident #15: docker exec <container> env が container 内 env 全 dump
+    # POSTGRES_PASSWORD 直撃、container 起動時の compose env_file → env 経路で内部に焼付済値を host scope に出した
+    # → key 名のみ取得は cut -d= -f1、値要なら sops exec-env 経由で対象 env 注入
+    'docker[[:space:]]+(container[[:space:]]+)?exec[[:space:]].+[[:space:]]env([[:space:]]*$|[[:space:]]+\|[[:space:]]*(grep|awk|sed|fgrep|egrep|rg|tr|head|tail)):::docker exec <ct> env | cut -d= -f1 で key 名のみ、値必要なら sops exec-env <file> '"'"'docker exec <ct> sh -c "..."'"'"' 経由'
 )
 
 VIOLATION_FOUND=0

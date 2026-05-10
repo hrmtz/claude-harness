@@ -5,6 +5,10 @@
 
 source "$(dirname "$0")/lib.sh"
 
+# Read stdin once; export for lib.sh functions (Codex compat — avoids double-consume).
+HOOK_INPUT=$(cat)
+export HOOK_INPUT
+
 OUTPUT=$(parse_tool_output)
 [ -z "$OUTPUT" ] && exit 0
 
@@ -12,10 +16,8 @@ JSONL=$(active_jsonl)
 [ -z "$JSONL" ] && exit 0
 
 # ----------------------------------------
-# Pattern catalog
+# Pattern catalog — each line: <regex>|<replacement>
 # ----------------------------------------
-# Each line is: <regex>|<replacement>
-# Use distinctive markers to avoid clobbering normal text.
 PATTERNS=(
     'POSTGRES_PASSWORD=[a-zA-Z0-9_!@#$%^&*-]+|POSTGRES_PASSWORD=<REDACTED>'
     'PGPASSWORD=[a-zA-Z0-9_!@#$%^&*-]+|PGPASSWORD=<REDACTED>'
@@ -30,6 +32,14 @@ PATTERNS=(
     'GEMINI_API_KEY=[a-zA-Z0-9_-]{20,}|GEMINI_API_KEY=<REDACTED>'
     'CF_API_TOKEN=[a-zA-Z0-9_-]{20,}|CF_API_TOKEN=<REDACTED>'
     'GITHUB_TOKEN=gh[ps]_[a-zA-Z0-9]{30,}|GITHUB_TOKEN=<REDACTED>'
+    'postgresql://[^:/@[:space:]]+:[^@[:space:]]+@|postgresql://<REDACTED>:<REDACTED>@'
+    'postgres://[^:/@[:space:]]+:[^@[:space:]]+@|postgres://<REDACTED>:<REDACTED>@'
+    'mysql://[^:/@[:space:]]+:[^@[:space:]]+@|mysql://<REDACTED>:<REDACTED>@'
+    'mongodb://[^:/@[:space:]]+:[^@[:space:]]+@|mongodb://<REDACTED>:<REDACTED>@'
+    'mongodb\+srv://[^:/@[:space:]]+:[^@[:space:]]+@|mongodb+srv://<REDACTED>:<REDACTED>@'
+    'redis://[^:/@[:space:]]+:[^@[:space:]]+@|redis://<REDACTED>:<REDACTED>@'
+    'amqp://[^:/@[:space:]]+:[^@[:space:]]+@|amqp://<REDACTED>:<REDACTED>@'
+    'libsql://[^:/@[:space:]]+:[^@[:space:]]+@|libsql://<REDACTED>:<REDACTED>@'
 )
 
 # ----------------------------------------
