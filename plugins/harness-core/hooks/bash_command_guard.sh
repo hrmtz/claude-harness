@@ -44,7 +44,7 @@ declare -a PATTERNS_REASONS=(
     'docker[[:space:]]+(container[[:space:]]+)?inspect.*--format.*\.Config\.Env:::compose env_file 経由か sops exec-env で env 参照'
     'env[[:space:]]*\|[[:space:]]*(grep|awk|sed|fgrep|egrep|rg|tr).*(KEY|TOKEN|PASSWORD|PASSWD|SECRET|CRED):::env | cut -d= -f1 で key 名のみ取れる'
     'bash[[:space:]]+-x.*(printf|echo).*\$[A-Z_]+:::set +x で expansion 抑制、必要なら [ -n "\$X" ] && echo set で bool 確認'
-    'cat[[:space:]].*(\.env|\.env\.[a-z]+|\.aws/credentials)([[:space:]]|$):::sops exec-env <file> '"'"'<cmd>'"'"' で env 注入経由'
+    # L47 (cat .env|.aws/credentials) は下記 cred-file-read 統合 pattern が subsume、 ack 経路一本化のため削除
     '(^|[^a-zA-Z_/])(head|tail)([[:space:]]+[^[:space:]&|;<>]+)+\.enc\.(yaml|json):::sops edit でそのまま開ける、preview 不要'
     'curl.*(-H[[:space:]]|--header[[:space:]]).*Bearer[[:space:]]+[A-Za-z0-9_+/=-]{30,}:::-H "Authorization: Bearer \$TOKEN" で env 経由 (cmdline 焼付回避)'
     'rclone.*--s3-access-key-id[[:space:]]+[A-Za-z0-9]+:::sops exec-env r2.enc.yaml '"'"'rclone ...'"'"' で env 経由'
@@ -52,7 +52,10 @@ declare -a PATTERNS_REASONS=(
     # → verbose flag が env 値 expose、sops exec-env 組合せで credential leak path
     'rclone[[:space:]].*([[:space:]]|^)(-vv|-vvv|--verbose|-d|--debug)([[:space:]]|$):::rclone は plain (no -v) か -v 単発以下に。-vv/--debug は env 値 plaintext print。進捗 monitor は --stats=15s --progress 単独で十分'
     'curl.*\?api[_-]?key=:::-H "Authorization: Bearer \$KEY" で URL log 焼付回避'
-    'tail[[:space:]].+(rclone\.conf|\.netrc|\.aws/credentials):::sops exec-env で値直接参照 (file 内容露出不要)'
+    # L55 (tail rclone.conf|.netrc|.aws/credentials) は下記 cred-file-read 統合 pattern が subsume
+    # 2026-05-11 incident #21: Read tool で .env 全 dump、 7 key 漏洩。 Bash 経路も同 risk
+    # → cat/head/tail/less/more/bat の credential file 直接 dump を統合 block
+    '(^|[^a-zA-Z_/])(cat|head|tail|less|more|bat)[[:space:]]+[^|]*?(/\.env([[:space:]]|$|\.(common|prod|production|local|dev|staging|hetzner|laddie|chichibu|zetithnas|talisker|mars|farm)([[:space:]]|$))|rclone\.conf|/\.netrc|/\.aws/credentials|\.cloudflared/[^[:space:]]+\.json|\.pem([[:space:]]|$)|\.key([[:space:]]|$)|\.p12([[:space:]]|$)):::grep -n <KEY> <file> で line 番号のみ取得 (= 値を会話ログに焼かない)、 全 dump 必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
 
     # === B 系 (#B1-B15) ===
@@ -77,10 +80,22 @@ declare -a PATTERNS_REASONS=(
 VIOLATION_FOUND=0
 VIOLATION_MSGS=""
 
+# ack bypass: command が `HRMTZ_ACK_CRED_READ=1 ...` で始まる場合、
+# reason に "HRMTZ_ACK_CRED_READ=1" を含む pattern (= credential file read 専用)
+# のみ bypass する。 sops -d 等他の危険 pattern は依然として block。
+ACK_BYPASS=0
+if echo "$CMD" | grep -qE '^[[:space:]]*HRMTZ_ACK_CRED_READ=1[[:space:]]+'; then
+    ACK_BYPASS=1
+fi
+
 for entry in "${PATTERNS_REASONS[@]}"; do
     pattern="${entry%%:::*}"
     reason="${entry#*:::}"
     if echo "$SCRUBBED" | grep -qE "$pattern"; then
+        if [ "$ACK_BYPASS" -eq 1 ] && echo "$reason" | grep -q "HRMTZ_ACK_CRED_READ=1"; then
+            hook_log "bash_command_guard" "BYPASS via HRMTZ_ACK_CRED_READ=1 for cred-file-read pattern"
+            continue
+        fi
         VIOLATION_FOUND=1
         VIOLATION_MSGS="${VIOLATION_MSGS}- ${reason}\n"
         prefix=$(echo "$pattern" | head -c 40)
