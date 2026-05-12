@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (3 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (5 hooks, defense-in-depth)",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,21 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/bash_command_guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/branch_policy_guard.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh",
             "timeout": 5
           }
         ]
