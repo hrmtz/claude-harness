@@ -55,7 +55,11 @@ declare -a PATTERNS_REASONS=(
     # L55 (tail rclone.conf|.netrc|.aws/credentials) は下記 cred-file-read 統合 pattern が subsume
     # 2026-05-11 incident #21: Read tool で .env 全 dump、 7 key 漏洩。 Bash 経路も同 risk
     # → cat/head/tail/less/more/bat の credential file 直接 dump を統合 block
-    '(^|[^a-zA-Z_/])(cat|head|tail|less|more|bat)[[:space:]]+[^|]*?(/\.env([[:space:]]|$|\.(common|prod|production|local|dev|staging|hetzner|laddie|chichibu|zetithnas|talisker|mars|farm)([[:space:]]|$))|rclone\.conf|/\.netrc|/\.aws/credentials|\.cloudflared/[^[:space:]]+\.json|\.pem([[:space:]]|$)|\.key([[:space:]]|$)|\.p12([[:space:]]|$)):::grep -n <KEY> <file> で line 番号のみ取得 (= 値を会話ログに焼かない)、 全 dump 必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+    '(^|[^a-zA-Z_/])(cat|head|tail|less|more|bat)[[:space:]]+[^|]*?(/\.env([[:space:]]|$|\.(common|prod|production|local|dev|staging|hetzner|laddie|chichibu|zetithnas|talisker|mars|farm)([[:space:]]|$))|rclone\.conf|/\.netrc|/\.aws/credentials|\.cloudflared/[^[:space:]]+\.json|\.pem([[:space:]]|$)|\.key([[:space:]]|$)|\.p12([[:space:]]|$)):::sops exec-env <file> '"'"'env | cut -d= -f1'"'"' で key 名のみ取得、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+    # 2026-05-13 incident #22: Magi 2 agent が `grep KEY .env` 実行、 マッチ行全体が stdout に出て value 露出
+    # 旧 comment 「grep -n KEY .env で line 番号のみ」 は誤、 grep default は match line 全文表示で value 焼く
+    # → grep/egrep/fgrep/rg/awk/sed の credential file 直接 read も block、 ack-bypass 経路一本化
+    '(^|[^a-zA-Z_/])(grep|egrep|fgrep|rg|awk|sed)[[:space:]]+[^|]*?(/\.env([[:space:]]|$|\.(common|prod|production|local|dev|staging|hetzner|laddie|chichibu|zetithnas|talisker|mars|farm)([[:space:]]|$))|rclone\.conf|/\.netrc|/\.aws/credentials|\.cloudflared/[^[:space:]]+\.json|\.pem([[:space:]]|$)|\.key([[:space:]]|$)|\.p12([[:space:]]|$)):::sops exec-env <file> '"'"'env | grep -c <KEY>'"'"' で件数のみ確認、 key 名 list は cut -d= -f1、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
 
     # === B 系 (#B1-B15) ===
