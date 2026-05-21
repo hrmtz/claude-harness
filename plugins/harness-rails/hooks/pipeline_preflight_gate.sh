@@ -92,6 +92,23 @@ if echo "$CMD" | grep -qE '^[[:space:]]*(vastai destroy instance|hcloud server d
   shuzo="1 行 cost-benefit 言語化 → それで安全に destroy できる。判断した責任を 1 文で書け。"
 fi
 
+# (6) Orchestrator / production script kick without dual-magi review
+# Per feedback_dual_magi_mandatory_for_scripts + 2026-05-22 v3 incident
+# (= 4 production bugs even after 2 dual-magi rounds because review process
+# itself had gaps). Force dual-magi ack before kicking long-running orch.
+# Detect "production kick" patterns: nohup bash *.sh, bash *_orchestrator*.sh,
+# bash *_orch*.sh, bash kickoff*.sh with start/resume/launch/kick subcommand.
+if echo "$CMD" | grep -qE 'nohup[[:space:]]+bash[[:space:]]+.*_(orchestrator|orch|kickoff|launcher)[^|;&]*\.sh'; then
+  trigger="dual-magi-review-required"
+  why="orchestrator/production script kick detected without dual-magi review ack. 2026-05-22 v3 incident: 4 production bugs survived 2 dual-magi rounds because static review misses runtime semantics + canonical violations. Mandatory: dual-magi same-family + cross-family + 1-instance smoke before kick."
+  shuzo="dual-magi 2 round + smoke で 30 min 投資 → 17h embed の bug 焼却防げる。今手を抜くな、後で焼ける。"
+fi
+if echo "$CMD" | grep -qE '^[[:space:]]*bash[[:space:]]+.*scripts/_v[0-9]+_prod_[^|;&]*\.sh[[:space:]]+(start|resume|kick|launch)'; then
+  trigger="dual-magi-review-required"
+  why="production script kick detected without dual-magi review ack."
+  shuzo="dual-magi 必ず通せ。"
+fi
+
 [ -z "$trigger" ] && exit 0
 
 # --- check ack file ---

@@ -91,8 +91,55 @@ context, identity sketches. But for *operational* memories — the ones
 that say "always do X" or "watch out for Y" — the rail question should be
 asked.
 
+## Case study 2: 2026-05-22 v3 embed orch incident (= 5 L1 violations)
+
+The 23h HNSW case crystallized "memory alone fails". This case shows the
+follow-on failure mode: **L1-only stacking ≠ multi-layer**.
+
+5 rule violations in 1 session, all silent:
+
+1. **R2 transport rule** (`feedback_gpu_rental_r2_only`) — AI used scp instead, citing manufactured "creds exfil concern"
+2. **Existing-pattern grep** (`feedback_script_saves_tokens` R7) — AI wrote orchestrator from scratch ignoring 4 canonical scripts
+3. **Junk script proliferation** — AI created `_v4_prod_worker.sh` duplicate of existing `_v3_prod_worker_v3.sh`
+4. **dual-magi review brief gap** — review process itself missed canonical violations + runtime bash semantics
+5. **Self-check chain maintenance** — 30-min poll chain broke after 1 cycle, 3.4h silent burn
+
+**Total cost**: ~$15 GPU idle + 6h debug + 4 production bugs that survived 2 dual-magi rounds.
+
+**Root cause**: all 5 guardrails were L1 (behavioral, AI self-discipline). When AI manufactures override rationale (= "this case is different"), all L1 rails silently bypass. They were not multi-layer — they were "OR of single-shot shields" at the same layer.
+
+```
+=== What we had (= 5/22 state) ===
+L1 only:
+  - memory feedback_gpu_rental_r2_only       ← AI override
+  - memory feedback_script_saves_tokens (R7)  ← AI override
+  - memory feedback_self_check_inflight_workers ← chain break
+  - hook self_check_reminder.sh                ← first-touch only
+  - dual-magi review                           ← static blind spots
+
+→ patterns 一致しないと全 silent. 1 override で全抜け.
+
+=== What true defense-in-depth looks like ===
+L1 behavioral: AI grep memory before design (= unreliable but cheap)
+L2 structural static: PreToolUse Write/Edit hook → ssh fanout anti-pattern detect
+   (= AI cannot bypass without explicit `# canonical-pattern-reviewed: <ref>` annotation)
+L3 structural runtime: integration smoke gate (= 1-instance × 1-shard before full kick)
+L4 external observer: AgentShield nightly scan of scripts/ for anti-pattern
+
+異 failure class 補完:
+  L1 fails (= AI forgets) → L2 catch (= file content scanner)
+  L2 misses (= edge case) → L3 catch (= smoke run runtime expose)
+  L3 misses (= scope 外) → L4 catch (= nightly historic audit)
+```
+
+**Fix shipped**: new L2 hook `ssh_fanout_canonical_check.sh` (Write/Edit on .sh files, anti-pattern detect including ssh-in-loop, scp-to-vast, .setup_done bypass, novel-orchestrator-shape) + new trigger 6 in `pipeline_preflight_gate.sh` (= Bash kick of orch shell blocks unless dual-magi ack present).
+
+L3 (integration smoke gate) + L4 (AgentShield ssh-fanout yaml) still pending.
+
 ## Related
 
 - `docs/INCIDENT_23H_HNSW.md` — the case study that crystallized this model
+- `docs/INCIDENT_V3_EMBED_5_VIOLATIONS.md` — 2026-05-22 5-violation incident detail
 - `docs/CLAUDE_HARNESS_DISTILLED.md` — the broader design rationale
 - `plugins/harness-rails/README.md` — concrete implementation of level 3+4
+- `plugins/harness-rails/hooks/ssh_fanout_canonical_check.sh` — L2 hook deployed 2026-05-22 from this incident
