@@ -1,5 +1,5 @@
 {
-  "description": "harness-rails — operational safety rails (pipeline preflight + phase review on Bash; ssh fanout canonical check on Write/Edit; self-check reminder on PostToolUse Bash)",
+  "description": "harness-rails — operational safety rails (pipeline preflight + phase review on Bash; ssh fanout canonical check on Write/Edit; self-check reminder + vastai create 30min followup on PostToolUse Bash)",
   "hooks": {
     "PreToolUse": [
       {
@@ -35,6 +35,11 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/self_check_reminder.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/vastai_create_followup_check.sh",
             "timeout": 5
           }
         ]
