@@ -80,11 +80,13 @@ line_push() {
 }
 
 registry_add() {
-  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4"
+  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
          --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
-    '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts}' \
+         --arg sid "$session_id" \
+    '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
+      session_id: (if $sid == "" then null else $sid end)}' \
     >> "$REGISTRY"
 }
 
@@ -152,9 +154,13 @@ cmd_spawn() {
   fi
 
   local parent_id; parent_id="$(self_id)"
+  # Generate a spawn-scoped UUID so mailbox entries from this worker are
+  # distinguishable from a different session that happened to pick the same codename.
+  local spawn_id; spawn_id="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || date +%s%N)"
   local pane_id session_name="formation-$name"
   pane_id="$(tmux split-window -d -P -F '#{pane_id}' \
-              -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id")"
+              -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
+              -e "FORMATION_SESSION_ID=$spawn_id")"
 
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
   tmux select-pane -t "$pane_id" -T "$name"
@@ -181,7 +187,7 @@ EOF
   # Use double-tap submit (claude textarea swallows single Enter intermittently).
   tmux_send_submit "$pane_id" "$seed"
 
-  registry_add "$name" "$pane_id" "$session_name" "$briefing"
+  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id"
 
   # Auto-start mailbox relay daemon: inotifywait on mailbox, inject new msgs
   # addressed to this worker into its tmux pane. Without this, the worker

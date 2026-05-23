@@ -19,6 +19,9 @@ mailbox_init() {
 
 mailbox_send() {
   local from="$1" to="$2" body="$3"
+  # session_id: 4th arg > env FORMATION_SESSION_ID > empty.
+  # Lets readers distinguish same-codename agents across sessions.
+  local session_id="${4:-${FORMATION_SESSION_ID:-}}"
   mailbox_init
   if declare -f is_credential_like >/dev/null && is_credential_like "$body"; then
     echo "mailbox: refusing to send — body matches credential pattern." >&2
@@ -32,8 +35,9 @@ mailbox_send() {
     seq="$(wc -l < "$MAILBOX_LOG" | tr -d ' ')"
     seq=$((seq + 1))
     line=$(jq -cn --arg seq "$seq" --arg ts "$ts" --arg from "$from" \
-                 --arg to "$to" --arg body "$body" \
-                 '{seq: ($seq|tonumber), ts: $ts, from: $from, to: $to, body: $body}')
+                 --arg to "$to" --arg body "$body" --arg sid "$session_id" \
+                 '{seq: ($seq|tonumber), ts: $ts, from: $from, to: $to, body: $body,
+                   session_id: (if $sid == "" then null else $sid end)}')
     echo "$line" >> "$MAILBOX_LOG"
   ) 200>"$MAILBOX_LOCK"
 }
