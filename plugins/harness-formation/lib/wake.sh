@@ -13,7 +13,8 @@ wake_pane() {
     echo "wake: pane not found: $pane_id" >&2
     return 1
   fi
-  tmux send-keys -t "$pane_id" "$note" Enter
+  tmux send-keys -l -t "$pane_id" "$note"
+  tmux send-keys -t "$pane_id" Enter
 }
 
 wake_paste() {
@@ -24,12 +25,14 @@ wake_paste() {
   tmux send-keys -t "$pane_id" Enter
 }
 
-# Send text to a pane and force-submit. Claude Code's text area can swallow
-# a single Enter and leave the message un-submitted; double-tapping with a
-# delay reliably submits. Shared by `formation msg` and the mailbox relay.
+# Send text to a pane and force-submit. Use -l for literal send so multi-byte
+# (Japanese etc.) characters are not misinterpreted as tmux key names.
+# Double-tap Enter: Claude Code's textarea can swallow a single Enter;
+# harmless for Codex (second Enter just submits an empty turn).
 tmux_send_submit() {
   local pane_id="$1" text="$2"
-  tmux send-keys -t "$pane_id" "$text" Enter
+  tmux send-keys -l -t "$pane_id" "$text"
+  tmux send-keys -t "$pane_id" Enter
   sleep 0.5
   tmux send-keys -t "$pane_id" Enter
 }

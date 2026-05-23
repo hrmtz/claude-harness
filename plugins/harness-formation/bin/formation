@@ -1,8 +1,8 @@
 #!/bin/bash
-# formation - spawn and coordinate long-running peer Claude Code panes.
+# formation - spawn and coordinate long-running peer AI agent panes.
 #
-# A "worker" is a separate tmux pane running its own Claude Code CLI, given
-# a briefing file and an addressable id. Worker reports flow back via an
+# A "worker" is a separate tmux pane running its own AI CLI (claude or codex),
+# given a briefing file and an addressable id. Worker reports flow back via an
 # append-only jsonl mailbox. The parent pane (lead) polls `formation inbox`
 # when idle. Phones / external clients reach workers via `/remote-control`
 # using the session-name assigned at spawn.
@@ -80,13 +80,13 @@ line_push() {
 }
 
 registry_add() {
-  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}"
+  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
          --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
-         --arg sid "$session_id" \
+         --arg sid "$session_id" --arg cli "$cli" \
     '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
-      session_id: (if $sid == "" then null else $sid end)}' \
+      session_id: (if $sid == "" then null else $sid end), cli: $cli}' \
     >> "$REGISTRY"
 }
 
@@ -104,16 +104,17 @@ registry_remove() {
 
 usage() {
   cat <<'USAGE'
-formation - long-running peer Claude Code panes
+formation - long-running peer AI agent panes (claude or codex)
 
 Parent (lead) commands:
-  formation spawn <briefing.md> [name]    Split pane, launch claude, inject briefing
+  formation spawn [--cli claude|codex] [--model <model>] <briefing.md> [name]
+                                          Split pane, launch agent, inject briefing
   formation msg <worker_id> <text>        Send instruction to worker pane
   formation status                        List active workers and last pane line
   formation inbox                         Read unread reports addressed to self
   formation reap <worker_id>              Kill worker pane and drop registry row
 
-Worker-side commands (invoked by the worker claude via Bash):
+Worker-side commands (invoked by the worker agent via Bash):
   formation report <text>                 Append status to parent mailbox
   formation done <summary>                Mark finished (mailbox + LINE push)
   formation ask <question>                Request ack (mailbox + LINE push)
@@ -128,13 +129,23 @@ Credential safety:
   credential, encrypt it with SOPS and reference the decrypt command.
 
 Remote access:
-  Each worker runs its claude with --session-name formation-<id>. Connect from
-  phone/web via /remote-control (alias /rc) and attach to that session.
+  claude workers: connect via /remote-control (alias /rc) using session formation-<id>.
+  codex workers:  attach to tmux pane directly (no remote-control equivalent).
 USAGE
 }
 
 cmd_spawn() {
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn <briefing.md> [name]" >&2; exit 2; }
+  local cli="claude" model=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cli)   cli="$2";   shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  [[ "$cli" == "claude" || "$cli" == "codex" ]] || { echo "unknown --cli: $cli (claude|codex)" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] <briefing.md> [name]" >&2; exit 2; }
+
   local briefing="$1" name="${2:-}"
   briefing="$(realpath "$briefing")"
   [[ -f "$briefing" ]] || { echo "briefing not found: $briefing" >&2; exit 2; }
@@ -165,29 +176,41 @@ cmd_spawn() {
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
   tmux select-pane -t "$pane_id" -T "$name"
 
-  tmux send-keys -t "$pane_id" "claude --name $session_name --permission-mode bypassPermissions" Enter
-
-  # Wait for claude prompt. Poll up to 30s.
-  local i
-  for i in $(seq 1 30); do
-    sleep 1
-    if tmux capture-pane -p -t "$pane_id" | grep -q '│ >'; then
-      break
-    fi
-  done
-
-  # Seed prompt: identity + briefing reference + immediate action.
+  # Seed prompt shared by both CLIs.
   local seed
-  seed="$(cat <<EOF
-Formation bootstrap. Your worker id is '$name'. Parent pane id is '$parent_id'.
+  seed="Formation bootstrap. Your worker id is '$name'. Parent pane id is '$parent_id'.
 Briefing: $briefing
-Read it, then run 'formation report "<1-line status>"' to acknowledge receipt before starting work. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies.
-EOF
-)"
-  # Use double-tap submit (claude textarea swallows single Enter intermittently).
-  tmux_send_submit "$pane_id" "$seed"
+Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt before starting work. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies."
 
-  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id"
+  if [[ "$cli" == "codex" ]]; then
+    # Codex: pass seed as initial prompt argument.
+    # --dangerously-bypass-approvals-and-sandbox required so the worker can write
+    # to ~/.njslyr7/ mailbox and formation dirs (outside workspace sandbox).
+    session_name="codex-$name"
+    local codex_model_flag=""
+    [[ -n "$model" ]] && codex_model_flag="-m $model"
+    tmux send-keys -t "$pane_id" "codex --dangerously-bypass-approvals-and-sandbox $codex_model_flag $(printf '%q' "$seed")" Enter
+    sleep 2
+  else
+    # Claude Code: launch interactive then inject seed once prompt is ready.
+    local claude_model_flag=""
+    [[ -n "$model" ]] && claude_model_flag="--model $model"
+    tmux send-keys -t "$pane_id" "claude --name $session_name --permission-mode bypassPermissions $claude_model_flag" Enter
+
+    # Wait for claude prompt. Poll up to 30s.
+    local i
+    for i in $(seq 1 30); do
+      sleep 1
+      if tmux capture-pane -p -t "$pane_id" | grep -q '│ >'; then
+        break
+      fi
+    done
+
+    # Use double-tap submit (claude textarea swallows single Enter intermittently).
+    tmux_send_submit "$pane_id" "$seed"
+  fi
+
+  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli"
 
   # Auto-start mailbox relay daemon: inotifywait on mailbox, inject new msgs
   # addressed to this worker into its tmux pane. Without this, the worker
@@ -207,11 +230,11 @@ EOF
   if ! kill -0 "$relay_pid" 2>/dev/null; then
     echo "warn: relay daemon for $name died immediately; tail $relay_log" >&2
     rm -f "$relay_pid_file"
-    echo "$name  pane=$pane_id  session=$session_name  relay=DEAD log=$relay_log"
+    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=DEAD log=$relay_log"
     return 1
   fi
 
-  echo "$name  pane=$pane_id  session=$session_name  relay_pid=$relay_pid log=$relay_log"
+  echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay_pid=$relay_pid log=$relay_log"
 }
 
 cmd_msg() {
@@ -233,11 +256,12 @@ cmd_status() {
     echo "(no workers)"; return
   fi
   while IFS= read -r row; do
-    local id pane last
+    local id pane cli last
     id="$(echo "$row" | jq -r '.id')"
     pane="$(echo "$row" | jq -r '.pane_id')"
+    cli="$(echo "$row" | jq -r '.cli // "claude"')"
     last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1)"
-    printf '%-20s %-8s  %s\n' "$id" "$pane" "${last:-(pane closed)}"
+    printf '%-20s %-8s %-7s  %s\n' "$id" "$pane" "[$cli]" "${last:-(pane closed)}"
   done < "$REGISTRY"
 }
 
