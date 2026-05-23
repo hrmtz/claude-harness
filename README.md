@@ -11,10 +11,9 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 | Plugin | What it does | Trigger |
 |---|---|---|
 | **harness-core** | 3 hooks: credential value scrub (PostToolUse) + dangerous bash guard (PreToolUse) + admission-keyword workflow reminder (UserPromptSubmit) | Every Bash call + every user prompt |
-| **harness-magi** | Three-perspective preflight review skill (MELCHIOR/BALTHASAR/CASPAR personas, parallel `Task` spawn). Front-loads architectural / operational / commercial blind spots before high-stakes changes execute | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
+| **harness-magi** | Multi-perspective preflight review skill. v0.6.0+: spawns 3 same-family agents (MELCHIOR/BALTHASAR/CASPAR) **plus** a mandatory cross-family reviewer (Codex by default) to cancel shared training-data bias. Synthesizes REJECT/REVISE findings before high-stakes changes execute. | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
 | **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
-
-Companion repository: [**njslyr7**](https://github.com/hrmtz/njslyr7) ships the `formation` skill + CLI for long-running peer-pane workers in tmux. Install separately via `bash <(curl ...)/install.sh` from that repo.
+| **harness-formation** | Spawn and coordinate long-running peer AI agent panes (claude or codex) in sibling tmux panes. Append-only jsonl mailbox with session-scoped identity, auto-relay daemon, credential-safe body guard. | Tasks that justify hours of wall time and need live observability or mid-flight redirection |
 
 More plugins are planned (CLAUDE.md persona templates, repo-init skeleton). See [GitHub issues](https://github.com/hrmtz/claude-harness/issues) for status.
 
@@ -61,9 +60,9 @@ Read that first if you want to understand *why* these hooks exist before install
 ## Status
 
 - ✅ `harness-core` — production-tested locally
-- ✅ `harness-magi` — pure-prompt skill, ships immediately
+- ✅ `harness-magi` — v0.6.0: cross-family (Codex) round mandatory; plateau CONFIRM requires cross-family pass
 - ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
-- 🔗 `formation` skill — lives in [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7) (separate repo, separate install)
+- ✅ `harness-formation` — distilled from [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7); claude + codex workers, session-scoped mailbox identity
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
 ## License
