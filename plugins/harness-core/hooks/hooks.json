@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (6 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (7 hooks, defense-in-depth)",
   "hooks": {
     "PreToolUse": [
       {
@@ -57,6 +57,11 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/temporal_anchor.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tmux_self_name.sh",
             "timeout": 5
           }
         ]
