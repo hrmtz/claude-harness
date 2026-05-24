@@ -27,6 +27,13 @@
       "source": "./plugins/harness-rails",
       "category": "workflow",
       "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-rails"
+    },
+    {
+      "name": "harness-formation",
+      "description": "Peer-pane Claude Code worker orchestration via tmux + jsonl mailbox. Spawns long-running coordinated workers from natural-language triggers. Bundles formation skill + njslyr7 CLI + UserPromptSubmit hook that auto-suggests the skill when user prompts match worker-spawn intent. Session-scoped identity prevents mailbox drift across resume/compact.",
+      "source": "./plugins/harness-formation",
+      "category": "collaboration",
+      "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-formation"
     }
   ]
 }
