@@ -107,8 +107,10 @@ usage() {
 formation - long-running peer AI agent panes (claude or codex)
 
 Parent (lead) commands:
-  formation spawn [--cli claude|codex] [--model <model>] <briefing.md> [name]
-                                          Split pane, launch agent, inject briefing
+  formation spawn [--cli claude|codex] [--model <model>] [--new-window|--split] <briefing.md> [name]
+                                          Create new window (default; isolates worker SessionStart
+                                          rename-window from parent pane) or split current window (--split)
+                                          Launches agent, injects briefing
   formation msg <worker_id> <text>        Send instruction to worker pane
   formation status                        List active workers and last pane line
   formation inbox                         Read unread reports addressed to self
@@ -135,16 +137,21 @@ USAGE
 }
 
 cmd_spawn() {
-  local cli="claude" model=""
+  # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
+  # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
+  # window 名を巻き込み identity drift。 別 window 化で隔離。 --split で旧挙動)
+  local cli="claude" model="" placement="new-window"
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --cli)   cli="$2";   shift 2 ;;
-      --model) model="$2"; shift 2 ;;
+      --cli)        cli="$2";   shift 2 ;;
+      --model)      model="$2"; shift 2 ;;
+      --new-window) placement="new-window"; shift ;;
+      --split)      placement="split-window"; shift ;;
       *) break ;;
     esac
   done
   [[ "$cli" == "claude" || "$cli" == "codex" ]] || { echo "unknown --cli: $cli (claude|codex)" >&2; exit 2; }
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] <briefing.md> [name]" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] [--new-window|--split] <briefing.md> [name]" >&2; exit 2; }
 
   local briefing="$1" name="${2:-}"
   briefing="$(realpath "$briefing")"
@@ -169,9 +176,15 @@ cmd_spawn() {
   # distinguishable from a different session that happened to pick the same codename.
   local spawn_id; spawn_id="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || date +%s%N)"
   local pane_id session_name="formation-$name"
-  pane_id="$(tmux split-window -d -P -F '#{pane_id}' \
-              -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
-              -e "FORMATION_SESSION_ID=$spawn_id")"
+  if [[ "$placement" == "new-window" ]]; then
+    pane_id="$(tmux new-window -d -P -F '#{pane_id}' -n "claude-$name" \
+                -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
+                -e "FORMATION_SESSION_ID=$spawn_id")"
+  else
+    pane_id="$(tmux split-window -d -P -F '#{pane_id}' \
+                -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
+                -e "FORMATION_SESSION_ID=$spawn_id")"
+  fi
 
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
   tmux select-pane -t "$pane_id" -T "$name"
