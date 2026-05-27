@@ -79,6 +79,44 @@ declare -a PATTERNS_REASONS=(
     # POSTGRES_PASSWORD 直撃、container 起動時の compose env_file → env 経路で内部に焼付済値を host scope に出した
     # → key 名のみ取得は cut -d= -f1、値要なら sops exec-env 経由で対象 env 注入
     'docker[[:space:]]+(container[[:space:]]+)?exec[[:space:]].+[[:space:]]env([[:space:]]*$|[[:space:]]+\|[[:space:]]*(grep|awk|sed|fgrep|egrep|rg|tr|head|tail)):::docker exec <ct> env | cut -d= -f1 で key 名のみ、値必要なら sops exec-env <file> '"'"'docker exec <ct> sh -c "..."'"'"' 経由'
+
+    # === C 系 (#24-34、 2026-05-27 cli internal credential dump) ===
+    # 既存 cat/head/tail rclone.conf は file 直接 read を block 済、 C 系は cli 内蔵 dump コマンド経路
+    # incident #24 (= rclone config show で R2 secret 全 plain stdout、 acusis-migration R2 setup で踏んだ)
+    # を契機に、 同種 cli internal dump コマンドを preemptive enum
+
+    # incident #24: rclone config show/dump で secret_access_key 平文 stdout
+    'rclone[[:space:]]+config[[:space:]]+(show|dump)([[:space:]]|$):::rclone listremotes で remote 名のみ、 field 一覧は rclone config show <remote> | awk -F= '"'"'/=/ {gsub(/ /,"",$1); print $1}'"'"'、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #25: aws configure get/list で AWS SecretAccessKey 平文 stdout
+    'aws[[:space:]]+configure[[:space:]]+(get|list)([[:space:]]|$):::aws configure list-profiles で profile 名のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #26: gh auth token で GitHub PAT 平文 stdout
+    'gh[[:space:]]+auth[[:space:]]+token([[:space:]]|$):::gh auth status で login 状態のみ確認、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #27: gcloud auth print-(access|identity|refresh)-token で credential 平文 stdout
+    'gcloud[[:space:]]+auth[[:space:]]+print-(access-token|identity-token|refresh-token)([[:space:]]|$):::gcloud auth list で account 名のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #28: doctl auth list/token で DigitalOcean PAT 平文 stdout
+    'doctl[[:space:]]+auth[[:space:]]+(list|token)([[:space:]]|$):::doctl account get で account 確認、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #29: kubectl config view --raw で client-cert + bearer token 全 dump (--raw が sanitize 解除)
+    'kubectl[[:space:]]+config[[:space:]]+view.*--raw:::kubectl config view (--raw 抜き) で sanitized 表示、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #30: kubectl get secret -o yaml/json で base64-encoded secret 全 dump (= base64 -d で trivial 復元)
+    'kubectl[[:space:]]+get[[:space:]]+secret.*-o[[:space:]]+(yaml|json):::kubectl get secret で metadata のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #31: docker secret/config inspect で stored credential 露出
+    'docker[[:space:]]+(secret|config)[[:space:]]+inspect([[:space:]]|$):::docker (secret|config) ls で ID のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #32: flyctl auth token で Fly.io PAT 平文 stdout
+    'flyctl[[:space:]]+auth[[:space:]]+token([[:space:]]|$):::flyctl auth whoami で login 状態のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # preemptive #33: vercel env pull で env 全 download to .env (file 経路だが downstream cat で leak risk 同等)
+    'vercel[[:space:]]+env[[:space:]]+pull([[:space:]]|$):::vercel env ls で key 名のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass (file 経路でも downstream leak risk 同等)'
+
+    # preemptive #34: pass show / pass -c で stored credential 平文 stdout (-c は clipboard だが pipe で stdout 化可)
+    'pass[[:space:]]+(show|-c)([[:space:]]|$):::pass ls で key list のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
 )
 
 VIOLATION_FOUND=0
