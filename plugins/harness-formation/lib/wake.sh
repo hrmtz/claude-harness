@@ -2,6 +2,21 @@
 # wake.sh - wake a target pane (local tmux; ssh fallback deferred to v2)
 # Sourced by bin/formation.
 
+# If the target pane is in tmux copy-mode (the user scrolled up to read, or a
+# prior interaction left it there), keystrokes sent with `send-keys` are
+# consumed by copy-mode instead of reaching the application: Enter copies the
+# selection and exits rather than submitting, and a literal `/` opens copy-mode
+# *search* — the exact "Enter won't fire" and "drops into search-mode" symptoms
+# seen when injecting into a Claude Code pane. paste-buffer reaches the app tty
+# regardless, but the submit Enter does not, so we must leave copy-mode first.
+_exit_copy_mode() {
+  local pane_id="$1"
+  if [[ "$(tmux display-message -p -t "$pane_id" '#{pane_in_mode}' 2>/dev/null)" == "1" ]]; then
+    tmux send-keys -X -t "$pane_id" cancel 2>/dev/null
+    sleep 0.1
+  fi
+}
+
 wake_pane() {
   local pane_id="$1"
   local note="${2:-inbox}"
@@ -13,6 +28,7 @@ wake_pane() {
     echo "wake: pane not found: $pane_id" >&2
     return 1
   fi
+  _exit_copy_mode "$pane_id"
   tmux send-keys -l -t "$pane_id" "$note"
   tmux send-keys -t "$pane_id" Enter
 }
@@ -20,6 +36,7 @@ wake_pane() {
 wake_paste() {
   local pane_id="$1" file="$2"
   local buf="njslyr-$$-$(date +%s%N)"
+  _exit_copy_mode "$pane_id"
   tmux load-buffer -b "$buf" "$file"
   # -p: bracketed paste so a multi-line note lands atomically (no embedded
   # newline submits the turn early). See tmux_send_submit for the rationale.
@@ -47,6 +64,8 @@ wake_paste() {
 tmux_send_submit() {
   local pane_id="$1" text="$2"
   local buf="njslyr-$$-$(date +%s%N)"
+  # Leave copy-mode first, or the submit Enter below is eaten by it.
+  _exit_copy_mode "$pane_id"
   printf '%s' "$text" | tmux load-buffer -b "$buf" -
   tmux paste-buffer -t "$pane_id" -b "$buf" -p -d
   sleep 0.4

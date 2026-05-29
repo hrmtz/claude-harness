@@ -288,19 +288,23 @@ worker never promotes on its own.
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).
 - **Worker pane un-submitted, or jumps into slash/file "search-mode"**:
-  both come from injecting text with `tmux send-keys -l` (typed keystrokes).
-  Typed text needs a render tick before Claude Code commits it, so an Enter
-  fired in the same batch races ahead and submits an empty turn (the message
-  sits un-submitted); and embedded newlines in a multi-line briefing submit
-  early, leaving a line that starts with `/ @ #` to be read as a slash-command
-  / file-search / memory trigger. `tmux_send_submit` (used by `formation msg`,
-  the seed, and the relay daemon) now injects via **bracketed paste**
-  (`load-buffer` + `paste-buffer -p`) so the whole text lands as one atomic
-  event — no early submit, no per-character mode triggers — then sleeps before
-  the submit Enter. If you hand-roll an injection, use `paste-buffer -p` (not
-  `send-keys -l`) and sleep ~0.4 s before the Enter. If your installation
-  pre-dates this fix, re-run the project's `install.sh` from your njslyr7
-  clone.
+  the dominant cause is the **target pane being in tmux copy-mode** (the user
+  scrolled up to read, or a prior action left it there). In copy-mode,
+  `send-keys` is consumed by copy-mode, not the app: the submit `Enter` copies
+  the selection and exits instead of submitting (message sits un-submitted),
+  and a literal `/` from `send-keys -l` opens copy-mode *search* (the
+  "search-mode" symptom). A secondary cause is `send-keys -l` itself — typed
+  keystrokes race the render tick and embedded newlines in a multi-line
+  briefing submit early. `tmux_send_submit` (used by `formation msg`, the seed,
+  and the relay daemon) now (1) **leaves copy-mode first**
+  (`send-keys -X cancel` when `#{pane_in_mode}` is 1) and (2) injects via
+  **bracketed paste** (`load-buffer` + `paste-buffer -p`, which reaches the app
+  tty even from copy-mode and lands atomically), then sleeps before the submit
+  Enter. If you hand-roll an injection: cancel copy-mode, use `paste-buffer -p`
+  (not `send-keys -l`), and sleep ~0.4 s before the Enter. Diagnose with
+  `tmux display-message -p -t <pane> '#{pane_in_mode}'` (1 = in copy-mode). If
+  your installation pre-dates this fix, re-run the project's `install.sh` from
+  your njslyr7 clone.
 - **Mailbox has a new entry but the worker isn't reading it**: the relay
   daemon may have died. Check with `ps aux | grep mailbox_relay | grep
   <worker_id>`. If absent, restart it manually (the lib path is derived
