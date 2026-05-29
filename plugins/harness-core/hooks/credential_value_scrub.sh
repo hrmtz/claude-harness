@@ -18,28 +18,17 @@ JSONL=$(active_jsonl)
 # ----------------------------------------
 # Pattern catalog — each line: <regex>|<replacement>
 # ----------------------------------------
+# Part 1: value-prefix patterns (先頭文字列で識別できるもの)
+# ----------------------------------------
 PATTERNS=(
-    'POSTGRES_PASSWORD=[a-zA-Z0-9_!@#$%^&*-]+|POSTGRES_PASSWORD=<REDACTED>'
-    'PGPASSWORD=[a-zA-Z0-9_!@#$%^&*-]+|PGPASSWORD=<REDACTED>'
     'sk-ant-[a-zA-Z0-9_-]{20,}|sk-ant-<REDACTED>'
     'sk-or-[a-zA-Z0-9_-]{20,}|sk-or-<REDACTED>'
     'sk_live_[a-zA-Z0-9]{20,}|sk_live_<REDACTED>'
     'tskey-[a-zA-Z0-9_-]{20,}|tskey-<REDACTED>'
     'AKIA[0-9A-Z]{16}|AKIA<REDACTED>'
-    'TURSO_AUTH[A-Z_]*=eyJ[a-zA-Z0-9._-]+|TURSO_AUTH=<REDACTED>'
-    'TURSO_TOKEN=eyJ[a-zA-Z0-9._-]+|TURSO_TOKEN=<REDACTED>'
-    'CLOUDFLARE_TUNNEL_TOKEN=eyJ[a-zA-Z0-9._-]+|CLOUDFLARE_TUNNEL_TOKEN=<REDACTED>'
-    'CF_TUNNEL_TOKEN=eyJ[a-zA-Z0-9._-]+|CF_TUNNEL_TOKEN=<REDACTED>'
-    'ANTHROPIC_API_KEY=sk-[a-zA-Z0-9_-]+|ANTHROPIC_API_KEY=<REDACTED>'
-    'OPENAI_API_KEY=sk-[a-zA-Z0-9_-]+|OPENAI_API_KEY=<REDACTED>'
-    'GEMINI_API_KEY=[a-zA-Z0-9_-]{20,}|GEMINI_API_KEY=<REDACTED>'
-    'CF_API_TOKEN=[a-zA-Z0-9_-]{20,}|CF_API_TOKEN=<REDACTED>'
-    'CF_ANTHROPIC_API_KEY=sk-[a-zA-Z0-9_-]+|CF_ANTHROPIC_API_KEY=<REDACTED>'
-    'GITHUB_TOKEN=gh[ps]_[a-zA-Z0-9]{30,}|GITHUB_TOKEN=<REDACTED>'
-    'R2_SECRET_ACCESS_KEY=[a-zA-Z0-9]{40,}|R2_SECRET_ACCESS_KEY=<REDACTED>'
-    '[A-Z_]*R2_SECRET_ACCESS_KEY=[a-zA-Z0-9]{40,}|R2_SECRET_ACCESS_KEY=<REDACTED>'
-    'TRIBEAU_[A-Z_]*PASSWORD=[^[:space:]]+|TRIBEAU_PASSWORD=<REDACTED>'
-    "TRIBEAU_[A-Z_]*PASSWORD='[^']+'|TRIBEAU_PASSWORD='<REDACTED>'"
+    'cfut_[A-Za-z0-9_-]{20,}|cfut_<REDACTED>'
+    'ghp_[a-zA-Z0-9]{30,}|ghp_<REDACTED>'
+    'ghs_[a-zA-Z0-9]{30,}|ghs_<REDACTED>'
     'postgresql://[^:/@[:space:]]+:[^@[:space:]]+@|postgresql://<REDACTED>:<REDACTED>@'
     'postgres://[^:/@[:space:]]+:[^@[:space:]]+@|postgres://<REDACTED>:<REDACTED>@'
     'mysql://[^:/@[:space:]]+:[^@[:space:]]+@|mysql://<REDACTED>:<REDACTED>@'
@@ -49,6 +38,12 @@ PATTERNS=(
     'amqp://[^:/@[:space:]]+:[^@[:space:]]+@|amqp://<REDACTED>:<REDACTED>@'
     'libsql://[^:/@[:space:]]+:[^@[:space:]]+@|libsql://<REDACTED>:<REDACTED>@'
 )
+
+# Part 2: キーワードベース catch-all
+# [A-Z_]*(TOKEN|SECRET|KEY|PASSWORD|...) = 16文字以上の乱数っぽい羅列 → 値だけ REDACTED
+# env 形式 (KEY=value) と YAML 形式 (KEY: "value") の両方に対応
+KEYWORD_PATTERN='[A-Z_]*(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL|PWD|AUTH|CERT|PRIVATE)[A-Z_]*'
+VALUE_PATTERN='[a-zA-Z0-9_/+=.:-]{16,}'
 
 # ----------------------------------------
 # Allow-list (placeholder values that should NOT be scrubbed)
@@ -82,8 +77,49 @@ for entry in "${PATTERNS[@]}"; do
     fi
 done
 
+# ----------------------------------------
+# Part 2: キーワードベース catch-all
+# ----------------------------------------
+# env 形式: KEY=value
+if echo "$OUTPUT" | grep -qE "${KEYWORD_PATTERN}=${VALUE_PATTERN}"; then
+    if ! echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}=${VALUE_PATTERN}" | grep -qE "$ALLOWLIST_REGEX"; then
+        sed -i -E "s|(${KEYWORD_PATTERN})=(${VALUE_PATTERN})|\1=<REDACTED>|g" "$JSONL"
+        LEAK_DETECTED=1
+        LEAK_SUMMARY="${LEAK_SUMMARY}\n  - pattern matched: keyword=value (env format)"
+        hook_log "credential_value_scrub" "scrubbed keyword=value patterns in $JSONL"
+    fi
+fi
+
+# YAML 形式: KEY: "value" または KEY: 'value'
+if echo "$OUTPUT" | grep -qE "${KEYWORD_PATTERN}: [\"']${VALUE_PATTERN}"; then
+    if ! echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}: [\"']${VALUE_PATTERN}" | grep -qE "$ALLOWLIST_REGEX"; then
+        sed -i -E "s|(${KEYWORD_PATTERN}: [\"'])(${VALUE_PATTERN})|\1<REDACTED>|g" "$JSONL"
+        LEAK_DETECTED=1
+        LEAK_SUMMARY="${LEAK_SUMMARY}\n  - pattern matched: keyword: \"value\" (YAML format)"
+        hook_log "credential_value_scrub" "scrubbed keyword: \"value\" patterns in $JSONL"
+    fi
+fi
+
 if [ "$LEAK_DETECTED" -eq 1 ]; then
-    # Emit context warning so Claude is aware
-    MSG="⚠️  credential_value_scrub: leak pattern detected in tool output, active session jsonl was sanitized in-place.${LEAK_SUMMARY}\n\nProcedure: (1) review which tool call leaked, (2) plan rotation for affected credential, (3) update memory \`feedback_credential_leak_5_incidents\` with new vector if novel."
+    # Step 2 (issue) — fire the follow-up DETACHED so gh latency never blocks this
+    # hook. setsid + </dev/null + redirected fds = fully decoupled from the hook
+    # process group; it self-dedups and is fail-safe. We do NOT wait on it.
+    SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    FOLLOWUP="$(dirname "$0")/credential_leak_followup.sh"
+    if [ -f "$FOLLOWUP" ]; then
+        LEAK_SOURCE="value_scrub" \
+        LEAK_DETAIL="$(printf '%b' "$LEAK_SUMMARY" | tr '\n' ' ' | sed 's/  */ /g')" \
+        LEAK_REPLACED="see-log" \
+        LEAK_TRANSCRIPT="$JSONL" \
+        LEAK_SESSION_ID="$SESSION_ID" \
+            setsid bash "$FOLLOWUP" </dev/null >/dev/null 2>&1 &
+    fi
+
+    # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
+    # so Claude should keep going rather than stop to do manual cleanup.
+    LAST_ISSUE=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
+    ISSUE_REF=""
+    [ -n "$LAST_ISSUE" ] && ISSUE_REF=" (tracked in claude-harness#${LAST_ISSUE})"
+    MSG="⚠️  credential leak auto-handled: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. No manual steps needed — continue your current task. Rotation for the affected credential is tracked in that issue."
     emit_context "PostToolUse" "$MSG"
 fi

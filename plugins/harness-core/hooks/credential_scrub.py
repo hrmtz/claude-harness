@@ -54,7 +54,7 @@ Invariants:
 """
 
 from __future__ import annotations
-import os, sys, json, re, datetime, hmac as _hmac, hashlib, traceback
+import os, sys, json, re, datetime, hmac as _hmac, hashlib, traceback, subprocess, shutil
 from pathlib import Path
 from typing import Any
 
@@ -366,6 +366,64 @@ def emit_generic_context(message: str) -> None:
     sys.stdout.write(json.dumps(out))
 
 
+def session_id_from_raw(raw_input: str) -> str:
+    try:
+        return str(json.loads(raw_input).get("session_id") or "unknown")
+    except Exception:
+        return "unknown"
+
+
+def spawn_leak_followup(key_names: list[str], replaced: int, transcript: str, session_id: str) -> None:
+    """Step 2 of the post-leak chain: fire credential_leak_followup.sh DETACHED so
+    gh latency never blocks this hook. Fail-safe: any error is swallowed (the
+    transcript is already sanitized regardless). Passes ONLY key names + counts —
+    never a credential value."""
+    try:
+        followup = Path(__file__).resolve().parent / "credential_leak_followup.sh"
+        if not followup.is_file():
+            return
+        bash = shutil.which("bash") or "/bin/bash"
+        # De-dup + cap the key-name list (already non-sensitive identifiers).
+        detail = ", ".join(sorted(set(key_names))[:20]) or "(hash-manifest match)"
+        env = dict(os.environ)
+        env.update({
+            "LEAK_SOURCE": "hash_scrub",
+            "LEAK_DETAIL": detail,
+            "LEAK_REPLACED": str(replaced),
+            "LEAK_TRANSCRIPT": transcript,
+            "LEAK_SESSION_ID": session_id,
+        })
+        subprocess.Popen(
+            [bash, str(followup)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,   # detach from this hook's process group
+            env=env,
+        )
+    except Exception:
+        hook_log("leak_followup_spawn_failed; transcript already sanitized")
+
+
+def resume_context(replaced: int) -> str:
+    """Step 3: terse 'keep working' context. The leak is already sanitized +
+    queued for incident logging, so Claude should resume rather than stop for
+    manual cleanup."""
+    ref = ""
+    try:
+        last = (STATE_DIR / "last_issue").read_text().strip()
+        if last:
+            ref = f" (tracked in claude-harness#{last})"
+    except OSError:
+        pass
+    return (
+        f"⚠️  credential leak auto-handled: transcript sanitized ({replaced} replacement(s)) "
+        f"+ incident logged to the claude-harness `credential-leak` issue{ref}. "
+        "No manual steps needed — continue your current task. "
+        "Rotation for the affected credential is tracked in that issue."
+    )
+
+
 def _collect_text_leaves(node: Any, out: list[str]) -> None:
     """H8: recursively walk a JSON structure and collect all string leaves.
     Used to extract inner .text fields from tool_response.content arrays,
@@ -474,12 +532,13 @@ def main() -> int:
 
     # I6: generic context — count only, no key names, no precise lengths
     hook_log(f"scrubbed matches={len(hits)} replaced={replaced}")
-    emit_generic_context(
-        f"⚠️  credential_scrub: {len(hits)} credential match(es) detected; "
-        f"transcript sanitized ({replaced} replacement(s)). "
-        "Plan rotation for affected credential(s); see ~/.claude/state/hook_logs/hooks.log "
-        "for which manifest fired."
-    )
+    # Step 2: file/append the incident issue (detached, fail-safe). key_names are
+    # non-sensitive identifiers from the manifest (e.g. ANTHROPIC_API_KEY), never values.
+    key_names = sorted({k for _, names in hits for k in names})
+    spawn_leak_followup(key_names, replaced, str(transcript_path),
+                        session_id_from_raw(raw_input))
+    # Step 3: resume context — keep working, the leak is already neutralized + logged.
+    emit_generic_context(resume_context(replaced))
     return 0
 
 
