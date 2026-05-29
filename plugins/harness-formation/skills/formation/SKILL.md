@@ -277,7 +277,9 @@ worker never promotes on its own.
   channel tripped it.
 - **Worker pane stuck at claude login prompt**: spawn waited 30s for the `│ >`
   prompt and timed out. Manually complete login in the pane and re-send the
-  briefing with `tmux load-buffer -f <briefing> && tmux paste-buffer -t <pane>`.
+  briefing with `tmux load-buffer -b b0 <briefing> && tmux paste-buffer -p -d -b b0 -t <pane>`
+  followed by a short sleep and `tmux send-keys -t <pane> Enter` (the `-p`
+  bracketed paste avoids the early-submit / search-mode failure modes).
 - **Parent `formation inbox` empty but worker claims it reported**: check
   `FORMATION_PARENT` is set in the worker's pane env (`tmux show-environment
   -t <pane>`). If missing, the worker sent to `lead` (default) — read that
@@ -285,13 +287,20 @@ worker never promotes on its own.
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).
-- **Worker pane appears unresponsive after a `formation msg`**: Claude Code's
-  text area can swallow a single Enter and leave the message un-submitted.
-  Both `formation msg` and the relay daemon double-tap Enter with a 0.5 s
-  delay to force submission. If a hand-rolled `tmux send-keys ... Enter`
-  looks stuck, reproduce the same pattern (a second Enter after a short
-  sleep). If your installation pre-dates this fix, re-run the project's
-  `install.sh` from your njslyr7 clone.
+- **Worker pane un-submitted, or jumps into slash/file "search-mode"**:
+  both come from injecting text with `tmux send-keys -l` (typed keystrokes).
+  Typed text needs a render tick before Claude Code commits it, so an Enter
+  fired in the same batch races ahead and submits an empty turn (the message
+  sits un-submitted); and embedded newlines in a multi-line briefing submit
+  early, leaving a line that starts with `/ @ #` to be read as a slash-command
+  / file-search / memory trigger. `tmux_send_submit` (used by `formation msg`,
+  the seed, and the relay daemon) now injects via **bracketed paste**
+  (`load-buffer` + `paste-buffer -p`) so the whole text lands as one atomic
+  event — no early submit, no per-character mode triggers — then sleeps before
+  the submit Enter. If you hand-roll an injection, use `paste-buffer -p` (not
+  `send-keys -l`) and sleep ~0.4 s before the Enter. If your installation
+  pre-dates this fix, re-run the project's `install.sh` from your njslyr7
+  clone.
 - **Mailbox has a new entry but the worker isn't reading it**: the relay
   daemon may have died. Check with `ps aux | grep mailbox_relay | grep
   <worker_id>`. If absent, restart it manually (the lib path is derived
