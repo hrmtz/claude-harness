@@ -42,7 +42,7 @@ declare -a PATTERNS_REASONS=(
     # === A 系 ===
     'sops[[:space:]]+(-d|--decrypt)([[:space:]]|$):::sops edit <file> または sops exec-env <file> '"'"'<cmd>'"'"' で行ける'
     'docker[[:space:]]+(container[[:space:]]+)?inspect.*--format.*\.Config\.Env:::compose env_file 経由か sops exec-env で env 参照'
-    'env[[:space:]]*\|[[:space:]]*(grep|awk|sed|fgrep|egrep|rg|tr).*(KEY|TOKEN|PASSWORD|PASSWD|SECRET|CRED):::env | cut -d= -f1 で key 名のみ取れる'
+    'env[[:space:]]*\|[[:space:]]*(grep|awk|sed|fgrep|egrep|rg|tr|head|tail):::env | cut -d= -f1 で key 名のみ、値は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
     'bash[[:space:]]+-x.*(printf|echo).*\$[A-Z_]+:::set +x で expansion 抑制、必要なら [ -n "\$X" ] && echo set で bool 確認'
     # L47 (cat .env|.aws/credentials) は下記 cred-file-read 統合 pattern が subsume、 ack 経路一本化のため削除
     '(^|[^a-zA-Z_/])(head|tail)([[:space:]]+[^[:space:]&|;<>]+)+\.enc\.(yaml|json):::sops edit でそのまま開ける、preview 不要'
