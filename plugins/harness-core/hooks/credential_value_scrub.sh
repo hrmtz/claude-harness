@@ -48,7 +48,12 @@ VALUE_PATTERN='[a-zA-Z0-9_/+=.:-]{16,}'
 # ----------------------------------------
 # Allow-list (placeholder values that should NOT be scrubbed)
 # ----------------------------------------
-ALLOWLIST_REGEX='<REDACTED|placeholder|example|changeme|<your-key>|test-token|dummy|YOUR_'
+# `\[\^` / `\[:space:\]` / `[^@[:` skip this hook's OWN pattern-catalog text
+# (issue #7 tertiary): reading/grepping the catalog via Bash surfaces the
+# DSN-shaped regexes (`postgresql://[^:/@[:space:]]+:...@`) which self-match and
+# trigger a harmless-but-noisy in-place scrub. Real credentials never contain a
+# `[^` char-class or a `[:space:]` POSIX class, so this is a safe discriminator.
+ALLOWLIST_REGEX='<REDACTED|placeholder|example|changeme|<your-key>|test-token|dummy|YOUR_|\[\^|\[:space:\]'
 
 LEAK_DETECTED=0
 LEAK_SUMMARY=""

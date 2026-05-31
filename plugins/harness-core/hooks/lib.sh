@@ -44,7 +44,17 @@ parse_prompt() {
         | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
-# Parse tool_response.stdout/stderr/output from PostToolUse hook stdin.
+# Parse tool output from PostToolUse hook stdin.
+#
+# Shape-agnostic (issue #7): the named-field extraction below handles the
+# success-shaped tool_response (clean per-field text, real newlines — best for
+# the keyword/YAML scanners). But exit-non-zero Bash calls deliver the output in
+# an *error-wrapped* tool_response whose payload lives under a different field
+# (or carries it as a bare string), so named-field extraction returns empty and
+# the whole scan silently skips. The trailing `tostring` fallback serializes the
+# ENTIRE tool_response regardless of shape, so any leaked credential text is
+# still surfaced to the scanner. Redundant with the named fields on success
+# (harmless — grep just matches twice); load-bearing on failure.
 parse_tool_output() {
     local input
     if [ -n "${HOOK_INPUT:-}" ]; then
@@ -52,11 +62,15 @@ parse_tool_output() {
     else
         input=$(cat)
     fi
+    # The `?` after each index suppresses jq's "cannot index string with X" error
+    # when tool_response is a bare string (an error-wrapped shape) — without it the
+    # whole filter aborts before the tostring fallback runs.
     printf '%s' "$input" | jq -r '
-        .tool_response.stdout // empty,
-        .tool_response.stderr // empty,
-        .tool_response.output // empty,
-        .tool_response.content // empty
+        (.tool_response.stdout? // empty),
+        (.tool_response.stderr? // empty),
+        (.tool_response.output? // empty),
+        (.tool_response.content? // empty),
+        (.tool_response | select(. != null) | tostring)
     ' 2>/dev/null
 }
 

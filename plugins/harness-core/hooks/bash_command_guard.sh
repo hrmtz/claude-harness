@@ -63,11 +63,17 @@ declare -a PATTERNS_REASONS=(
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
 
     # === B 系 (#B1-B15) ===
-    'printenv[[:space:]]+[A-Z_]*(KEY|TOKEN|PASSWORD|PASSWD|SECRET|CRED)[A-Z_]*([[:space:]]|$):::env | cut -d= -f1 で key 名のみ取れる'
+    # 2026-05-31 issue #10: keyword-gated だと `printenv MARS_POSTGRES_URL` (KEY/TOKEN 等
+    # を含まない secret var 名) や `printenv | grep -i postgres` がすり抜け。 L45 (env) と
+    # 対称に target-agnostic 化 — printenv の任意 var print / 任意 filter pipe / bare dump を捕捉。
+    'printenv([[:space:]]+[A-Za-z_][A-Za-z0-9_]*|[[:space:]]*\||[[:space:]]*$):::env | cut -d= -f1 で key 名のみ、値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
     'echo[[:space:]].*\$\{?[A-Z_]*(TOKEN|PASSWORD|PASSWD|SECRET|CRED)[A-Z_]*\}?:::[ -n "\$X" ] && echo set で bool 確認'
     'printf.*\$\{?[A-Z_]*(TOKEN|PASSWORD|PASSWD|SECRET|CRED)[A-Z_]*\}?:::[ -n "\$X" ] && echo set で bool 確認'
     '(declare|typeset|export)[[:space:]]+-p[[:space:]]+[A-Z_]*(KEY|TOKEN|PASSWORD|PASSWD|SECRET|CRED)[A-Z_]*([[:space:]]|$):::env | cut -d= -f1 で key 名のみ取れる'
-    '(^|;|&&|[[:space:]])set[[:space:]]*($|;|\n)|set[[:space:]]+\|[[:space:]]*(grep|head|tail|awk|sed):::env | cut -d= -f1 で key 名のみ取れる (set は env+func 全 dump で過剰)'
+    # 2026-05-31 issue #10: set-pipe を任意 filter target に broaden (旧 grep|head|tail|awk|sed
+    # 限定だと `set | rg postgres` 等がすり抜け)。 bare `set` 検出は `set -e`/`set -x` を誤爆
+    # しないよう ($|;|\n) 終端を維持。
+    '(^|;|&&|[[:space:]])set[[:space:]]*($|;|\n)|(^|;|&&|[[:space:]])set[[:space:]]*\|:::env | cut -d= -f1 で key 名のみ取れる (set は env+func 全 dump で過剰)'
     '(^|[^a-zA-Z_/])cat[[:space:]]+/proc/[^[:space:]]+/environ:::ps p <pid> -o comm,args で代替 (env 不要なら)'
     '(^|[^a-zA-Z_/])ps[[:space:]]+[a-z]*e[a-z]*([[:space:]]|$)|(^|[^a-zA-Z_/])ps[[:space:]]+-o[[:space:]]+[a-z,]*environ:::ps -o pid,comm,args で env 出さず取れる'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][[:space:]]*(python[3]?|node|deno|bun|ruby|perl|php|bash|sh|dash|zsh)[[:space:]]+-[ce]([[:space:]]|$):::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
@@ -117,6 +123,14 @@ declare -a PATTERNS_REASONS=(
 
     # preemptive #34: pass show / pass -c で stored credential 平文 stdout (-c は clipboard だが pipe で stdout 化可)
     'pass[[:space:]]+(show|-c)([[:space:]]|$):::pass ls で key list のみ、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+
+    # === D 系 (#35、 2026-05-31 DSN-with-creds-in-argv) ===
+    # issue #6 / #8 incident 群: password 入り DSN URI を psql 等の argv に直書きすると
+    # (a) process-listing (ps aux | grep) で argv の password が露出、 (b) command 自体が
+    # 焼き付く。 PostScrub の DSN catalog (postgresql://user:pass@) と対称な prevent 層。
+    # `psql "$POSTGRES_URL"` 等の env 展開形は command text に password literal を含まない
+    # ので誤爆しない — literal な user:pass@ を書いた時だけ発火。
+    '(postgres(ql)?|mysql|mongodb(\+srv)?|redis|amqp|libsql)://[^:/@[:space:]]+:[^@[:space:]]+@:::password 入り DSN を argv に直書きせず、 sops exec-env <file> '"'"'psql "\$POSTGRES_URL" ...'"'"' で env 経由注入 (argv に password を出さない)'
 )
 
 VIOLATION_FOUND=0
