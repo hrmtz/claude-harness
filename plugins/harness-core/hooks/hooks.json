@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (7 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (8 hooks, defense-in-depth)",
   "hooks": {
     "PreToolUse": [
       {
@@ -36,6 +36,16 @@
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_value_scrub.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Read|Edit|Write|Task|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_scrub.sh",
+            "timeout": 30
           }
         ]
       }
