@@ -67,6 +67,17 @@ SALT_FILE = STATE_DIR / "salt.bin"
 HOOK_LOG = Path.home() / ".claude" / "state" / "hook_logs" / "hooks.log"
 
 MAX_SCAN_BYTES = 256_000          # hard cap; above this scan is SKIPPED + warned
+# Per-candidate-run length cap (perf). scan_output is O(run_len × distinct_lengths)
+# sliding-window HMAC; a single multi-hundred-KB base64 run (e.g. a SQL BYTEA dump
+# returned by an MCP tool) would otherwise mint ~10M HMACs and blow the hook timeout
+# → SIGKILL → fail-OPEN (leak not redacted). The build validates every manifest
+# byte_length to 12..4096 (credential_scrub_build: load rejects >4096), so the
+# LARGEST possible known secret is 4096 bytes; a single contiguous in-class run
+# longer than that cannot itself be a known secret. Runs over this cap are skipped
+# (logged, count-only) — a bounded tradeoff: a secret *embedded inside* a >4KB
+# delimiter-free blob is missed. The rolling-hash prefilter (follow-up) removes the
+# tradeoff; this cap is the do-now fix that keeps the widened sensor from fail-open.
+MAX_CANDIDATE_RUN = 4096
 MAX_MANIFEST_ENTRIES = 500        # cap loaded entries
 MAX_MANIFEST_FILES = 64           # cap manifest file count
 SUPPORTED_FORMAT_VERSION = 1
@@ -244,9 +255,16 @@ def scan_output(output_bytes: bytes,
     if not by_length or not output_bytes:
         return []
     lengths = sorted(by_length.keys())
+    skipped_runs = 0
     for m in CANDIDATE_RUN.finditer(output_bytes):
         run = m.group()
         run_len = len(run)
+        # Perf guard: a single contiguous run longer than the largest possible known
+        # secret (MAX_CANDIDATE_RUN) is a dump/digest column, not a credential window.
+        # Skip it to bound the quadratic sliding scan — see MAX_CANDIDATE_RUN rationale.
+        if run_len > MAX_CANDIDATE_RUN:
+            skipped_runs += 1
+            continue
         for L in lengths:
             if L > run_len:
                 break
@@ -259,6 +277,10 @@ def scan_output(output_bytes: bytes,
                 keys = hash_lookup.get(h)
                 if keys:
                     hits[window] = list(keys)
+    if skipped_runs:
+        # Count-only (no values): surfaces the bounded-coverage tradeoff in the log
+        # so an oversized-blob FN is observable rather than silent.
+        hook_log(f"oversize_runs_skipped={skipped_runs} (len>{MAX_CANDIDATE_RUN})")
     return list(hits.items())
 
 
