@@ -192,6 +192,10 @@ Each pattern represents an actual past incident. Adding speculative triggers wou
 
 `harness-magi` is currently invocation-driven (operator types `/magi <change>`). A future PreToolUse hook could detect Magi-trigger patterns (DDL on big tables, GPU rental, etc.) and prompt for Magi pre-flight automatically. Not yet implemented because the false-positive rate would be high without context the hook doesn't have.
 
+### Credential transform-exfil (GAP #3) — taint correlator rejected, below-waterline
+
+The HMAC value sensor catches a *known* secret crossing any egress channel, but is structurally blind to an `encode`/`encrypt`-then-exfil (the literal never appears). A proposed SOURCE→EGRESS session-taint correlator to cover this was **rejected by a 4-reviewer / 2-family dual-magi round (unanimous DON'T-BUILD)**. Two independent reasons are fatal: (1) the "opaque egress" trigger is **non-identifiable**, not merely hard to calibrate — a transformed secret and routine high-entropy dev output (git SHAs, JWTs, base64 data-URIs, terraform state, gzip dumps) are the *same* byte distribution, so no threshold separates them; a warn-only signal with non-zero FP is net-negative (it trains the single operator to dismiss alerts and dilutes the FP-safe hash-match channel). (2) On a single-uid self-owned box, a transform-then-exfil adversary has user-level code-exec and trivially defeats every source/window/channel — the **same below-waterline class as [crypto-identity for agents](./design/credleak-taint-correlator.md)**, which was also declined. Transform-exfil is therefore an **accepted limitation**, documented (not coded), classed with crypto-identity. The only buildable, FP-safe residue is a few *deterministic same-command* Bash patterns (`sops exec-env … 'curl …'`), most of which `bash_command_guard.sh` already blocks. Full review record: [credleak-taint-correlator.md](./design/credleak-taint-correlator.md).
+
 ---
 
 ## 6. Cross-references
