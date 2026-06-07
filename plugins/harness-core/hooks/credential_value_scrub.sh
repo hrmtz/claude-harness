@@ -57,6 +57,7 @@ ALLOWLIST_REGEX='<REDACTED|placeholder|example|changeme|<your-key>|test-token|du
 
 LEAK_DETECTED=0
 LEAK_SUMMARY=""
+LEAK_PG_ROLES=""   # roles parsed from leaked DSNs (usernames, NOT secrets) for autorotate
 
 for entry in "${PATTERNS[@]}"; do
     pattern="${entry%%|*}"
@@ -79,6 +80,15 @@ for entry in "${PATTERNS[@]}"; do
         prefix=$(echo "$pattern" | head -c 30)
         LEAK_SUMMARY="${LEAK_SUMMARY}\n  - pattern matched: ${prefix}..."
         hook_log "credential_value_scrub" "scrubbed pattern in $JSONL (pattern prefix: ${prefix}...)"
+
+        # Parse role (username) from leaked PG DSNs for autonomous rotation (step 4).
+        # Only the role name is extracted — never the password. Handles multi-role leaks.
+        case "$pattern" in
+            postgresql://*|postgres://*)
+                _roles=$(echo "$OUTPUT" | grep -oE "$pattern" \
+                    | sed -E 's#^postgres(ql)?://([^:]+):.*#\2#' | sort -u)
+                LEAK_PG_ROLES="$LEAK_PG_ROLES $_roles" ;;
+        esac
     fi
 done
 
@@ -118,6 +128,19 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
         LEAK_TRANSCRIPT="$JSONL" \
         LEAK_SESSION_ID="$SESSION_ID" \
             setsid bash "$FOLLOWUP" </dev/null >/dev/null 2>&1 &
+    fi
+
+    # Step 4 (rotate) — close the loop: rotate the leaked credential, DETACHED so
+    # rotation latency never blocks this hook. autorotate_leaked_cred.sh policy:
+    # non-prod PG role → autonomous rotate + distribute to all edges; prod role /
+    # API key → escalate (needs rolling redeploy / provider-side rotation).
+    AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
+    if [ -f "$AUTOROTATE" ]; then
+        for r in $(printf '%s' "$LEAK_PG_ROLES" | tr ' ' '\n' | sort -u); do
+            [ -z "$r" ] && continue
+            LEAK_ROLE="$r" LEAK_CLASS="pg_dsn" LEAK_SESSION_ID="$SESSION_ID" \
+                setsid bash "$AUTOROTATE" </dev/null >/dev/null 2>&1 &
+        done
     fi
 
     # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
