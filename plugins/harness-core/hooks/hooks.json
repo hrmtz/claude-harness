@@ -26,6 +26,21 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/check_zsh_reserved_vars.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/check_early_check_timer.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
