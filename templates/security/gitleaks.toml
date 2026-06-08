@@ -1,0 +1,24 @@
+# gitleaks config TEMPLATE (claude-harness #19) — broad committed-secret layer.
+# Copy to <project>/.gitleaks.toml and CALIBRATE the allowlist (see templates/security/README.md):
+#   gitleaks detect --no-git --redact -c .gitleaks.toml --source .
+# until the SOURCE surface is 0. Real findings → fix; FP classes → allowlist below.
+title = "gitleaks (broad secret layer)"
+
+[extend]
+useDefault = true   # inherit all built-in rules (api keys, tokens, PEM, jwt, ...)
+
+[allowlist]
+description = "FP exclusions — tune per project after a calibration scan."
+paths = [
+  # high-entropy DATA (embeddings / snapshots / fixtures) that match generic-api-key:
+  '''(^|/)data/''',
+  # gitignored LOCAL secret files (real values, never committed; SOPS owns the committed story):
+  '''(^|/)\.env($|\.)''',          # .env, .env.common, .env.local (keep .env.sample scanned)
+  # transient review dumps / scratch that quote secret-shaped fragments:
+  '''(^|/)\.dual-magi/''',
+  # dependency lock files:
+  '''(^|/)(package-lock\.json|poetry\.lock|pnpm-lock\.yaml|uv\.lock|Cargo\.lock|yarn\.lock)$''',
+  # DSN/secret-illustration sources (redactors, scanners, hook installers, key-gen fixtures):
+  #   '''scripts/_your_redactor\.py$''',
+  #   '''tests/test_.*_keys\.py$''',
+]
