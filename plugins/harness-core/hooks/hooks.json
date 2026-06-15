@@ -1,6 +1,17 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (8 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (9 hooks, defense-in-depth)",
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stall_autocontinue.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
