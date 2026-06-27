@@ -48,8 +48,12 @@ Invariants:
       loaded. No discovery glob. Trust boundary == local state dir owned by user.
   I3: format_version mismatch → fail-safe + hook_log; never silent ignore.
   I4: Any uncaught exception in scan / redact → fail-safe + hook_log; exit 0.
-  I5: Output size > MAX_SCAN_BYTES → scan SKIPPED with explicit warning context
-      (= visible to Claude so the user sees the gap).
+  I5: Output is ALWAYS scanned — never fail-open by hard-skipping on size (#39).
+      The candidate-run prefilter + a bounded global HMAC budget (MAX_SCAN_WINDOWS)
+      keep cost finite. Delimited (sub-cap) runs are scanned first and fully; rare
+      giant delimiter-free blobs are scanned within remaining budget, else best-effort
+      head+tail. If the budget is exhausted the scan is reported INCOMPLETE and the
+      caller warns honestly (it NEVER claims auto-handling when nothing was redacted).
   I6: All emit_context output is GENERIC (no key names, no precise lengths).
 """
 
@@ -66,18 +70,29 @@ MANIFEST_DIR = STATE_DIR / "manifest"
 SALT_FILE = STATE_DIR / "salt.bin"
 HOOK_LOG = Path.home() / ".claude" / "state" / "hook_logs" / "hooks.log"
 
-MAX_SCAN_BYTES = 256_000          # hard cap; above this scan is SKIPPED + warned
-# Per-candidate-run length cap (perf). scan_output is O(run_len × distinct_lengths)
-# sliding-window HMAC; a single multi-hundred-KB base64 run (e.g. a SQL BYTEA dump
-# returned by an MCP tool) would otherwise mint ~10M HMACs and blow the hook timeout
-# → SIGKILL → fail-OPEN (leak not redacted). The build validates every manifest
-# byte_length to 12..4096 (credential_scrub_build: load rejects >4096), so the
-# LARGEST possible known secret is 4096 bytes; a single contiguous in-class run
-# longer than that cannot itself be a known secret. Runs over this cap are skipped
-# (logged, count-only) — a bounded tradeoff: a secret *embedded inside* a >4KB
-# delimiter-free blob is missed. The rolling-hash prefilter (follow-up) removes the
-# tradeoff; this cap is the do-now fix that keeps the widened sensor from fail-open.
+# NOTE (#39): MAX_SCAN_BYTES is NO LONGER a hard skip. It is retained only as the
+# "this output is very large" threshold used to phrase the incomplete-scan warning.
+# Scanning is now always attempted (bounded by MAX_SCAN_WINDOWS), so an oversized
+# log / JSON / base64 blob no longer fails OPEN (warn-but-don't-redact).
+MAX_SCAN_BYTES = 256_000
+# Per-candidate-run length boundary. scan_output is O(run_len × distinct_lengths)
+# sliding-window HMAC; a single multi-hundred-KB delimiter-free run (e.g. a SQL BYTEA
+# dump returned by an MCP tool) is the pathological case. The build validates every
+# manifest byte_length to 12..4096 (load rejects >4096), so the LARGEST possible known
+# secret is 4096 bytes. Runs at/under this length are treated as ordinary "delimited"
+# windows and scanned FULLY first (pass 1). Runs longer than this are giant blobs
+# scanned in pass 2: fully if the remaining global budget covers them, otherwise
+# best-effort head+tail windows of this size (overlap = MAX_CANDIDATE_RUN, ≥ the
+# longest known secret, so a secret straddling either edge is still caught) with the
+# scan flagged INCOMPLETE. This replaces the old hard-skip-the-whole-run behavior
+# (#39), which fail-OPENED exactly on the blobs most likely to carry a leak.
 MAX_CANDIDATE_RUN = 4096
+# Global HMAC budget for one main() invocation. At ~0.6M stdlib HMACs/s this bounds
+# worst-case scan walltime to a few seconds so the hook never hits its timeout →
+# SIGKILL → silent fail-open. Sub-cap (delimited) runs are scanned before any giant
+# blob, so a lone API key in a large payload is always covered even if the budget is
+# later exhausted by a base64 column. Tunable; see PR open questions.
+MAX_SCAN_WINDOWS = 2_000_000
 MAX_MANIFEST_ENTRIES = 500        # cap loaded entries
 MAX_MANIFEST_FILES = 64           # cap manifest file count
 SUPPORTED_FORMAT_VERSION = 1
@@ -245,43 +260,105 @@ def load_manifests() -> tuple[dict[int, dict[str, list[str]]], str | None]:
 # ----------------------------------------------------------------------------
 # Scan — candidate-run pre-filter + sliding-byte-window HMAC match
 # ----------------------------------------------------------------------------
+def _run_windows(run_len: int, lengths: list[int]) -> int:
+    """Number of sliding-window start positions summed over all known lengths
+    that fit in a run of run_len bytes. Used to decide whether a giant run can be
+    scanned fully within the remaining budget. `lengths` must be ascending."""
+    total = 0
+    for L in lengths:
+        if L > run_len:
+            break
+        total += run_len - L + 1
+    return total
+
+
 def scan_output(output_bytes: bytes,
                 by_length: dict[int, dict[str, list[str]]],
                 salt: bytes,
-                algorithm: str) -> list[tuple[bytes, list[str]]]:
-    """Return list of (matched_literal_bytes, [key_names]) without duplicates.
-    Assumes algorithm_available(algorithm) was checked by caller — see main()."""
+                algorithm: str) -> tuple[list[tuple[bytes, list[str]]], bool]:
+    """Bounded, no-fail-open scan (#39).
+
+    Returns (hits, scan_complete) where:
+      hits          = list of (matched_literal_bytes, [key_names]) without duplicates.
+      scan_complete = True iff every candidate region was scanned for every known
+                      length. False means the global HMAC budget was exhausted or a
+                      giant delimiter-free run only got best-effort head+tail coverage;
+                      the caller MUST warn honestly rather than imply auto-handling.
+
+    Assumes algorithm_available(algorithm) was checked by caller — see main().
+    Preserves the existing HMAC known-secret matching logic (sliding byte windows
+    sized by manifest byte_length, compared via compute_hmac); only the scheduling
+    around it changed so all lengths/sizes are scanned within a finite budget."""
     hits: dict[bytes, list[str]] = {}
     if not by_length or not output_bytes:
-        return []
+        return [], True
     lengths = sorted(by_length.keys())
-    skipped_runs = 0
-    for m in CANDIDATE_RUN.finditer(output_bytes):
-        run = m.group()
-        run_len = len(run)
-        # Perf guard: a single contiguous run longer than the largest possible known
-        # secret (MAX_CANDIDATE_RUN) is a dump/digest column, not a credential window.
-        # Skip it to bound the quadratic sliding scan — see MAX_CANDIDATE_RUN rationale.
-        if run_len > MAX_CANDIDATE_RUN:
-            skipped_runs += 1
-            continue
+    budget = [MAX_SCAN_WINDOWS]   # boxed so the nested scanner can mutate it
+    complete = True
+
+    def scan_span(run: bytes, start: int, stop: int) -> bool:
+        """Slide every known length over run, hashing windows whose START index is
+        in [start, stop). Returns False if the global window budget ran out (so the
+        caller can flag the scan incomplete). Unchanged per-window HMAC match logic."""
+        rl = len(run)
         for L in lengths:
-            if L > run_len:
+            if L > rl:
                 break
             hash_lookup = by_length[L]
-            for i in range(run_len - L + 1):
+            last = min(stop, rl - L + 1)
+            i = start if start > 0 else 0
+            while i < last:
                 window = run[i:i+L]
+                i += 1
                 if window in hits:
                     continue
+                if budget[0] <= 0:
+                    return False
+                budget[0] -= 1
                 h = compute_hmac(window, salt, algorithm)
                 keys = hash_lookup.get(h)
                 if keys:
                     hits[window] = list(keys)
-    if skipped_runs:
-        # Count-only (no values): surfaces the bounded-coverage tradeoff in the log
-        # so an oversized-blob FN is observable rather than silent.
-        hook_log(f"oversize_runs_skipped={skipped_runs} (len>{MAX_CANDIDATE_RUN})")
-    return list(hits.items())
+        return True
+
+    # Pass 1 — fully scan all sub-cap (delimited) runs first. These are the cheap,
+    # high-signal windows where ordinary credentials live (quoted/comma-delimited
+    # tokens in JSON, logs, env dumps). Doing them before any giant blob guarantees
+    # a lone API key in a 256KB+ payload is always scanned even if the budget is
+    # later exhausted by a base64 column elsewhere in the same output.
+    oversized: list[bytes] = []
+    for m in CANDIDATE_RUN.finditer(output_bytes):
+        run = m.group()
+        if len(run) > MAX_CANDIDATE_RUN:
+            oversized.append(run)
+            continue
+        if not scan_span(run, 0, len(run)):
+            complete = False
+
+    # Pass 2 — giant contiguous in-class runs (rare: a SQL BYTEA / PEM body / base64
+    # blob with no delimiters). Scan fully when the remaining budget covers it; else
+    # best-effort head+tail windows and mark INCOMPLETE so the caller warns honestly
+    # instead of failing OPEN silently (the #39 hole).
+    for run in oversized:
+        run_len = len(run)
+        if budget[0] <= 0:
+            complete = False
+            break
+        if _run_windows(run_len, lengths) <= budget[0]:
+            if not scan_span(run, 0, run_len):
+                complete = False
+        else:
+            complete = False
+            head_stop = MAX_CANDIDATE_RUN
+            tail_start = head_stop if head_stop > run_len - MAX_CANDIDATE_RUN else run_len - MAX_CANDIDATE_RUN
+            scan_span(run, 0, head_stop)
+            scan_span(run, tail_start, run_len)
+
+    if not complete:
+        # Count-only (no values): surfaces the bounded-coverage event in the log so
+        # an oversized-output partial scan is observable rather than silent.
+        hook_log(f"scan_incomplete budget_remaining={budget[0]} oversized_runs={len(oversized)}")
+    return list(hits.items()), complete
 
 
 # ----------------------------------------------------------------------------
@@ -499,16 +576,10 @@ def main() -> int:
     if not transcript_path.is_file():
         return 0
 
-    # I5: output size cap with explicit warning
+    # I5 (#39): NO hard skip on size. Always scan; the candidate-run prefilter and
+    # the MAX_SCAN_WINDOWS budget keep cost finite, so a large output no longer
+    # fails OPEN (warn-but-don't-redact).
     output_bytes = tool_output.encode("utf-8", errors="surrogateescape")
-    if len(output_bytes) > MAX_SCAN_BYTES:
-        hook_log(f"output_oversize bytes={len(output_bytes)}; scan SKIPPED")
-        emit_generic_context(
-            "⚠️  credential_scrub: tool output exceeded scan size cap "
-            f"({len(output_bytes)} > {MAX_SCAN_BYTES} bytes). Scan was SKIPPED. "
-            "If sensitive data may be in this output, review manually + consider rotation."
-        )
-        return 0
 
     salt = load_salt()
     if salt is None:
@@ -531,8 +602,20 @@ def main() -> int:
                 "--algorithm sha256-hmac. See ~/.claude/state/hook_logs/hooks.log."
             )
             return 0
-        hits = scan_output(output_bytes, by_length, salt, algorithm)
+        hits, scan_complete = scan_output(output_bytes, by_length, salt, algorithm)
         if not hits:
+            if not scan_complete:
+                # #39: oversized output, budget exhausted before full coverage. Nothing
+                # matched the SCANNED regions, but unscanned regions were not checked.
+                # Warn honestly — do NOT imply auto-handling (no redaction occurred).
+                hook_log(f"scan_incomplete no_match bytes={len(output_bytes)}")
+                emit_generic_context(
+                    "⚠️  credential_scrub: tool output was very large; the scan hit its "
+                    "compute budget and was INCOMPLETE. No known credential matched the "
+                    "scanned regions, but some regions were NOT checked. No redaction was "
+                    "performed. Review manually + consider rotation if sensitive data may "
+                    "be present."
+                )
             return 0
         literals = [w for w, _ in hits]
         replaced = redact_jsonl(transcript_path, literals)
@@ -560,7 +643,17 @@ def main() -> int:
     spawn_leak_followup(key_names, replaced, str(transcript_path),
                         session_id_from_raw(raw_input))
     # Step 3: resume context — keep working, the leak is already neutralized + logged.
-    emit_generic_context(resume_context(replaced))
+    # Auto-handling is only claimed for what was actually redacted; if the scan was
+    # incomplete (oversized output, budget exhausted) append an honest caveat so we
+    # never imply the WHOLE output was cleared (#39).
+    msg = resume_context(replaced)
+    if not scan_complete:
+        msg += (
+            " NOTE: the output was very large and the scan was INCOMPLETE — the "
+            "redacted matches were handled, but some regions were not checked; "
+            "review manually if other secrets may be present."
+        )
+    emit_generic_context(msg)
     return 0
 
 
