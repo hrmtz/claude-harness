@@ -6,12 +6,13 @@
 # ("rotation tracked in the issue"); this makes the safe case autonomous.
 #
 # Policy (deliberately conservative — a leak-DETECTION false-positive must never
-# take down production):
-#   - NON-PROD PG role  → fully autonomous rotate (no redeploy needed, zero outage).
-#   - PROD PG role / bare prs / API key → DO NOT auto-rotate. Rotating these needs a
-#     rolling redeploy (PG) or provider-side action (API key); a hook must not
-#     restart prod or call a provider unattended. Escalate HARD instead so a human/
-#     agent does it with the Phase 2 runbook.
+# take down production OR be remotely inducible into rotating canonical mars):
+#   - NON-PROD PG role  → eligible, but HUMAN-GATED (gh #33/#41): rotate only with an
+#     explicit per-role ack (marker file / AUTOROTATE_ACK_ROLE). Without ack →
+#     escalate with a runbook command. This is because a leak DETECTION can be forced
+#     by attacker-controlled tool output, so detection alone must not --execute.
+#   - PROD PG role / bare prs / API key → never auto-rotate (rolling redeploy /
+#     provider-side action). Escalate HARD so a human does it with the Phase 2 runbook.
 #
 # Invoked DETACHED (setsid </dev/null) by credential_value_scrub.sh so rotation
 # latency (~20s) never blocks the PostToolUse hook.
@@ -58,7 +59,7 @@ session=\`$LEAK_SESSION_ID\`. Runbook: \`scripts/_rotate_mars_pg_roles.sh\` (#26
     local last; last=$(cat "$STATE_DIR/last_issue" 2>/dev/null)
     if [ -n "$last" ] && command -v gh >/dev/null 2>&1; then
         timeout 20 gh issue comment -R hrmtz/claude-harness "$last" \
-            --body "⚠️ **auto-rotate DECLINED — manual action needed.** $reason (session \`$LEAK_SESSION_ID\`). Non-prod roles auto-rotate; this class doesn't (needs rolling redeploy / provider-side rotation)." >/dev/null 2>&1
+            --body "⚠️ **auto-rotate DECLINED — manual action needed.** $reason (session \`$LEAK_SESSION_ID\`). Since gh #33/#41 ALL rotations are human-gated (a leak detection can be attacker-induced), so no credential is rotated without an explicit ack / runbook run." >/dev/null 2>&1
     fi
 }
 
@@ -89,13 +90,43 @@ case "$PROD_ROLES" in
         exit 0 ;;
 esac
 case "$NON_PROD_ROLES" in
-    *" $LEAK_ROLE "*) : ;;   # eligible for autonomous rotation
+    *" $LEAK_ROLE "*) : ;;   # non-prod: ELIGIBLE, but still gated below
     *)
         escalate "role \`$LEAK_ROLE\` is not in the known non-prod rotation set; rotate manually after confirming it's safe"
         exit 0 ;;
 esac
 
-# ── autonomous rotation (non-prod, zero-outage) ──────────────────────────────
+# ── HUMAN GATE (gh #33/#41) ──────────────────────────────────────────────────
+# Non-prod eligibility is NECESSARY but NOT SUFFICIENT. A leak DETECTION can be
+# induced by attacker-controlled tool output (poisoned file / WebFetch / MCP /
+# mailbox body), so even a non-prod role must NOT auto --execute a real rotation
+# against canonical mars without an explicit human ack. This closes the remotely-
+# inducible self-DoS observed during the #27 audit.
+#   ack = a marker file a human creates (PREFERRED — atomic, one-shot, audited):
+#         touch "$ROT_MARK_DIR/../rotate_approved/<role>"
+#   or   = AUTOROTATE_ACK_ROLE=<role> in the invocation env (escape hatch; NOT
+#          one-shot — only set it for a single deliberate invocation, never export
+#          it broadly, or repeated detections could rotate repeatedly).
+# Without ack: escalate with a ready-to-run runbook command, mark dedup, exit 0.
+ACK_DIR="$STATE_DIR/rotate_approved"
+ACK_FILE="$ACK_DIR/$LEAK_ROLE"
+acked=0
+# Atomic one-shot claim of a file ack: mv succeeds for exactly one racer, so two
+# concurrent autorotate processes can never both consume the same approval.
+if [ -f "$ACK_FILE" ] && mv "$ACK_FILE" "$ACK_FILE.consumed.$$" 2>/dev/null; then
+    acked=1; rm -f "$ACK_FILE.consumed.$$" 2>/dev/null
+elif [ "${AUTOROTATE_ACK_ROLE:-}" = "$LEAK_ROLE" ]; then
+    acked=1
+fi
+if [ "$acked" != "1" ]; then
+    escalate "non-prod role \`$LEAK_ROLE\` leaked — HUMAN GATE held (gh #33/#41 self-DoS guard). Auto-rotation requires explicit approval. To approve: \`mkdir -p $ACK_DIR && touch $ACK_FILE\` then re-invoke, or run the runbook directly: \`$ROT_SCRIPT --roles $LEAK_ROLE --execute\`."
+    # NOTE: deliberately do NOT set the dedup $MARK here — otherwise the very
+    # re-invoke the human is told to do would short-circuit on the dedup check.
+    exit 0
+fi
+_log "human ack consumed for $LEAK_ROLE — proceeding to gated rotation"
+
+# ── gated rotation (non-prod, zero-outage, human-approved) ───────────────────
 _log "auto-rotating non-prod role: $LEAK_ROLE (session=$LEAK_SESSION_ID, dryrun=$DRYRUN)"
 if [ "$DRYRUN" = "1" ]; then
     _log "DRYRUN: would run $ROT_SCRIPT --roles $LEAK_ROLE --execute"

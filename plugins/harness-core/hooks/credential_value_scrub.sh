@@ -130,17 +130,23 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
             setsid bash "$FOLLOWUP" </dev/null >/dev/null 2>&1 &
     fi
 
-    # Step 4 (rotate) — close the loop: rotate the leaked credential, DETACHED so
-    # rotation latency never blocks this hook. autorotate_leaked_cred.sh policy:
-    # non-prod PG role → autonomous rotate + distribute to all edges; prod role /
-    # API key → escalate (needs rolling redeploy / provider-side rotation).
-    AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
-    if [ -f "$AUTOROTATE" ]; then
-        for r in $(printf '%s' "$LEAK_PG_ROLES" | tr ' ' '\n' | sort -u); do
-            [ -z "$r" ] && continue
-            LEAK_ROLE="$r" LEAK_CLASS="pg_dsn" LEAK_SESSION_ID="$SESSION_ID" \
-                setsid bash "$AUTOROTATE" </dev/null >/dev/null 2>&1 &
-        done
+    # Step 4 (rotate) — GATED (gh #33/#41). A DSN-shaped string in ANY tool output
+    # (a poisoned file, a WebFetch/MCP response, a peer mailbox body the agent merely
+    # read and echoed) must NOT autonomously rotate canonical mars roles: that is a
+    # remotely-inducible self-DoS, and it was observed firing during the #27 audit on
+    # report text alone. Rotation is therefore HUMAN-GATED. The incident issue filed
+    # in step 2 is the signal for a human to rotate via the runbook; the auto-trigger
+    # is opt-in only (AUTOROTATE_ENABLE=1) AND autorotate_leaked_cred.sh itself now
+    # requires a per-role human ack before it will --execute. Default = no rotation.
+    if [ "${AUTOROTATE_ENABLE:-0}" = "1" ]; then
+        AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
+        if [ -f "$AUTOROTATE" ]; then
+            for r in $(printf '%s' "$LEAK_PG_ROLES" | tr ' ' '\n' | sort -u); do
+                [ -z "$r" ] && continue
+                LEAK_ROLE="$r" LEAK_CLASS="pg_dsn" LEAK_SESSION_ID="$SESSION_ID" \
+                    setsid bash "$AUTOROTATE" </dev/null >/dev/null 2>&1 &
+            done
+        fi
     fi
 
     # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
@@ -148,6 +154,6 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     LAST_ISSUE=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
     ISSUE_REF=""
     [ -n "$LAST_ISSUE" ] && ISSUE_REF=" (tracked in claude-harness#${LAST_ISSUE})"
-    MSG="⚠️  credential leak auto-handled: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. No manual steps needed — continue your current task. Rotation for the affected credential is tracked in that issue."
+    MSG="⚠️  credential leak detected: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. Transcript is safe to continue. NOTE (gh #33/#41): credential ROTATION is now human-gated — it does NOT happen automatically. If the leak was real, rotate via the runbook linked in the incident issue."
     emit_context "PostToolUse" "$MSG"
 fi
