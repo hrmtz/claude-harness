@@ -106,7 +106,7 @@ declare -a PATTERNS_REASONS=(
     # に固定し、 `printenv` / `exec-env` / `environment.md`
     # / `.environment` / `echo "loading credentials"` 等 substring 'env'/'credentials'
     # の誤爆を回避 (literal '.env' = dot 必須、 credentials は拡張子必須)。
-    '(^|[[:space:]/"(=;|&<'\''])(\.env(\.[A-Za-z0-9_-]+)*|credentials\.[A-Za-z0-9_-]+)([[:space:]/")><;|&'\'']|$):::reader 問わず credential file (.env / .env.* / credentials.<ext>) 直接読みは sops exec-env <file> で env 経由、 key 名のみは env | cut -d= -f1、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass:::ack,meta'
+    '(^|[[:space:]/"(=;|&<'\''])(\.env(\.[A-Za-z0-9_-]+)*|credentials\.[A-Za-z0-9_-]+)([[:space:]/")><;|&'\'']|$):::reader 問わず credential file (.env / .env.* / credentials.<ext>) 直接読みは sops exec-env <file> で env 経由、 key 名のみは env | cut -d= -f1、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass:::ack,meta,tmpl'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
 
     # === B 系 (#B1-B15) ===
@@ -207,6 +207,29 @@ if echo "$DEOBF" | grep -qE '^[[:space:]]*(env[[:space:]]+)?([A-Za-z_][A-Za-z0-9
     META_ALLOW=1
 fi
 
+# template-file allow (FP regression from the #36 basename pattern, issue #47):
+# .env.example / .sample / .template / .dist / .test / .local-example are credential
+# TEMPLATES (no real secrets) — the Read-tool guard (credential_file_read_guard.sh)
+# already exempts these suffixes. The #36 basename pattern over-blocks them for reader
+# verbs (`cat .env.example`). Strip template-suffixed tokens (anchored at a token
+# boundary so `.env.exampleXYZ` is NOT treated as a template) and re-test the basename
+# pattern: exempt only if no real cred-file reference survives. Robust to mixed reads
+# like `cat .env.example .env` — the real .env survives the strip and still blocks.
+TEMPLATE_ALLOW=0
+_CRED_BASENAME_RE='(^|[[:space:]/"(=;|&<'\''])(\.env(\.[A-Za-z0-9_-]+)*|credentials\.[A-Za-z0-9_-]+)([[:space:]/")><;|&'\'']|$)'
+# terminator = the SAME boundary set the basename pattern uses; crucially it EXCLUDES
+# '.', so a template token only counts when it is the FINAL filename segment. This
+# blocks codex cross-family finding (issue #47): `.env.test.local` / `.env.example.bak`
+# are NOT pure templates (real secrets possible) and must still block. `/` stays a
+# terminator so `.env.example/.env` strips to `ENVTMPL/.env` whose inner real `.env`
+# the re-test still catches.
+if echo "$DEOBF" | grep -qE '\.env\.(example|sample|template|dist|test|local-example)([[:space:]/")><;|&'\'']|$)'; then
+    _STRIPPED=$(echo "$DEOBF" | sed -E 's#\.env\.(example|sample|template|dist|test|local-example)([[:space:]/")><;|&'\'']|$)#ENVTMPL\2#g')
+    if ! echo "$_STRIPPED" | grep -qE "$_CRED_BASENAME_RE"; then
+        TEMPLATE_ALLOW=1
+    fi
+fi
+
 for entry in "${PATTERNS_REASONS[@]}"; do
     pattern="${entry%%:::*}"
     rest="${entry#*:::}"
@@ -223,6 +246,10 @@ for entry in "${PATTERNS_REASONS[@]}"; do
         fi
         if [ "$META_ALLOW" -eq 1 ] && [[ ",$flags," == *",meta,"* ]]; then
             hook_log "bash_command_guard" "ALLOW pure-metadata verb (meta flag) for cred-file pattern"
+            continue
+        fi
+        if [ "$TEMPLATE_ALLOW" -eq 1 ] && [[ ",$flags," == *",tmpl,"* ]]; then
+            hook_log "bash_command_guard" "ALLOW credential-template file (.env.example etc.) for cred-file pattern"
             continue
         fi
         VIOLATION_FOUND=1
