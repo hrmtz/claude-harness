@@ -139,13 +139,13 @@ Output ONLY a single JSON object, no prose, exactly this shape:
 
 const codexAgentPrompt = `You are a harness operator running the cross-family review step. Do EXACTLY this and nothing creative:
 
-1. Write the following block VERBATIM to a scratch file (use a heredoc or the Write tool) at /tmp/claude-1000/-home-hrmtz-projects-claude-harness/1ec45da8-d4e5-46ed-8f8f-0d910e24a6eb/scratchpad/codex_redteam_prompt.md :
+1. Write the following block VERBATIM to a scratch file (use a heredoc or the Write tool) at /tmp/harness_red_team_codex_prompt.md :
 <<<CODEX_PROMPT
 ${codexPromptText}
 CODEX_PROMPT
 
 2. Run, with a generous timeout (codex reads many files):
-   timeout 540 codex exec --skip-git-repo-check - < /tmp/claude-1000/-home-hrmtz-projects-claude-harness/1ec45da8-d4e5-46ed-8f8f-0d910e24a6eb/scratchpad/codex_redteam_prompt.md
+   timeout 540 codex exec --skip-git-repo-check - < /tmp/harness_red_team_codex_prompt.md
 3. codex prints log lines then its answer. Extract the LAST complete JSON object from stdout (the findings object). If codex emitted valid findings, return them parsed into the required schema. If codex failed/timed out/produced no JSON, return {"findings":[],"verify_commands_executed":["codex exec FAILED — see stdout"],"overall":"CLEAN"} and note the failure in overall-adjacent reasoning.
 
 Do not add your own findings — only relay codex's. Return the structured object.`

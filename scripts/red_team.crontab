@@ -1,0 +1,5 @@
+# Weekly harness red-team audit (issue #27, cadence: weekly). chichibu local cron (the
+# audit reads the LIVE local ~/.claude harness, so it cannot run as a cloud routine).
+# Mon 05:00 JST. flock prevents overlap if a run ever exceeds a week. Install idempotently:
+#   (crontab -l 2>/dev/null | grep -v harness_red_team_weekly; cat scripts/red_team.crontab | grep -v '^#') | crontab -
+0 5 * * 1 /usr/bin/flock -n /tmp/harness_red_team_cron.lock bash /home/hrmtz/projects/claude-harness/scripts/run_red_team_cron.sh >> /home/hrmtz/.local/log/harness_red_team_cron.log 2>&1 # harness_red_team_weekly
