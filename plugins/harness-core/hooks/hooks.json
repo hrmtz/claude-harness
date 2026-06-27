@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (16 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (17 hooks, defense-in-depth)",
   "hooks": {
     "Stop": [
       {
@@ -35,6 +35,11 @@
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pg_rotation_propagation_guard.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/sanada_autobackup.sh",
+            "timeout": 12
           }
         ]
       },
