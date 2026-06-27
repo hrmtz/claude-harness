@@ -6,7 +6,8 @@
 # scrub hook (= PostToolUse credential_value_scrub) は 4 key 未登録で覆えなかった。
 #
 # 防御方針: そもそも credential SoT を Read tool に流さない。 構造把握は
-# `grep -n <KEY> .env` (= Bash 経由、 outer-pipe で値露出しない) に置換。
+# `grep -c <KEY> <file>` (件数のみ) / `cut -d= -f1 <file>` (key 名のみ) に置換。
+# ⚠ `grep -n <KEY>` は match 行全体 (= 値込み) を出すので NG (gh #15 訂正)。
 #
 # bypass: HRMTZ_ACK_CRED_READ=1 env を Bash invocation の前に立てる
 #         (= 月 1-2 回想定の正当 archeology 用、 1 回 limit、 意識的に書く必要)
@@ -78,7 +79,7 @@ fi
 # Block + alternative action
 # ----------------------------------------
 echo "Read of $REASON refused: $FILE_PATH" >&2
-echo "Use 'grep -n <KEY> $FILE_PATH' via Bash to locate specific lines without dumping values to chat log." >&2
+echo "To check a key WITHOUT leaking its value: 'grep -c <KEY> $FILE_PATH' (count only) or 'cut -d= -f1 $FILE_PATH' (key names). For real use, 'sops exec-env <file> <cmd>'. NEVER 'grep -n <KEY>' — grep prints the whole matching line, which leaks the value (gh #15)." >&2
 echo "For Edit: Bash grep first → know line numbers → Edit with surrounding context (no Read needed)." >&2
 echo "Archeology bypass: set HRMTZ_ACK_CRED_READ=1 env (= 1 回 limit、 incident risk 自覚)." >&2
 echo "Past leak: docs/runbooks/CREDENTIAL_ROTATION.md (TBD) for emergency rotation." >&2

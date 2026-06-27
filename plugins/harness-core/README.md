@@ -1,6 +1,6 @@
 # harness-core
 
-Three Claude Code hooks that ship together as one defense-in-depth layer against credential leaks and workflow lapses.
+A defense-in-depth set of Claude Code hooks against credential leaks and workflow lapses. The full wired set is in `hooks/hooks.json` (authoritative — currently 17 hooks); this README documents the original core trio in detail, but the plugin has grown well beyond it (credential scrubbers, branch-policy / rotation-propagation / 真田 auto-backup guards, session-context rails, etc.).
 
 ## Hooks
 
