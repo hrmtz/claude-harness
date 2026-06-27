@@ -71,6 +71,20 @@ expect_allow 'set -e' '#10 set -e is not an env dump'
 expect_allow 'set -o pipefail' '#10 set -o pipefail is not an env dump'
 expect_allow 'HRMTZ_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#10 ack-prefixed intentional read bypasses'
 
+# --- #36: bare relative .env + non-enumerated readers (cross-family hole) ---
+expect_block 'cat .env' '#36 bare relative cat .env'
+expect_block 'grep KEY .env' '#36 bare relative grep KEY .env'
+expect_block 'python3 -c '\''open(".env").read()'\''' '#36 non-enumerated reader (python open)'
+expect_block 'node -e "require('\''fs'\'').readFileSync('\''.env'\'')"' '#36 non-enumerated reader (node)'
+expect_block 'cat .env.local' '#36 relative .env.<suffix>'
+expect_block 'less ./.env.prod' '#36 dot-slash relative .env.prod'
+expect_block 'cat credentials.json' '#36 bare relative credentials.<ext>'
+expect_allow 'cat environment.md' '#36 environment.md is not .env (no false positive)'
+expect_allow 'source ./venv/bin/activate' '#36 venv path substring env is not .env'
+expect_allow 'echo "loading credentials"' '#36 prose credentials (no ext) is not a file operand'
+expect_allow 'cat .environment' '#36 .environment dotfile is not .env'
+expect_allow 'HRMTZ_ACK_CRED_READ=1 cat .env' '#36 ack-prefixed intentional read bypasses'
+
 # --- existing guards still fire (no regression) ---
 expect_block 'sops -d secrets.enc.yaml | head' 'existing: sops -d'
 expect_block 'env | grep KEY' 'existing: env | grep'

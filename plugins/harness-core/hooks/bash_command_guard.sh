@@ -60,6 +60,16 @@ declare -a PATTERNS_REASONS=(
     # 旧 comment 「grep -n KEY .env で line 番号のみ」 は誤、 grep default は match line 全文表示で value 焼く
     # → grep/egrep/fgrep/rg/awk/sed の credential file 直接 read も block、 ack-bypass 経路一本化
     '(^|[^a-zA-Z_/])(grep|egrep|fgrep|rg|awk|sed)[[:space:]]+[^|]*?(/\.env([[:space:]]|$|\.(common|prod|production|local|dev|staging|hetzner|laddie|chichibu|zetithnas|talisker|mars|farm)([[:space:]]|$))|rclone\.conf|/\.netrc|/\.aws/credentials|\.cloudflared/[^[:space:]]+\.json|\.pem([[:space:]]|$)|\.key([[:space:]]|$)|\.p12([[:space:]]|$)):::sops exec-env <file> '"'"'env | grep -c <KEY>'"'"' で件数のみ確認、 key 名 list は cut -d= -f1、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
+    # 2026-06-27 issue #36 (cross-family red-team, all Claude lenses missed):
+    # 上記 cat/grep 統合 pattern は slash-prefixed path (/.env) と enumerated reader
+    # (cat/head/grep/awk/...) 限定。 → `cat .env` / `grep KEY .env` (bare relative)、
+    # `python3 -c 'open(".env").read()'` / node / ruby 等 non-enumerated reader が
+    # すり抜け。 reader 非依存・basename ベースで credential file operand (.env / .env.*
+    # / credentials.<ext>) を捕捉する補完層。 leading/trailing は path 境界 (空白・引用符
+    # ・/・( ・= ・shell metachar) に固定し、 `printenv` / `exec-env` / `environment.md`
+    # / `.environment` / `echo "loading credentials"` 等 substring 'env'/'credentials'
+    # の誤爆を回避 (literal '.env' = dot 必須、 credentials は拡張子必須)。
+    '(^|[[:space:]/"(=;|&'\''])(\.env(\.[A-Za-z0-9_-]+)*|credentials\.[A-Za-z0-9_-]+)([[:space:]/")><;|&'\'']|$):::reader 問わず credential file (.env / .env.* / credentials.<ext>) 直接読みは sops exec-env <file> で env 経由、 key 名のみは env | cut -d= -f1、 値必要時は HRMTZ_ACK_CRED_READ=1 で意識的 bypass'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"].*[[:space:]]*(curl|wget|http|axios)[[:space:]]:::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
 
     # === B 系 (#B1-B15) ===
