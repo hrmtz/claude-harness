@@ -65,11 +65,11 @@ for entry in "${PATTERNS[@]}"; do
 
     # Check if output contains this pattern
     if echo "$OUTPUT" | grep -qE "$pattern"; then
-        # Get matched value (without printing it to log)
-        matched=$(echo "$OUTPUT" | grep -oE "$pattern" | head -1)
-
-        # Allow-list check: skip if matched value is a placeholder
-        if echo "$matched" | grep -qE "$ALLOWLIST_REGEX"; then
+        # Allow-list check (gh #13 fix): skip ONLY if EVERY match is a placeholder.
+        # The old `head -1` check let a single placeholder poison the whole pattern,
+        # so a REAL secret co-occurring with a placeholder escaped scrubbing. Now we
+        # skip only when there is no non-placeholder (real) match.
+        if ! echo "$OUTPUT" | grep -oE "$pattern" | grep -qvE "$ALLOWLIST_REGEX"; then
             continue
         fi
 
@@ -97,8 +97,8 @@ done
 # ----------------------------------------
 # env 形式: KEY=value
 if echo "$OUTPUT" | grep -qE "${KEYWORD_PATTERN}=${VALUE_PATTERN}"; then
-    if ! echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}=${VALUE_PATTERN}" | grep -qE "$ALLOWLIST_REGEX"; then
-        sed -i -E "s|(${KEYWORD_PATTERN})=(${VALUE_PATTERN})|\1=<REDACTED>|g" "$JSONL"
+    if echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}=${VALUE_PATTERN}" | grep -qvE "$ALLOWLIST_REGEX"; then
+        sed -i -E "s#(${KEYWORD_PATTERN})=(${VALUE_PATTERN})#\1=<REDACTED>#g" "$JSONL"
         LEAK_DETECTED=1
         LEAK_SUMMARY="${LEAK_SUMMARY}\n  - pattern matched: keyword=value (env format)"
         hook_log "credential_value_scrub" "scrubbed keyword=value patterns in $JSONL"
@@ -107,8 +107,8 @@ fi
 
 # YAML 形式: KEY: "value" または KEY: 'value'
 if echo "$OUTPUT" | grep -qE "${KEYWORD_PATTERN}: [\"']${VALUE_PATTERN}"; then
-    if ! echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}: [\"']${VALUE_PATTERN}" | grep -qE "$ALLOWLIST_REGEX"; then
-        sed -i -E "s|(${KEYWORD_PATTERN}: [\"'])(${VALUE_PATTERN})|\1<REDACTED>|g" "$JSONL"
+    if echo "$OUTPUT" | grep -oE "${KEYWORD_PATTERN}: [\"']${VALUE_PATTERN}" | grep -qvE "$ALLOWLIST_REGEX"; then
+        sed -i -E "s#(${KEYWORD_PATTERN}: [\"'])(${VALUE_PATTERN})#\1<REDACTED>#g" "$JSONL"
         LEAK_DETECTED=1
         LEAK_SUMMARY="${LEAK_SUMMARY}\n  - pattern matched: keyword: \"value\" (YAML format)"
         hook_log "credential_value_scrub" "scrubbed keyword: \"value\" patterns in $JSONL"
