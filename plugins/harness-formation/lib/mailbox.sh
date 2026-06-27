@@ -25,7 +25,7 @@ mailbox_send() {
   mailbox_init
   if declare -f is_credential_like >/dev/null && is_credential_like "$body"; then
     echo "mailbox: refusing to send — body matches credential pattern." >&2
-    echo "mailbox: reference a SOPS-encrypted file instead (e.g. 'sops -d path/secrets.enc.yaml')." >&2
+    echo "mailbox: reference a SOPS-encrypted file instead (e.g. 'sops exec-env path/secrets.enc.yaml <cmd>')." >&2
     return 3
   fi
   local ts seq line

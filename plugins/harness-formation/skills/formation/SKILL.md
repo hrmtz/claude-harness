@@ -205,7 +205,7 @@ a leaked key lives there forever and shows up in every `tail`.
 - Credentials live in SOPS-encrypted files (`*.enc.yaml`, `*.enc.env`).
 - Agents reference them by path and command, not by value:
   - ✗ `formation msg worker-1 "use key sk-abc123..."`
-  - ✓ `formation msg worker-1 "decrypt with: sops -d config/secrets.enc.yaml | jq -r .openai"`
+  - ✓ `formation msg worker-1 "decrypt with: sops exec-env config/secrets.enc.yaml '<cmd using \$openai>'"`
 - `formation msg`, `formation report/done/ask` (mailbox), and `formation
   spawn` (briefing file content) all run the same credential pattern check
   and **hard-refuse with exit 3** on match. Patterns covered: `sk-*`,

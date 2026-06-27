@@ -19,7 +19,7 @@
 - Key files: {{paths}}
 - External resources: {{URLs, API endpoints}}
 - Credentials (SOPS-only, never inline):
-  - {{name}} → `sops -d {{path/to/secrets.enc.yaml}} | jq -r .{{key}}`
+  - {{name}} → `sops exec-env {{path/to/secrets.enc.yaml}} '<cmd that uses $\{{key}}>'` (always inject into the subprocess env via exec-env; never decrypt to stdout, never print the value)
   - Never paste the decrypted value into a mailbox message or pane prompt.
 
 ## Expected output
