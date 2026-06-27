@@ -7,10 +7,13 @@
 #
 # Policy (deliberately conservative — a leak-DETECTION false-positive must never
 # take down production OR be remotely inducible into rotating canonical mars):
-#   - NON-PROD PG role  → eligible, but HUMAN-GATED (gh #33/#41): rotate only with an
-#     explicit per-role ack (marker file / AUTOROTATE_ACK_ROLE). Without ack →
-#     escalate with a runbook command. This is because a leak DETECTION can be forced
-#     by attacker-controlled tool output, so detection alone must not --execute.
+#   - NON-PROD PG role  → SOURCE-TRUST gated (gh #41): auto-rotate ONLY when the leak
+#     came from a POSITIVELY-identified trusted local credential op (single no-chain
+#     command whose leading verb is sops exec-env / pg_dump(all) / the rotation
+#     script). Everything else needs a per-role human-ack marker; commands matching
+#     the untrusted denylist (external fetch / mailbox / transcript) escalate with a
+#     clearer message. AUTO is allowlist-based (hard to forge), NOT "not-denylisted"
+#     — so an evasive external fetch lands in ambiguous→ack, never auto (codex #41).
 #   - PROD PG role / bare prs / API key → never auto-rotate (rolling redeploy /
 #     provider-side action). Escalate HARD so a human does it with the Phase 2 runbook.
 #
@@ -35,6 +38,7 @@ _log() { echo "[$(date +%F_%T)] [autorotate] $*" >> "$LOG_DIR/hooks.log" 2>/dev/
 LEAK_ROLE="${LEAK_ROLE:-}"
 LEAK_CLASS="${LEAK_CLASS:-unknown}"
 LEAK_SESSION_ID="${LEAK_SESSION_ID:-unknown}"
+LEAK_TRUST="${LEAK_TRUST:-ambiguous}"   # trusted | untrusted | ambiguous (classified by credential_value_scrub.sh from the producing command; AUTO requires "trusted")
 DRYRUN="${AUTOROTATE_DRYRUN:-0}"   # 1 = decide + log only, no real rotation (for tests)
 
 # Project-specific rotation backend (PRS-LLM / mars). Absent on other projects → PG
@@ -96,35 +100,51 @@ case "$NON_PROD_ROLES" in
         exit 0 ;;
 esac
 
-# ── HUMAN GATE (gh #33/#41) ──────────────────────────────────────────────────
-# Non-prod eligibility is NECESSARY but NOT SUFFICIENT. A leak DETECTION can be
-# induced by attacker-controlled tool output (poisoned file / WebFetch / MCP /
-# mailbox body), so even a non-prod role must NOT auto --execute a real rotation
-# against canonical mars without an explicit human ack. This closes the remotely-
-# inducible self-DoS observed during the #27 audit.
-#   ack = a marker file a human creates (PREFERRED — atomic, one-shot, audited):
-#         touch "$ROT_MARK_DIR/../rotate_approved/<role>"
-#   or   = AUTOROTATE_ACK_ROLE=<role> in the invocation env (escape hatch; NOT
-#          one-shot — only set it for a single deliberate invocation, never export
-#          it broadly, or repeated detections could rotate repeatedly).
-# Without ack: escalate with a ready-to-run runbook command, mark dedup, exit 0.
-ACK_DIR="$STATE_DIR/rotate_approved"
-ACK_FILE="$ACK_DIR/$LEAK_ROLE"
-acked=0
-# Atomic one-shot claim of a file ack: mv succeeds for exactly one racer, so two
-# concurrent autorotate processes can never both consume the same approval.
-if [ -f "$ACK_FILE" ] && mv "$ACK_FILE" "$ACK_FILE.consumed.$$" 2>/dev/null; then
-    acked=1; rm -f "$ACK_FILE.consumed.$$" 2>/dev/null
-elif [ "${AUTOROTATE_ACK_ROLE:-}" = "$LEAK_ROLE" ]; then
-    acked=1
-fi
-if [ "$acked" != "1" ]; then
-    escalate "non-prod role \`$LEAK_ROLE\` leaked — HUMAN GATE held (gh #33/#41 self-DoS guard). Auto-rotation requires explicit approval. To approve: \`mkdir -p $ACK_DIR && touch $ACK_FILE\` then re-invoke, or run the runbook directly: \`$ROT_SCRIPT --roles $LEAK_ROLE --execute\`."
-    # NOTE: deliberately do NOT set the dedup $MARK here — otherwise the very
-    # re-invoke the human is told to do would short-circuit on the dedup check.
+# ── SOURCE-TRUST GATE (gh #41 refine — supersedes the blanket human-ack) ──────
+# The self-DoS root cause is NOT "auto" — it is a leak DETECTION induced from an
+# ATTACKER-CONTROLLABLE source (external fetch / peer mailbox / transcript /
+# arbitrary read output). So gate on SOURCE TRUST, not a blanket ack (which killed
+# the autonomous fast incident-response the operator wants to keep):
+#   • untrusted source -> NEVER auto-rotate; escalate.            (advisory denylist)
+#   • trusted source   -> auto-rotate. autonomous, no ack. (ALLOWLIST: a single,
+#                         no-chain/no-subshell command whose bare leading verb is
+#                         pg_dump/pg_dumpall, or `sops exec-env` wrapping one.)
+#   • ambiguous source -> human-ack marker fallback (everything not positively trusted).
+# LEAK_TRUST is classified upstream by credential_value_scrub.sh -> classify_leak_trust().
+# LOAD-BEARING (codex #41): AUTO is allowlist-based, so an evasive external fetch
+# (python/node/openssl/base64/git, or a wrapper/process-sub) is NOT trusted and lands
+# in ambiguous -> ack, never auto. Full-safe (blanket human-gate) was rejected by the
+# operator because it kills autonomous rotation; this preserves it only for the narrow
+# provably-safe case.
+if [ "$LEAK_TRUST" = "untrusted" ]; then
+    escalate "non-prod role \`$LEAK_ROLE\` leaked from an UNTRUSTED source (external fetch / mailbox / transcript) — auto-rotation REFUSED to prevent attacker-induced self-DoS (gh #41). Rotate manually via runbook only if the leak is real: \`$ROT_SCRIPT --roles $LEAK_ROLE --execute\`."
+    touch "$MARK" 2>/dev/null
     exit 0
 fi
-_log "human ack consumed for $LEAK_ROLE — proceeding to gated rotation"
+if [ "$LEAK_TRUST" != "trusted" ]; then
+    # AMBIGUOUS (not positively trusted, not untrusted): human-ack fallback ONLY.
+    # Corroboration-by-local-file was REMOVED after cross-family review (codex REJECT,
+    # gh #41): the leaked DSN's host is canonical mars, whose @host:port/db tail is
+    # ubiquitous in local config, so corroboration granted near-automatic trust and —
+    # combined with the necessarily-incomplete untrusted denylist — bridged evasive
+    # external fetches (python/openssl/git/ssh/base64) into auto-rotation. AUTO now
+    # requires a POSITIVELY-identified trusted-op (see scrub classifier); nothing
+    # else auto-rotates without an explicit human ack.
+    ACK_DIR="$STATE_DIR/rotate_approved"; ACK_FILE="$ACK_DIR/$LEAK_ROLE"; acked=0
+    # atomic one-shot claim of a file ack (mv wins for exactly one racer)
+    if [ -f "$ACK_FILE" ] && mv "$ACK_FILE" "$ACK_FILE.consumed.$$" 2>/dev/null; then
+        acked=1; rm -f "$ACK_FILE.consumed.$$" 2>/dev/null
+    elif [ "${AUTOROTATE_ACK_ROLE:-}" = "$LEAK_ROLE" ]; then
+        acked=1
+    fi
+    if [ "$acked" != "1" ]; then
+        escalate "non-prod role \`$LEAK_ROLE\` leaked from a source that is not a positively-trusted local credential op — human ack required: \`mkdir -p $ACK_DIR && touch $ACK_FILE\` then re-invoke, or runbook \`$ROT_SCRIPT --roles $LEAK_ROLE --execute\`."
+        # do NOT set dedup $MARK — the re-invoke after ack must not short-circuit
+        exit 0
+    fi
+    _log "ambiguous source, human ack consumed for $LEAK_ROLE → proceeding"
+fi
+_log "source-trust gate passed (trust=$LEAK_TRUST) for $LEAK_ROLE — proceeding to rotation"
 
 # ── gated rotation (non-prod, zero-outage, human-approved) ───────────────────
 _log "auto-rotating non-prod role: $LEAK_ROLE (session=$LEAK_SESSION_ID, dryrun=$DRYRUN)"

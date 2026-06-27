@@ -130,23 +130,26 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
             setsid bash "$FOLLOWUP" </dev/null >/dev/null 2>&1 &
     fi
 
-    # Step 4 (rotate) — GATED (gh #33/#41). A DSN-shaped string in ANY tool output
-    # (a poisoned file, a WebFetch/MCP response, a peer mailbox body the agent merely
-    # read and echoed) must NOT autonomously rotate canonical mars roles: that is a
-    # remotely-inducible self-DoS, and it was observed firing during the #27 audit on
-    # report text alone. Rotation is therefore HUMAN-GATED. The incident issue filed
-    # in step 2 is the signal for a human to rotate via the runbook; the auto-trigger
-    # is opt-in only (AUTOROTATE_ENABLE=1) AND autorotate_leaked_cred.sh itself now
-    # requires a per-role human ack before it will --execute. Default = no rotation.
-    if [ "${AUTOROTATE_ENABLE:-0}" = "1" ]; then
-        AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
-        if [ -f "$AUTOROTATE" ]; then
-            for r in $(printf '%s' "$LEAK_PG_ROLES" | tr ' ' '\n' | sort -u); do
-                [ -z "$r" ] && continue
-                LEAK_ROLE="$r" LEAK_CLASS="pg_dsn" LEAK_SESSION_ID="$SESSION_ID" \
-                    setsid bash "$AUTOROTATE" </dev/null >/dev/null 2>&1 &
-            done
-        fi
+    # Step 4 (rotate) — SOURCE-TRUST gated (gh #41 refine, supersedes the blanket
+    # human-ack which killed autonomous response). The self-DoS root is not "auto"
+    # but the TRIGGER SOURCE: a DSN-shaped string in attacker-controllable output
+    # (curl/WebFetch/MCP response, peer mailbox body, transcript) must never auto-
+    # rotate canonical mars. We classify the PRODUCING COMMAND's trust here and pass
+    # it to autorotate, which hard-blocks untrusted sources, auto-rotates trusted
+    # ones, and falls back to a human-ack only for ambiguous sources.
+    # Source-trust classification (gh #41, shared lib fn). AUTO requires a
+    # positively-identified trusted-op (allowlist); untrusted/ambiguous never auto
+    # without a human ack — so a denylist-evading external fetch cannot reach auto.
+    CMD_TEXT=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    LEAK_TRUST=$(classify_leak_trust "$CMD_TEXT")
+    AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
+    if [ -f "$AUTOROTATE" ]; then
+        for r in $(printf '%s' "$LEAK_PG_ROLES" | tr ' ' '\n' | sort -u); do
+            [ -z "$r" ] && continue
+            LEAK_ROLE="$r" LEAK_CLASS="pg_dsn" LEAK_SESSION_ID="$SESSION_ID" \
+            LEAK_TRUST="$LEAK_TRUST" \
+                setsid bash "$AUTOROTATE" </dev/null >/dev/null 2>&1 &
+        done
     fi
 
     # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
@@ -154,6 +157,6 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     LAST_ISSUE=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
     ISSUE_REF=""
     [ -n "$LAST_ISSUE" ] && ISSUE_REF=" (tracked in claude-harness#${LAST_ISSUE})"
-    MSG="⚠️  credential leak detected: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. Transcript is safe to continue. NOTE (gh #33/#41): credential ROTATION is now human-gated — it does NOT happen automatically. If the leak was real, rotate via the runbook linked in the incident issue."
+    MSG="⚠️  credential leak detected: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. Transcript is safe to continue. NOTE (gh #41): rotation is SOURCE-TRUST gated — a trusted-source leak auto-rotates, an untrusted-source one (external fetch / mailbox / transcript) is REFUSED, an ambiguous one awaits a human ack. See the incident issue for status."
     emit_context "PostToolUse" "$MSG"
 fi
