@@ -63,7 +63,8 @@ def main():
     files = [f for p in PLUGINS for ext in ("sh", "py") for f in glob.glob(f"{PLUG}/{p}/hooks/*.{ext}")]
     for f in files:
         dst = f"{LIVE_HOOKS}/{os.path.basename(f)}"
-        if os.path.abspath(f) == os.path.abspath(dst): continue
+        # skip if src and dst are the same file (hardlink/symlink/identical path)
+        if os.path.exists(dst) and os.path.samefile(f, dst): continue
         if not DRY: shutil.copy2(f, dst)
     print(f"{'would copy' if DRY else 'copied'} {len(files)} hook files -> {LIVE_HOOKS}")
 
