@@ -106,6 +106,12 @@ fi
 
 echo "$((CNT + 1)) $NOW" > "$CNT_FILE" 2>/dev/null
 
+# issue #24: telemetry — record each malformed-call stall to back out the inducing
+# conditions (long preceding prose was the suspected trigger). txt_len is a context-length
+# proxy. Best-effort / fail-open: never affects the block decision.
+{ printf '%s pure-stall txt_len=%s retry=%s sid=%s\n' "$NOW" "${#TXT}" "$((CNT + 1))" "$SID" \
+    >> "$STATE_DIR/telemetry.log"; } 2>/dev/null || true
+
 # Block the stop and tell the model what went wrong.
 jq -n '{
   decision: "block",
