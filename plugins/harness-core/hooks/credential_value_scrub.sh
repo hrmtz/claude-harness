@@ -37,6 +37,13 @@ PATTERNS=(
     'redis://[^:/@[:space:]]+:[^@[:space:]]+@|redis://<REDACTED>:<REDACTED>@'
     'amqp://[^:/@[:space:]]+:[^@[:space:]]+@|amqp://<REDACTED>:<REDACTED>@'
     'libsql://[^:/@[:space:]]+:[^@[:space:]]+@|libsql://<REDACTED>:<REDACTED>@'
+    # issue #14: JWT (header.payload.signature, two base64url 'eyJ' segments + sig).
+    # Structure is unmistakable so FP risk is near-zero; catches the Supabase
+    # sb-...-auth-token access/refresh JWT that the cut -f JSON-cookie leak exposed.
+    # NO '|' alternation in the regex (split + sed delimiter are both '|').
+    'eyJ[A-Za-z0-9_=-]{10,}\.eyJ[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,}|<REDACTED_JWT>'
+    # issue #14: Supabase auth-token cookie name (narrow, project-ref scoped).
+    'sb-[a-z0-9]{8,}-auth-token|sb-<REDACTED>-auth-token'
 )
 
 # Part 2: キーワードベース catch-all
