@@ -38,6 +38,17 @@ if echo "$CMD" | grep -qE '^[[:space:]]*(git[[:space:]]|gh[[:space:]]|cd[[:space
   exit 0
 fi
 
+# (#5) Quote-strip + shell-sink, for the bulk-parallel-loop trigger below. That pattern is
+# only dangerous if a shell actually EXECUTES the loop. When the for...do...& text lives
+# ONLY inside quotes (echo/printf/python -c prose, doc strings) and there is no shell
+# interpreter sink, it is inert data — don't gate it. `echo '...loop...' | bash` keeps
+# gating because the sink is present.
+CMD_UNQUOTED=$(printf '%s' "$CMD" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")
+HAS_SHELL_SINK=0
+if echo "$CMD" | grep -qE '\|[[:space:]]*(bash|zsh|dash|ksh|sh)([[:space:]]|$)|(^|[^a-zA-Z_/])(bash|zsh|dash|ksh|sh)[[:space:]]+-c|(^|[^a-zA-Z_])eval[[:space:]]'; then
+  HAS_SHELL_SINK=1
+fi
+
 # --- detect trigger patterns ---
 trigger=""
 why=""
@@ -75,8 +86,11 @@ fi
 # Match either:
 #  - for X in 0 1 2 3 ... do ... &
 #  - for X in $(seq ...) do ... &
-if echo "$CMD" | grep -qE 'for[[:space:]]+[a-zA-Z_]+[[:space:]]+in[[:space:]]+(0[[:space:]]+1[[:space:]]+2[[:space:]]+3|.*\$\(seq)' && \
-   echo "$CMD" | grep -qE 'do.*&'; then
+if { echo "$CMD_UNQUOTED" | grep -qE 'for[[:space:]]+[a-zA-Z_]+[[:space:]]+in[[:space:]]+(0[[:space:]]+1[[:space:]]+2[[:space:]]+3|.*\$\(seq)' && \
+     echo "$CMD_UNQUOTED" | grep -qE 'do.*&'; } || \
+   { [ "$HAS_SHELL_SINK" -eq 1 ] && \
+     echo "$CMD" | grep -qE 'for[[:space:]]+[a-zA-Z_]+[[:space:]]+in[[:space:]]+(0[[:space:]]+1[[:space:]]+2[[:space:]]+3|.*\$\(seq)' && \
+     echo "$CMD" | grep -qE 'do.*&'; }; then
   trigger="bulk-parallel-loop"
   why="for-loop with N≥4 & jobs amplifies any single-unit bug N times. Run loop with N=1 first to verify the single-unit happy path."
   shuzo="N=1 で happy path 確認 → それから N 倍。1 unit のバグが N 倍に増殖する前に潰せ、いける！"
