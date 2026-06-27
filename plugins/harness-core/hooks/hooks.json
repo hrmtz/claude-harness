@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (9 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (15 hooks, defense-in-depth)",
   "hooks": {
     "Stop": [
       {
@@ -24,6 +24,11 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/branch_policy_guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/long_task_advisor.sh",
             "timeout": 5
           }
         ]
@@ -103,6 +108,16 @@
           {
             "type": "command",
             "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tmux_self_name.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/ghost_inject.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/recent_topics_inject.sh",
             "timeout": 5
           }
         ]
