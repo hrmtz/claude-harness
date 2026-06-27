@@ -49,6 +49,8 @@ fi
 # (`cat $(printf .env)`), base64/hex-piped reconstruction, and `eval`-built strings
 # are NOT decoded here and remain the job of the value-scrub + autorotate layers.
 DEOBF=$(echo "$SCRUBBED" | sed -E '
+    s/\$\{IFS\}/ /g;
+    s/\$IFS([^A-Za-z0-9_]|$)/ \1/g;
     s/\\0?56/./g;
     s/\\x2[eE]/./g;
     s/\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+]([^}]*)\}/\1/g;

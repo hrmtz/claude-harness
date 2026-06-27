@@ -67,12 +67,24 @@ esac
 [ "$BLOCK" -eq 0 ] && exit 0
 
 # ----------------------------------------
-# ack bypass (= 意識的 1 回 limit)
+# ack bypass — genuinely ONE-TIME + EXPIRING (gh #19). The old `$HRMTZ_ACK_CRED_READ`
+# env check was EXPORTABLE: `export HRMTZ_ACK_CRED_READ=1` once → the bypass persisted
+# for ALL subsequent reads (neither one-time nor expiring). A Read tool call has no
+# command-prefix, so we use a CONSUMABLE marker file instead: create it to authorize
+# the NEXT credential-file read within 120s; the guard consumes it (one read) and
+# ignores a stale one.
+#   touch ~/.claude/state/cred_read_ack   # then do the one Read
 # ----------------------------------------
-if [ "${HRMTZ_ACK_CRED_READ:-}" = "1" ]; then
-  # log but allow
-  echo "[credential_file_read_guard] BYPASS via HRMTZ_ACK_CRED_READ=1: $FILE_PATH" >> "$LOG_DIR/credential_file_read_guard.log"
-  exit 0
+ACK_FILE="$STATE_DIR/cred_read_ack"
+# Atomic one-shot claim: `mv` succeeds for exactly ONE racer, so two concurrent reads
+# can never both consume the same marker (codex #19 race).
+if [ -f "$ACK_FILE" ] && mv "$ACK_FILE" "$ACK_FILE.used.$$" 2>/dev/null; then
+  ack_age=$(( $(date +%s) - $(stat -c %Y "$ACK_FILE.used.$$" 2>/dev/null || echo 0) ))
+  rm -f "$ACK_FILE.used.$$" 2>/dev/null
+  if [ "$ack_age" -le 120 ]; then
+    echo "[credential_file_read_guard] BYPASS via cred_read_ack (consumed, age ${ack_age}s): $FILE_PATH" >> "$LOG_DIR/credential_file_read_guard.log"
+    exit 0
+  fi
 fi
 
 # ----------------------------------------
@@ -81,6 +93,6 @@ fi
 echo "Read of $REASON refused: $FILE_PATH" >&2
 echo "To check a key WITHOUT leaking its value: 'grep -c <KEY> $FILE_PATH' (count only) or 'cut -d= -f1 $FILE_PATH' (key names). For real use, 'sops exec-env <file> <cmd>'. NEVER 'grep -n <KEY>' — grep prints the whole matching line, which leaks the value (gh #15)." >&2
 echo "For Edit: Bash grep first → know line numbers → Edit with surrounding context (no Read needed)." >&2
-echo "Archeology bypass: set HRMTZ_ACK_CRED_READ=1 env (= 1 回 limit、 incident risk 自覚)." >&2
+echo "Archeology bypass (ONE read, 120s expiry, incident risk 自覚): touch ~/.claude/state/cred_read_ack  then re-Read." >&2
 echo "Past leak: docs/runbooks/CREDENTIAL_ROTATION.md (TBD) for emergency rotation." >&2
 exit 2
