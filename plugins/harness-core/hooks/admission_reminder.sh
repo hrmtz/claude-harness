@@ -27,8 +27,7 @@ PROMPT_LOWER=$(parse_prompt | tr '[:upper:]' '[:lower:]')
 # All prose stays generation-context-safe (no "blocked", "violation",
 # "denied", emoji warnings, ALL-CAPS, or memory-file references).
 declare -A REMINDERS=(
-    ['(リーク|leak|流出|クレデンシャル.*漏|credential.*leak|password.*expos|api.*key.*出)']='Sanitize active jsonl + rotate the credential.
-ls -t ~/.claude/projects/*/[a-z0-9-]*.jsonl | head -1 → sed -i '"'"'s/<value>/<REDACTED>/g'"'"'.
+    ['(リーク|leak|流出|クレデンシャル.*漏|credential.*leak|password.*expos|api.*key.*出)']='値が漏れていれば scrubber が自動 sanitize 済。残対応は rotate 検討のみ（手動 sed 不要）。
 早期発見できた、立て直せる。'
 
     ['(沈黙|silent|broadcast.*忘|連絡.*ない.*\d+h)']='Mailbox tail + 4-item broadcast (進捗 / 想定外 / 依存 / handoff).
