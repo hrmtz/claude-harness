@@ -50,15 +50,20 @@ Invariants:
   I4: Any uncaught exception in scan / redact → fail-safe + hook_log; exit 0.
   I5: Output is ALWAYS scanned — never fail-open by hard-skipping on size (#39).
       The candidate-run prefilter + a bounded global HMAC budget (MAX_SCAN_WINDOWS)
-      keep cost finite. Delimited (sub-cap) runs are scanned first and fully; rare
-      giant delimiter-free blobs are scanned within remaining budget, else best-effort
-      head+tail. If the budget is exhausted the scan is reported INCOMPLETE and the
-      caller warns honestly (it NEVER claims auto-handling when nothing was redacted).
+      + a wall-clock soft-deadline (MAX_SCAN_SECONDS) keep cost finite. Delimited
+      (sub-cap) runs are scanned first (best-effort: this ORDERING means ordinary
+      creds are reached before giant blobs, but it is NOT a guarantee — if pass 1
+      itself exhausts the budget/deadline, later sub-cap runs are skipped too);
+      rare giant delimiter-free blobs are scanned within the remaining budget, else
+      best-effort head+tail. Whenever full coverage is not achieved the scan is
+      reported INCOMPLETE (scan_complete=False) and the caller warns honestly — it
+      NEVER claims auto-handling for regions that were not checked, and an incomplete
+      scan that DID redact still appends a manual-review caveat.
   I6: All emit_context output is GENERIC (no key names, no precise lengths).
 """
 
 from __future__ import annotations
-import os, sys, json, re, datetime, hmac as _hmac, hashlib, traceback, subprocess, shutil
+import os, sys, json, re, datetime, time, hmac as _hmac, hashlib, traceback, subprocess, shutil
 from pathlib import Path
 from typing import Any
 
@@ -82,17 +87,27 @@ MAX_SCAN_BYTES = 256_000
 # secret is 4096 bytes. Runs at/under this length are treated as ordinary "delimited"
 # windows and scanned FULLY first (pass 1). Runs longer than this are giant blobs
 # scanned in pass 2: fully if the remaining global budget covers them, otherwise
-# best-effort head+tail windows of this size (overlap = MAX_CANDIDATE_RUN, ≥ the
-# longest known secret, so a secret straddling either edge is still caught) with the
-# scan flagged INCOMPLETE. This replaces the old hard-skip-the-whole-run behavior
-# (#39), which fail-OPENED exactly on the blobs most likely to carry a leak.
+# best-effort head+tail windows of this size. The tail window start is backed off by
+# (longest known secret − 1) bytes so a max-length secret whose last byte lands at the
+# very start of the tail region — and therefore begins BEFORE run_len−MAX_CANDIDATE_RUN
+# — is still hashed (boundary-straddle fix). A pass-2 partial scan is flagged
+# INCOMPLETE. This replaces the old hard-skip-the-whole-run behavior (#39), which
+# fail-OPENED exactly on the blobs most likely to carry a leak.
 MAX_CANDIDATE_RUN = 4096
 # Global HMAC budget for one main() invocation. At ~0.6M stdlib HMACs/s this bounds
 # worst-case scan walltime to a few seconds so the hook never hits its timeout →
-# SIGKILL → silent fail-open. Sub-cap (delimited) runs are scanned before any giant
-# blob, so a lone API key in a large payload is always covered even if the budget is
-# later exhausted by a base64 column. Tunable; see PR open questions.
+# SIGKILL → silent fail-open. Sub-cap (delimited) runs are scanned BEFORE any giant
+# blob, so an ordinary API key is *reached first*. This ordering is best-effort, NOT a
+# guarantee: if the budget (or the wall-clock deadline) is exhausted while still in
+# pass 1, later sub-cap runs are left unscanned and scan_complete becomes False — the
+# caller then warns honestly instead of implying full coverage. Tunable.
 MAX_SCAN_WINDOWS = 2_000_000
+# Wall-clock soft-deadline (seconds) for one scan_output call. Independent of the
+# window budget: MAX_SCAN_WINDOWS bounds COUNT, this bounds TIME so a slow box /
+# blake3 import / GC pause can't push the scan past the hook timeout → SIGKILL →
+# silent fail-open. When the deadline trips mid-scan the scan stops and reports
+# scan_complete=False (best-effort coverage), never unbounded work.
+MAX_SCAN_SECONDS = 8.0
 MAX_MANIFEST_ENTRIES = 500        # cap loaded entries
 MAX_MANIFEST_FILES = 64           # cap manifest file count
 SUPPORTED_FORMAT_VERSION = 1
@@ -293,13 +308,20 @@ def scan_output(output_bytes: bytes,
     if not by_length or not output_bytes:
         return [], True
     lengths = sorted(by_length.keys())
+    max_len = lengths[-1]         # longest known secret (always <= MAX_CANDIDATE_RUN)
     budget = [MAX_SCAN_WINDOWS]   # boxed so the nested scanner can mutate it
+    deadline = time.monotonic() + MAX_SCAN_SECONDS
     complete = True
 
     def scan_span(run: bytes, start: int, stop: int) -> bool:
         """Slide every known length over run, hashing windows whose START index is
-        in [start, stop). Returns False if the global window budget ran out (so the
-        caller can flag the scan incomplete). Unchanged per-window HMAC match logic."""
+        in [start, stop). Returns False if the global window budget OR the wall-clock
+        soft-deadline ran out (so the caller can flag the scan incomplete). The
+        per-window HMAC match logic is unchanged; budget/deadline accounting is charged
+        for EVERY window iteration (before the duplicate-hit short-circuit) so a run of
+        repeated already-matched windows can't bypass both bounds and run unbounded —
+        slicing + the `in hits` lookup are themselves the cost in that pathological case
+        (codex re-review MED: dedup `continue` previously skipped budget+deadline)."""
         rl = len(run)
         for L in lengths:
             if L > rl:
@@ -308,24 +330,30 @@ def scan_output(output_bytes: bytes,
             last = min(stop, rl - L + 1)
             i = start if start > 0 else 0
             while i < last:
+                if budget[0] <= 0:
+                    return False
+                budget[0] -= 1
+                # Wall-clock guard: sample time every 8192 iterations (amortizes the
+                # monotonic() call) so a slow runtime can't push past the hook timeout.
+                if budget[0] % 8192 == 0 and time.monotonic() > deadline:
+                    return False
                 window = run[i:i+L]
                 i += 1
                 if window in hits:
                     continue
-                if budget[0] <= 0:
-                    return False
-                budget[0] -= 1
                 h = compute_hmac(window, salt, algorithm)
                 keys = hash_lookup.get(h)
                 if keys:
                     hits[window] = list(keys)
         return True
 
-    # Pass 1 — fully scan all sub-cap (delimited) runs first. These are the cheap,
+    # Pass 1 — scan all sub-cap (delimited) runs first. These are the cheap,
     # high-signal windows where ordinary credentials live (quoted/comma-delimited
-    # tokens in JSON, logs, env dumps). Doing them before any giant blob guarantees
-    # a lone API key in a 256KB+ payload is always scanned even if the budget is
-    # later exhausted by a base64 column elsewhere in the same output.
+    # tokens in JSON, logs, env dumps). Scanning them BEFORE any giant blob means an
+    # ordinary API key is *reached first*; this is best-effort ordering, NOT a
+    # guarantee — if pass 1 itself exhausts the budget or trips the deadline, the
+    # remaining sub-cap runs are skipped and complete becomes False (signalled to the
+    # caller via scan_complete).
     oversized: list[bytes] = []
     for m in CANDIDATE_RUN.finditer(output_bytes):
         run = m.group()
@@ -350,7 +378,16 @@ def scan_output(output_bytes: bytes,
         else:
             complete = False
             head_stop = MAX_CANDIDATE_RUN
-            tail_start = head_stop if head_stop > run_len - MAX_CANDIDATE_RUN else run_len - MAX_CANDIDATE_RUN
+            # Back the tail window START off by (max_len - 1) bytes: a max-length
+            # secret whose LAST byte lands at the first byte of the tail region begins
+            # at (run_len - MAX_CANDIDATE_RUN) - (max_len - 1), i.e. BEFORE
+            # run_len - MAX_CANDIDATE_RUN. Starting the tail slide there ensures any
+            # secret with at least one byte in the last MAX_CANDIDATE_RUN bytes is
+            # hashed (boundary-straddle fix). Clamp to head_stop so a barely-oversized
+            # run does not re-scan / underflow.
+            tail_start = run_len - MAX_CANDIDATE_RUN - (max_len - 1)
+            if tail_start < head_stop:
+                tail_start = head_stop
             scan_span(run, 0, head_stop)
             scan_span(run, tail_start, run_len)
 
@@ -504,10 +541,16 @@ def spawn_leak_followup(key_names: list[str], replaced: int, transcript: str, se
         hook_log("leak_followup_spawn_failed; transcript already sanitized")
 
 
-def resume_context(replaced: int) -> str:
-    """Step 3: terse 'keep working' context. The leak is already sanitized +
-    queued for incident logging, so Claude should resume rather than stop for
-    manual cleanup."""
+def resume_context(replaced: int, scan_complete: bool = True) -> str:
+    """Step 3: terse 'keep working' context. The matched leak is already sanitized +
+    queued for incident logging.
+
+    When scan_complete is True the whole output was checked, so Claude can resume with
+    no manual steps. When scan_complete is False the redaction is real but coverage was
+    PARTIAL (oversized output, budget/deadline exhausted) — the message must NOT imply
+    the output was fully auto-handled, so it drops the "no manual steps needed" wording
+    and asks for manual review (MED finding: an incomplete-but-redacted scan previously
+    routed through the all-clear wording, contradicting the manual-review caveat)."""
     ref = ""
     try:
         last = (STATE_DIR / "last_issue").read_text().strip()
@@ -515,10 +558,19 @@ def resume_context(replaced: int) -> str:
             ref = f" (tracked in claude-harness#{last})"
     except OSError:
         pass
-    return (
+    base = (
         f"⚠️  credential leak auto-handled: transcript sanitized ({replaced} replacement(s)) "
         f"+ incident logged to the claude-harness `credential-leak` issue{ref}. "
-        "No manual steps needed — continue your current task. "
+    )
+    if scan_complete:
+        return base + (
+            "No manual steps needed — continue your current task. "
+            "Rotation for the affected credential is tracked in that issue."
+        )
+    return base + (
+        "NOTE: the output was very large and the scan was INCOMPLETE — the matched "
+        "credential(s) were redacted, but some regions were NOT checked. Manual review "
+        "IS needed: inspect the tool output for other secrets before continuing. "
         "Rotation for the affected credential is tracked in that issue."
     )
 
@@ -642,18 +694,12 @@ def main() -> int:
     key_names = sorted({k for _, names in hits for k in names})
     spawn_leak_followup(key_names, replaced, str(transcript_path),
                         session_id_from_raw(raw_input))
-    # Step 3: resume context — keep working, the leak is already neutralized + logged.
-    # Auto-handling is only claimed for what was actually redacted; if the scan was
-    # incomplete (oversized output, budget exhausted) append an honest caveat so we
-    # never imply the WHOLE output was cleared (#39).
-    msg = resume_context(replaced)
-    if not scan_complete:
-        msg += (
-            " NOTE: the output was very large and the scan was INCOMPLETE — the "
-            "redacted matches were handled, but some regions were not checked; "
-            "review manually if other secrets may be present."
-        )
-    emit_generic_context(msg)
+    # Step 3: resume context — keep working, the matched leak is already neutralized +
+    # logged. Auto-handling ("no manual steps needed") is claimed ONLY when the scan was
+    # complete; an incomplete scan that still redacted gets the manual-review wording
+    # baked into resume_context itself, so the all-clear phrasing never contradicts the
+    # caveat (#39 MED).
+    emit_generic_context(resume_context(replaced, scan_complete))
     return 0
 
 

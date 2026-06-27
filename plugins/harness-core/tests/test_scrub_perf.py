@@ -113,6 +113,78 @@ if complete is False:
 else:
     bad("T7 budget-exhausted scan claimed complete — silent fail-open risk")
 
+# T8 (HIGH boundary fix): a MAX-length secret straddling the head/tail split of an
+# oversized delimiter-free blob must still be found. We force the pass-2 head+tail
+# path (budget < full-run windows but >= head+tail) and place a 4096B secret so its
+# last byte lands just INSIDE the tail region, i.e. its start is BEFORE
+# run_len - MAX_CANDIDATE_RUN. The old tail_start = run_len - MAX_CANDIDATE_RUN never
+# hashed that window; the backed-off tail_start does.
+ML = cs.MAX_CANDIDATE_RUN                    # 4096 = longest allowed secret
+boundary_secret = b"K" * ML                  # exactly max length, single in-class run
+by_bnd = manifest_for(boundary_secret, "BND_KEY")
+run_len = 300_000
+start = run_len - ML - (ML - 1) + 10         # start just AFTER backed-off tail_start
+assert 0 < start < run_len - ML
+blob = b"a" * start + boundary_secret + b"a" * (run_len - start - ML)
+assert len(blob) == run_len
+saved_w = cs.MAX_SCAN_WINDOWS
+cs.MAX_SCAN_WINDOWS = 100_000               # < full-run windows, >> head+tail (~8192)
+hits, complete = cs.scan_output(blob, by_bnd, SALT, ALGO)
+cs.MAX_SCAN_WINDOWS = saved_w
+if any(w == boundary_secret for w, _ in hits):
+    ok("T8 max-length secret straddling tail boundary FOUND (boundary fix)")
+else:
+    bad("T8 boundary secret MISSED — tail_start not backed off (HIGH regression)")
+if complete is False:
+    ok("T8b pass-2 best-effort scan reports INCOMPLETE")
+else:
+    bad("T8b pass-2 head+tail scan claimed complete")
+
+# T9 (wall-clock soft-deadline): a past deadline must stop the scan and report
+# INCOMPLETE rather than running the full budget. Independent of MAX_SCAN_WINDOWS.
+saved_s = cs.MAX_SCAN_SECONDS
+cs.MAX_SCAN_SECONDS = -1.0                   # already expired -> trip on first sample
+t0 = time.perf_counter()
+hits, complete = cs.scan_output(b"q" * 200_000, by_length, SALT, ALGO)
+dt = time.perf_counter() - t0
+cs.MAX_SCAN_SECONDS = saved_s
+if complete is False and dt < 1.0:
+    ok(f"T9 wall-clock deadline trips scan INCOMPLETE fast ({dt*1000:.0f}ms)")
+else:
+    bad(f"T9 deadline guard ineffective (complete={complete}, {dt:.2f}s)")
+
+# T10 (incomplete-messaging honesty, MED): a redacted-but-incomplete scan must NOT use
+# the all-clear "No manual steps needed" wording; a complete scan must.
+msg_complete = cs.resume_context(2, scan_complete=True)
+msg_partial = cs.resume_context(2, scan_complete=False)
+if "No manual steps needed" in msg_complete:
+    ok("T10a complete scan keeps all-clear wording")
+else:
+    bad("T10a complete-scan wording regressed")
+if "No manual steps needed" not in msg_partial and "INCOMPLETE" in msg_partial \
+        and "Manual review" in msg_partial:
+    ok("T10b incomplete-but-redacted scan drops all-clear, asks for manual review")
+else:
+    bad("T10b incomplete scan still implies fully auto-handled (MED regression)")
+
+# T11 (codex re-review MED: dedup bypass): a large run of REPEATED already-matched
+# windows must NOT bypass the budget/deadline. With an expired wall-clock deadline the
+# scan must report INCOMPLETE (the duplicate-hit `continue` no longer skips accounting)
+# and return promptly instead of slicing the whole run unbounded.
+rep_secret = b"RepEatEdSecret01"            # 16 chars, in CANDIDATE_RUN alphabet
+by_rep = manifest_for(rep_secret, "REP_KEY")
+repeated = rep_secret * 130_000             # ~2MB of back-to-back identical matches
+saved_s = cs.MAX_SCAN_SECONDS
+cs.MAX_SCAN_SECONDS = -1.0                   # already expired
+t0 = time.perf_counter()
+hits, complete = cs.scan_output(repeated, by_rep, SALT, ALGO)
+dt = time.perf_counter() - t0
+cs.MAX_SCAN_SECONDS = saved_s
+if complete is False and dt < 1.0:
+    ok(f"T11 repeated-match run honors deadline -> INCOMPLETE, no unbounded loop ({dt*1000:.0f}ms)")
+else:
+    bad(f"T11 dedup bypass: deadline ignored (complete={complete}, {dt:.2f}s)")
+
 print()
 print(f"RESULT: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
