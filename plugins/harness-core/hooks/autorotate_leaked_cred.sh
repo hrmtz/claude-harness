@@ -43,7 +43,14 @@ DRYRUN="${AUTOROTATE_DRYRUN:-0}"   # 1 = decide + log only, no real rotation (fo
 
 # Project-specific rotation backend (PRS-LLM / mars). Absent on other projects → PG
 # rotation simply unavailable here (escalate instead).
-ROT_SCRIPT="$HOME/projects/PRS-LLM-dev/scripts/_rotate_mars_pg_roles.sh"
+# gh #45: repointed from the DEPRECATED _rotate_mars_pg_roles.sh (2026-06-08 prod
+# auth/RAG outage: incomplete distribution — no container env_file, skipped
+# pg_premium :5435, mars-only verify) to the hardened v2 (env_file distribute +
+# force-recreate, pg:5434 + pg_premium:5435 ALTER, per-origin /health/ready
+# fail-closed verify). Arg contract verified compatible: autorotate passes only
+# `--roles <role> --execute` for NON-prod roles (prod -> escalate), so v2's
+# ROTATE_PROD_I_UNDERSTAND gate is never hit; --no-laddie defaults off (full distro).
+ROT_SCRIPT="$HOME/projects/PRS-LLM-dev/scripts/_rotate_pg_roles_v2.sh"
 
 NON_PROD_ROLES=" prs_owner prs_migration prs_ingest prs_bench prs_zombie_canceler "
 PROD_ROLES=" prs_prod_pro prs_prod_chat prs_prod_search prs_auth prs "
