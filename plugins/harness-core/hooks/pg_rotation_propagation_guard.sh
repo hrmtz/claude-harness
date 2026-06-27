@@ -51,9 +51,15 @@ ROT_SCRIPTS='_rotate_mars_pg_roles\.sh|autorotate_leaked_cred\.sh'
 # Leading command token of the WHOLE command (after env/VAR= prefixes) = the program
 # actually executed. No operator splitting -> a trigger inside a quoted argument can
 # never become the leading token.
-body=$(printf '%s' "$S" | sed -E 's/^[[:space:]]*(env[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
-t1=$(printf '%s' "$body" | awk '{print $1}'); t1="${t1##*/}"
-t2=$(printf '%s' "$body" | awk '{print $2}'); t2="${t2##*/}"
+# FIRST LINE only (v4.1 fix): on a multi-line command, awk '{print $1}' would return
+# the first token of EVERY line, so a later line like `OLD=..._rotate_..sh` (a var
+# assignment, not an execution) falsely matched. The leading command is the first
+# token of the first line; later lines are separate commands and are under-detected
+# by design (advisory reminder; over-fire blocking real work is the worse failure).
+first=$(printf '%s' "$S" | sed -n '1p')
+body=$(printf '%s' "$first" | sed -E 's/^[[:space:]]*(env[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
+t1=$(printf '%s' "$body" | awk 'NR==1{print $1}'); t1="${t1##*/}"
+t2=$(printf '%s' "$body" | awk 'NR==1{print $2}'); t2="${t2##*/}"
 
 FIRE=0
 # (A) the rotation script is the executed program (leading token, or bash/sh <script>)

@@ -26,6 +26,9 @@ ALLOW = [
     # chained rotations: under-detected by design (advisory reminder) -> ALLOW
     f"cd /tmp && {RS} --execute",
     f"ls; bash {RS} --execute",
+    # multi-line command with the script only as a var-assignment/arg on a later line
+    f"cd /repo\nV2=scripts/{RS}\nOLD=scripts/{RS}\ngrep -n roles \"$OLD\" \"$V2\"",
+    f"echo start\nbash {RS} --execute",   # rotation on line 2 -> under-detected -> ALLOW
     # ack + dry-run
     f"PG_ROTATION_PROPAGATION_ACK=1 bash {RS} --execute",
     f"bash {RS} --dry-run",
