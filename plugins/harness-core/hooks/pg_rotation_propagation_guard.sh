@@ -8,18 +8,23 @@
 # (mafutsu.com) PRODUCTION OUTAGE. "rotate" and "propagate to all consumers" must
 # be ONE atomic operation. Enforce structurally (this hook), not behaviorally.
 #
-# v2 (over-firing refinement): v1 matched on the rotation token appearing ANYWHERE
-# in the command text, so a READ-ONLY command (grep/cat/sed -n the script, or even
-# discussing it in a commit/issue body) tripped the deny -- the #26/#35 over-firing
-# failure class. v2 fires ONLY on EXECUTION INTENT:
-#   - the rotation script invoked in COMMAND position (start / after a separator /
-#     via bash|sh|source), not as an argument to a reader; OR
-#   - a password-change SQL actually submitted via psql.
-# Read/search/pager verbs (grep/cat/sed/less/...) and message-body args
-# (-m/--body/--title) are excluded so inspecting or talking about rotation is fine.
+# v3 (over-firing refinement, #26/#35 class): only EXECUTION intent fires, decided
+# PER COMMAND SEGMENT. Earlier versions scanned the whole command string, so a
+# read (grep/cat/sed the script) — or even a chained command that merely *mentions*
+# the script as an argument — tripped the deny. v3 splits the command on control
+# operators (; && || | newline) and, for each segment, fires ONLY when:
+#   - the segment's LEADING token (after env/VAR= prefixes, and after a bash|sh|
+#     source|. runner) IS the rotation script itself (basename match), i.e. the
+#     script is being RUN, not passed as an argument to grep/cat/etc; OR
+#   - the segment runs psql AND contains an ALTER ROLE/USER ... PASSWORD.
+# Reading, searching, paging, or discussing rotation never fires.
 #
 # Gate: deny (with a high-visibility propagation reminder) unless prefixed
 # PG_ROTATION_PROPAGATION_ACK=1. ack + re-run proceeds -- does not kill legit rotation.
+#
+# RESIDUAL (honest): not a shell parser. `bash -c "<script> ..."` (script inside a
+# -c string) and `cat <script> | bash` (piping content to an interpreter) are not
+# decoded and may slip; they are covered by the value-scrub / human review layers.
 
 source "$(dirname "$0")/lib.sh"
 
@@ -36,48 +41,36 @@ fi
 # read-only / informational invocations never rotate
 echo "$CMD" | grep -qE -- '(--dry-run|--help|(^|[[:space:]])-h([[:space:]]|$))' && exit 0
 
-# Strip message/body argument values so DISCUSSING rotation (git commit -m "...",
-# gh issue --body '...', --title) never trips the guard (over-fire lineage #26/#36).
-S="$CMD"
-if command -v perl >/dev/null 2>&1; then
-    S=$(perl -0777 -pe '
-        s/(--?(?:m|message|b|body|title))\s+"(?:[^"\\]|\\.)*"/${1} _MSG_/g;
-        s/(--?(?:m|message|b|body|title))\s+'\''(?:[^'\''\\]|\\.)*'\''/${1} _MSG_/g;
-    ' <<< "$CMD")
-else
-    S=$(echo "$CMD" | sed -E 's/(-{1,2}(m|message|b|body|title))[[:space:]]+"[^"]*"/\1 _MSG_/g; s/(-{1,2}(m|message|b|body|title))[[:space:]]+'\''[^'\'']*'\''/\1 _MSG_/g')
-fi
-
-# Leading verb (after `env` and VAR=val prefixes). If the command is a SIMPLE
-# (no chain operator) read/search/pager/VCS/metadata command, it is INSPECTING,
-# not executing a rotation -> allow. The no-chain guard is essential: `cd x &&
-# _rotate...sh` leads with `cd` but DOES execute, so it must fall through to the
-# execution-position check below rather than being skipped here.
-HAS_CHAIN=0
-echo "$S" | grep -qE '(\|\||&&|[;|&])' && HAS_CHAIN=1
-if [ "$HAS_CHAIN" -eq 0 ]; then
-    LEAD=$(echo "$S" | sed -E 's/^[[:space:]]*(env[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//' | awk '{print $1}')
-    case "$LEAD" in
-        grep|egrep|fgrep|rg|ag|cat|bat|head|tail|less|more|sed|awk|gawk|ls|find|stat|file|wc|cut|tr|sort|uniq|column|jq|yq|echo|printf|test|'['|man|which|type|vim|view|nano|emacs|diff|colordiff|git|gh|cd|pwd|tree|du|nl|tac|od|xxd|hexdump|strings)
-            exit 0 ;;
-    esac
-fi
+ROT_SCRIPTS='_rotate_mars_pg_roles.sh|autorotate_leaked_cred.sh'
 
 FIRE=0
-# (A) rotation SCRIPT in execution position: command start, or after a control
-# operator / shell runner (bash|sh|zsh|source|.|exec|eval) / opening quote, with
-# optional env-assignment and path prefixes. Excludes the script appearing as a
-# reader's argument (e.g. `grep _rotate_..._roles.sh` — grep is filtered above and
-# there is no separator/runner before the name).
-if echo "$S" | grep -qE '(^|[;&|(`"'\'']|&&|\|\|)[[:space:]]*((env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+)[[:space:]]+)*((bash|sh|zsh|source|exec|eval|\.)[[:space:]]+)?((env|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+)[[:space:]]+)*(\./|[^[:space:];&|`"'\'']*/)?(_rotate_mars_pg_roles|autorotate_leaked_cred)\.sh'; then
-    FIRE=1
-fi
-# (B) password-change SQL actually executed via psql (psql present AND ALTER ROLE/
-# USER ... PASSWORD in the same command). `grep "ALTER ROLE..."` is excluded by the
-# leading-verb filter; `echo`/commit-body are excluded above.
-if echo "$S" | grep -qiE '\bpsql\b' && echo "$S" | grep -qiE 'ALTER[[:space:]]+(ROLE|USER)[[:space:]]+[^;]*[[:space:]]+PASSWORD'; then
-    FIRE=1
-fi
+# split on control operators into one segment per line, then judge each segment by
+# its LEADING token (execution position) only.
+SEGMENTS=$(printf '%s' "$CMD" | sed -E 's/(\|\||&&)/\n/g; s/[;|&]/\n/g')
+while IFS= read -r seg; do
+    [ -z "${seg//[[:space:]]/}" ] && continue
+    # strip leading `env` and VAR=val assignments
+    body=$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*(env[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//')
+    tok1=$(printf '%s' "$body" | awk '{print $1}')
+    tok1base="${tok1##*/}"               # basename (handles ./x and path/x)
+    # (A) leading token IS the rotation script -> executing it
+    if printf '%s' "$tok1base" | grep -qE "^($ROT_SCRIPTS)$"; then FIRE=1; break; fi
+    # (A2) leading token is an interpreter/runner and the NEXT token is the script
+    case "$tok1base" in
+        bash|sh|zsh|dash|ksh|source|.|exec|eval)
+            tok2=$(printf '%s' "$body" | awk '{print $2}')
+            tok2base="${tok2##*/}"
+            if printf '%s' "$tok2base" | grep -qE "^($ROT_SCRIPTS)$"; then FIRE=1; break; fi
+            ;;
+    esac
+    # (B) password-change SQL actually executed via psql in this segment
+    if printf '%s' "$seg" | grep -qiE '\bpsql\b' \
+       && printf '%s' "$seg" | grep -qiE 'ALTER[[:space:]]+(ROLE|USER)[[:space:]]+[^;]*[[:space:]]+PASSWORD'; then
+        FIRE=1; break
+    fi
+done <<EOF
+$SEGMENTS
+EOF
 
 if [ "$FIRE" -eq 1 ]; then
     hook_log "pg_rotation_propagation_guard" "rotation EXECUTION gated pending propagation ack"
