@@ -49,7 +49,7 @@ a DEBUG trap in the same file — still pure bash.
 | 1st (preventive) | `guard-env.sh` via `BASH_ENV` | runs guards before every `bash -c`, catches absolute-path invocations |
 | fallback | `guarded-bash-dir/bash` PATH shim | catches PATH-resolved `bash` (kept for defense in depth) |
 | shared core | `guard-check.sh` | hook runner used by both layers: insurance → gates → hints |
-| 2nd (detective) | wire.jsonl watcher — [#53](https://github.com/hrmtz/claude-harness/issues/53), planned | post-hoc detection if the 1st wall is dropped |
+| 2nd (detective) | `kimi_wire_watcher.py` — [#53](https://github.com/hrmtz/claude-harness/issues/53) | post-hoc cron watcher; re-runs the gate over executed commands, alerts on gaps |
 | long term | native hooks request to MoonshotAI — [#54](https://github.com/hrmtz/claude-harness/issues/54) | feature parity without any of this |
 
 Which guards run is selected by `plugins/cross_cli_hooks.json` (`kimi`
@@ -79,7 +79,23 @@ The file is *sourced into the guarded shell*, so it must be side-effect-free:
 bash plugins/harness-kimi/install-kimi-bash-guard.sh   # installs to ~/.kimi-code/bin/guarded-bash-dir/
 bash plugins/harness-kimi/install-kimi-wrapper.sh      # kimi wrapper (PATH before real kimi)
 HARNESS_KIMI_BASH_GUARD=1 kimi                          # guard active
+bash plugins/harness-kimi/install-kimi-watcher.sh      # detective 2nd wall (cron, every minute)
 ```
+
+### Detective 2nd wall (`kimi_wire_watcher.py`, #53)
+
+A per-minute cron re-runs `bash_command_guard` over every executed Bash command
+in each wire.jsonl. A command that the gate would deny but whose result lacks the
+guard's block marker means the 1st wall did not fire — a **gap** — and the
+watcher alerts via `discord-bot post claude-harness` (falling back to
+`~/.kimi-code/harness-guard/watcher.log` if discord-bot is absent). It is
+reactive (a race window exists), a detective net behind the preventive guard.
+
+- **First run establishes a baseline**: pre-install history is recorded as
+  settled without alerting, so installing on a machine with existing sessions
+  does not flood the channel. Only gaps appearing *after* install alert, once.
+- Kill switch: `touch ~/.kimi-code/harness-watch.disabled`.
+- Uninstall: `bash plugins/harness-kimi/uninstall-kimi-watcher.sh`.
 
 Check sync state (overlay vs SSOT vs installed copies):
 
