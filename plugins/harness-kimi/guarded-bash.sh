@@ -71,6 +71,19 @@ if [[ -z "$CMD" ]]; then
     exec "$REAL_BASH" "$@"
 fi
 
+# If BASH_ENV points at our guard-env.sh, the real bash we're about to exec will
+# source it and run guard-check itself — so checking here too would guard the
+# same command twice (double sanada backup, double deny message: code-review
+# residual). Defer to the BASH_ENV layer and just exec. The shim only guards on
+# its own when BASH_ENV is NOT covering (its documented fallback role).
+case "${BASH_ENV:-}" in
+    */guard-env.sh)
+        if [[ -f "$BASH_ENV" && "${HARNESS_KIMI_GUARD_ACTIVE:-0}" != "1" ]]; then
+            exec "$REAL_BASH" "$@"
+        fi
+        ;;
+esac
+
 # Delegate hook execution to the shared guard core (also used by guard-env.sh).
 GUARD_CHECK="${HARNESS_KIMI_GUARD_CHECK:-$HOME/.kimi-code/bin/guarded-bash-dir/guard-check.sh}"
 if [[ -f "$GUARD_CHECK" ]]; then
