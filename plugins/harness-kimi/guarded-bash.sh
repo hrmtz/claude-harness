@@ -71,20 +71,14 @@ if [[ -z "$CMD" ]]; then
     exec "$REAL_BASH" "$@"
 fi
 
-# If BASH_ENV points at our guard-env.sh, the real bash we're about to exec will
-# source it and run guard-check itself — so checking here too would guard the
-# same command twice (double sanada backup, double deny message: code-review
-# residual). Defer to the BASH_ENV layer and just exec. The shim only guards on
-# its own when BASH_ENV is NOT covering (its documented fallback role).
-case "${BASH_ENV:-}" in
-    */guard-env.sh)
-        if [[ -f "$BASH_ENV" && "${HARNESS_KIMI_GUARD_ACTIVE:-0}" != "1" ]]; then
-            exec "$REAL_BASH" "$@"
-        fi
-        ;;
-esac
-
-# Delegate hook execution to the shared guard core (also used by guard-env.sh).
+# ALWAYS guard inline — never defer to BASH_ENV as evidence the downstream will
+# guard (security review). Precisely the invocations that skip BASH_ENV sourcing
+# (`bash --posix -c`, `bash -i -c`) are the ones the shim must catch; deferring
+# on "BASH_ENV is set" let those through unguarded. The shim parses the command
+# from argv itself, so it guards regardless of flags. Cost: on a PATH-resolved
+# `bash -c` where BASH_ENV *does* fire, guard-check runs twice — idempotent and
+# cheap, and it does not happen on Kimi's absolute-path /bin/bash calls (those
+# never reach the shim).
 GUARD_CHECK="${HARNESS_KIMI_GUARD_CHECK:-$HOME/.kimi-code/bin/guarded-bash-dir/guard-check.sh}"
 if [[ -f "$GUARD_CHECK" ]]; then
     HARNESS_KIMI_GUARD_CMD="$CMD" "$REAL_BASH" "$GUARD_CHECK"

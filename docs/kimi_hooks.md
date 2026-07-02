@@ -99,6 +99,26 @@ own hooks (the model could bypass those too). The guard defends against the
 agent's *mistakes*, not an adversarial agent. Detection of a dropped wall is
 the 2nd-wall watcher's job (#53).
 
+### Known bypasses of the BASH_ENV primary layer (verified)
+
+bash only sources `BASH_ENV` for **non-interactive, non-POSIX** shell startup.
+These invocations therefore skip it and are NOT caught by the BASH_ENV layer:
+
+- `bash --posix -c '…'` — POSIX mode consults `$ENV` for *interactive* shells
+  only; a non-interactive `--posix` shell sources nothing (setting `ENV` does
+  not help — verified).
+- `bash -i -c '…'` — interactive startup sources `.bashrc`, not `BASH_ENV`.
+- `sh -c '…'` — not bash; never sources `BASH_ENV`.
+
+The **PATH-shim layer does catch `--posix`/`-i` for PATH-resolved `bash`**
+because it parses the command from argv itself and always guards inline
+(it does not defer based on `BASH_ENV` being set — a deferral there was a
+v0.10.1 regression closed in v0.10.2 after security review). But an
+**absolute-path** `/bin/bash --posix -c '…'` (or `-i`, or `sh`) bypasses both
+layers. There is no env-var mitigation for this; closing it requires either a
+native Kimi hook (#54) or the post-hoc wire.jsonl watcher as a detective
+control (#53). Documented rather than silently assumed-covered.
+
 ## Verification record (2026-07-02)
 
 - Local simulation 8/8 PASS: absolute-path interception, decrypt-pipe deny
