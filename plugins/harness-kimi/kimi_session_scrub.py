@@ -31,6 +31,14 @@ from typing import Any
 KIMI_SESSIONS = Path.home() / ".kimi-code" / "sessions"
 KILL_SWITCH = Path.home() / ".kimi-code" / "harness-scrub.disabled"
 
+# wire.jsonl is append-only and may be actively written by a live Kimi session.
+# Rewriting it (read-all + os.replace) under an open writer drops concurrently
+# appended records and can strand the writer on the unlinked inode, corrupting
+# the transcript (code-review #52). Only touch files that have been idle at
+# least this long, and re-check mtime just before redacting; a still-active
+# file is left for a later run.
+QUIESCENCE_SECONDS = float(os.environ.get("HARNESS_KIMI_SCRUB_QUIESCENCE", "120"))
+
 # Reuse claude-harness credential_scrub module.
 CORE_HOOKS = Path.home() / "projects" / "claude-harness" / "plugins" / "harness-core" / "hooks"
 sys.path.insert(0, str(CORE_HOOKS))
@@ -58,50 +66,65 @@ def _collect_strings(node: Any, out: list[str]) -> None:
             _collect_strings(v, out)
 
 
-def _extract_record_corpus(record: dict[str, Any]) -> str:
-    """Extract only the credential-bearing text from a wire.jsonl record.
+# Record types that never carry user/tool credential text and are either large
+# (static system prompt) or pure metrics/schema — skipped wholesale to bound the
+# HMAC budget. Everything NOT in this set is scanned by collecting all string
+# leaves, so the scrubber is robust to Kimi wire.jsonl schema drift (the earlier
+# version dispatched on record types — tool_call/tool_response/user/assistant —
+# that do not exist in real wire.jsonl, so it scanned nothing: code-review #52).
+_SKIP_RECORD_TYPES = frozenset({
+    "config.update",            # systemPrompt: large + static
+    "usage.record",            # token metrics
+    "tools.update_store",       # tool schema definitions
+    "tools.set_active_tools",   # tool name lists
+    "metadata",                 # session metadata
+    "permission.set_mode",
+    "permission.record_approval_result",
+})
 
-    We deliberately skip the large `config.update.systemPrompt` record and any
-    other fields that are unlikely to carry credentials but are expensive to
-    hash (large code/docs pasted into context are still scanned via message
-    content, which is the only place user-provided blobs typically appear).
+# Within context.append_loop_event, these .event.type values are pure timing /
+# control with no credential text.
+_SKIP_EVENT_TYPES = frozenset({
+    "step.begin",
+    "step.end",
+})
+
+
+def _extract_record_corpus(record: dict[str, Any]) -> str:
+    """Extract the credential-bearing text from a wire.jsonl record.
+
+    Denylist approach: skip known-noise record types entirely, otherwise collect
+    every string leaf. Real Kimi record types carry credential text as:
+      - context.append_loop_event / .event  (tool.call args incl. Bash .command,
+        Write .content, Edit .old/new_string; tool.result .output; content.part
+        .text/.think)
+      - context.append_message / .message   (assistant content + toolCalls)
+      - turn.prompt / .input                 (user prompt)
+    Collecting all string leaves from these keeps us correct even if the nested
+    shapes change again.
     """
     rec_type = record.get("type")
-    parts: list[str] = []
-
-    if rec_type == "config.update":
-        # System prompt is large and static; skip it entirely.
+    if rec_type in _SKIP_RECORD_TYPES:
         return ""
 
-    if rec_type == "tool_call":
-        tool_input = record.get("tool_input") or {}
-        if isinstance(tool_input, dict):
-            # Bash command strings are the main leak vector.
-            cmd = tool_input.get("command")
-            if isinstance(cmd, str):
-                parts.append(cmd)
+    parts: list[str] = []
 
-    elif rec_type == "tool_response":
-        tr = record.get("tool_response") or {}
-        if isinstance(tr, dict):
-            for field in ("stdout", "stderr", "output", "content"):
-                val = tr.get(field)
-                if val is not None:
-                    _collect_strings(val, parts)
-
-    elif rec_type in ("user", "assistant"):
-        # User/admission prompts and assistant replies may contain pasted secrets.
-        content = record.get("content") or record.get("message", {}).get("content")
-        if content is not None:
-            _collect_strings(content, parts)
-
-    # Fallback: for any other record type, still scan a few known keys but avoid
-    # dumping the entire record (which would re-include system prompts via metadata).
+    if rec_type == "context.append_loop_event":
+        event = record.get("event")
+        if isinstance(event, dict):
+            if event.get("type") in _SKIP_EVENT_TYPES:
+                return ""
+            _collect_strings(event, parts)
+        else:
+            _collect_strings(event, parts)
     else:
-        for key in ("prompt", "content", "text"):
-            val = record.get(key)
-            if val is not None:
-                _collect_strings(val, parts)
+        # append_message, turn.prompt, and any unknown/new type: scan the whole
+        # record except the type tag. Unknown types are scanned deliberately so
+        # a future schema change cannot silently drop credentials.
+        for key, val in record.items():
+            if key == "type":
+                continue
+            _collect_strings(val, parts)
 
     return "\n".join(parts)
 
@@ -169,6 +192,16 @@ def scrub_file(path: Path) -> tuple[int, bool]:
         return 0, True
 
     if not hits:
+        return 0, scan_complete
+
+    # Race guard: if the file changed between the scan and now, a live session is
+    # writing it — skip this cycle so we never os.replace() over an active writer.
+    # A later run (once the session is idle) will redact it.
+    try:
+        if (time.time() - path.stat().st_mtime) < QUIESCENCE_SECONDS:
+            cs.hook_log(f"kimi_scrub skip active (mtime<{QUIESCENCE_SECONDS:.0f}s) {path}")
+            return 0, scan_complete
+    except OSError:
         return 0, scan_complete
 
     literals = [w for w, _ in hits]

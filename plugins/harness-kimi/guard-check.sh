@@ -31,16 +31,18 @@ PAYLOAD=$(jq -n \
 PLUGINS_DIR="${HARNESS_PLUGINS:-$HOME/projects/claude-harness/plugins}"
 OVERLAY="$PLUGINS_DIR/cross_cli_hooks.json"
 
-# Hook set comes from the cross-CLI overlay (gh #55) so Claude/Codex/Kimi
-# stay in sync. Order matters: insurance first, then gates, then hints.
-# Fallback to a builtin list if the overlay is missing (e.g. repo moved).
-if [[ -f "$OVERLAY" ]]; then
-    mapfile -t INSURANCE_HOOKS < <(jq -r '.kimi.insurance[]' "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
-    mapfile -t GATE_HOOKS      < <(jq -r '.kimi.gates[]'     "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
-    mapfile -t HINT_HOOKS      < <(jq -r '.kimi.hints[]'     "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
-else
-    CORE_HOOKS="${HARNESS_CORE_HOOKS:-$PLUGINS_DIR/harness-core/hooks}"
-    RAILS_HOOKS="${HARNESS_RAILS_HOOKS:-$PLUGINS_DIR/harness-rails/hooks}"
+log_guard() {
+    local msg="$1"
+    local logdir="$HOME/.kimi-code/harness-guard"
+    mkdir -p "$logdir"
+    echo "[$(date +%F_%T)] $msg" >> "$logdir/guarded-bash.log"
+}
+
+# Builtin hook set — the source of truth if the overlay is missing OR
+# unparseable. Order matters: insurance first, then gates, then hints.
+CORE_HOOKS="${HARNESS_CORE_HOOKS:-$PLUGINS_DIR/harness-core/hooks}"
+RAILS_HOOKS="${HARNESS_RAILS_HOOKS:-$PLUGINS_DIR/harness-rails/hooks}"
+builtin_hooks() {
     INSURANCE_HOOKS=(
         "$CORE_HOOKS/sanada_autobackup.sh"
     )
@@ -54,24 +56,51 @@ else
     HINT_HOOKS=(
         "$CORE_HOOKS/long_task_advisor.sh"
     )
-fi
-
-log_guard() {
-    local msg="$1"
-    local logdir="$HOME/.kimi-code/harness-guard"
-    mkdir -p "$logdir"
-    echo "[$(date +%F_%T)] $msg" >> "$logdir/guarded-bash.log"
 }
 
+# Hook set comes from the cross-CLI overlay (gh #55) so Claude/Codex/Kimi stay
+# in sync. A malformed overlay must NOT silently empty the gate list (that would
+# fail open) — parse into a variable, check jq's exit AND that gates is
+# non-empty, and fall back to the builtin list with a loud warning otherwise.
+if [[ -f "$OVERLAY" ]]; then
+    _ins=$(jq -r '.kimi.insurance[]?' "$OVERLAY" 2>/dev/null); _ins_rc=$?
+    _gts=$(jq -r '.kimi.gates[]?'     "$OVERLAY" 2>/dev/null); _gts_rc=$?
+    _hnt=$(jq -r '.kimi.hints[]?'     "$OVERLAY" 2>/dev/null); _hnt_rc=$?
+    if [[ $_ins_rc -ne 0 || $_gts_rc -ne 0 || $_hnt_rc -ne 0 || -z "$_gts" ]]; then
+        echo "⚠️  harness-kimi guard: $OVERLAY unparseable or has no kimi.gates — using builtin hook set." >&2
+        log_guard "overlay parse failed (rc ins=$_ins_rc gts=$_gts_rc hnt=$_hnt_rc, gates_empty=$([[ -z "$_gts" ]] && echo 1 || echo 0)) — builtin fallback"
+        builtin_hooks
+    else
+        mapfile -t INSURANCE_HOOKS < <(printf '%s\n' "$_ins" | sed "/^$/d;s|^|$PLUGINS_DIR/|")
+        mapfile -t GATE_HOOKS      < <(printf '%s\n' "$_gts" | sed "/^$/d;s|^|$PLUGINS_DIR/|")
+        mapfile -t HINT_HOOKS      < <(printf '%s\n' "$_hnt" | sed "/^$/d;s|^|$PLUGINS_DIR/|")
+    fi
+    unset _ins _gts _hnt _ins_rc _gts_rc _hnt_rc
+else
+    builtin_hooks
+fi
+
+# HOOK_STDERR is set by run_hook to the hook's stderr (kept separate so that
+# diagnostic/warning lines never corrupt the JSON on stdout — code-review #52).
+HOOK_STDERR=""
 run_hook() {
     local hook="$1"
     local stdin="$2"
     if [[ ! -x "$hook" && ! -f "$hook" ]]; then
+        HOOK_STDERR=""
         return 0
     fi
+    local errfile rc
+    errfile=$(mktemp)
     # Run hook with guard-active so any bash subprocess spawned by the hook
     # is not re-intercepted (BASH_ENV or PATH shim) and uses the real bash.
-    printf '%s' "$stdin" | HARNESS_KIMI_GUARD_ACTIVE=1 "$REAL_BASH" "$hook" 2>&1
+    # stdout (the permissionDecision JSON) is captured by the caller via $();
+    # stderr goes to errfile so is_deny_json parses clean JSON.
+    printf '%s' "$stdin" | HARNESS_KIMI_GUARD_ACTIVE=1 "$REAL_BASH" "$hook" 2>"$errfile"
+    rc=$?
+    HOOK_STDERR=$(cat "$errfile" 2>/dev/null)
+    rm -f "$errfile"
+    return $rc
 }
 
 is_deny_json() {
@@ -97,7 +126,15 @@ done
 
 # ── gates ──
 for hook in "${GATE_HOOKS[@]}"; do
-    [[ ! -f "$hook" ]] && continue
+    # A configured gate that is MISSING must be loud, not silently skipped —
+    # otherwise a moved repo / absent plugin turns the guard into a no-op that
+    # still logs "allowed" (code-review #52 finding). Warn and continue (rather
+    # than fail-closed) to keep the "rail, not sandbox" contract.
+    if [[ ! -f "$hook" ]]; then
+        echo "⚠️  harness-kimi guard: gate hook missing, NOT enforced: $hook" >&2
+        log_guard "gate MISSING (not enforced): $hook"
+        continue
+    fi
 
     out=$(run_hook "$hook" "$PAYLOAD")
     rc=$?
@@ -112,7 +149,7 @@ for hook in "${GATE_HOOKS[@]}"; do
     if [[ $rc -ne 0 ]]; then
         # Hooks like pipeline_preflight_gate print to stderr and exit 2.
         log_guard "$(basename "$hook"): non-zero exit $rc"
-        echo "$out" >&2
+        [[ -n "$HOOK_STDERR" ]] && echo "$HOOK_STDERR" >&2
         echo "🚫 harness guard ($(basename "$hook")) blocked this command (rc=$rc)." >&2
         exit "$rc"
     fi

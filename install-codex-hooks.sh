@@ -43,55 +43,19 @@ cp "$CODEX_CONFIG" "$BK/config.toml"
 codex features enable plugin_hooks 2>/dev/null || true
 echo "feature: plugin_hooks enabled"
 
-# ---- remove any existing harness or test hook blocks from config.toml -------
-# Strategy: strip all [[hooks.*]] sections and [hooks.state] then re-add clean.
-# Use python3 for reliable TOML section manipulation.
-python3 - "$CODEX_CONFIG" <<'PYEOF'
-import sys, re
+# ---- rebuild config.toml atomically -----------------------------------------
+# Order matters for safety (code-review #52): the OLD code stripped the existing
+# hooks from config.toml on disk and THEN ran a fallible generator under
+# `set -euo pipefail`; a generator failure left the file with ZERO hooks. Here
+# we (1) generate the new block to a temp file first — any failure aborts with
+# config.toml untouched — then (2) strip + concatenate into a temp file and
+# (3) os.replace() over the original in one atomic step.
+BLOCK_TMP="$(mktemp)"
+NEWCONF_TMP="$(mktemp)"
+trap 'rm -f "$BLOCK_TMP" "$NEWCONF_TMP"' EXIT
 
-path = sys.argv[1]
-with open(path) as f:
-    content = f.read()
-
-# Remove harness hook blocks (everything between [[hooks.]] and the next
-# top-level section that is NOT [hooks.*]) plus [hooks.state.*] entries.
-# Split on lines, filter out harness-injected blocks.
-# Stale marker comments from earlier installers (ours and hippocampus's
-# managed block, whose SessionStart hook is now owned by our generated block).
-STRAY = re.compile(
-    r'^\s*#\s*('
-    r'harness(-core)? hooks —|'
-    r'plugins/cross_cli_hooks\.json|'
-    r'Do not edit this block by hand|'
-    r'To trust: open Codex|'
-    r'(BEGIN|END) hippocampus-session-hooks'
-    r')')
-
-lines = content.splitlines(keepends=True)
-out = []
-skip = False
-for line in lines:
-    if STRAY.match(line):
-        continue
-    # Start of a hooks section → begin skip
-    if re.match(r'^\s*\[\[hooks\.', line) or re.match(r'^\s*\[hooks\.', line):
-        skip = True
-        continue
-    # New top-level non-hooks section → end skip
-    if re.match(r'^\s*\[(?!hooks\.)', line) and not re.match(r'^\s*\[\[', line):
-        skip = False
-    if not skip:
-        out.append(line)
-
-# Remove trailing blank lines then write
-result = ''.join(out).rstrip('\n') + '\n'
-with open(path, 'w') as f:
-    f.write(result)
-print(f"cleared old hooks sections from {path}")
-PYEOF
-
-# ---- generate + append fresh harness hooks block from the SSOT --------------
-python3 - "$OVERLAY" "$HARNESS_DIR" >> "$CODEX_CONFIG" <<'PYEOF'
+# (1) generate the fresh hooks block — must succeed before we touch config.toml
+python3 - "$OVERLAY" "$HARNESS_DIR" > "$BLOCK_TMP" <<'PYEOF'
 import json, sys, collections
 
 overlay_path, harness_dir = sys.argv[1], sys.argv[2]
@@ -139,6 +103,55 @@ for (event, matcher), entries in groups.items():
         print('type = "command"')
         print(f'command = "{command}"')
         print(f"timeout = {timeout}")
+PYEOF
+
+# (2) strip existing hooks + (3) append fresh block, then atomic replace
+python3 - "$CODEX_CONFIG" "$BLOCK_TMP" "$NEWCONF_TMP" <<'PYEOF'
+import sys, re, os
+
+config_path, block_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(config_path) as f:
+    content = f.read()
+
+# Stale marker comments from earlier installers (ours and hippocampus's managed
+# block, whose SessionStart hook is now owned by our generated block).
+STRAY = re.compile(
+    r'^\s*#\s*('
+    r'harness(-core)? hooks —|'
+    r'plugins/cross_cli_hooks\.json|'
+    r'Do not edit this block by hand|'
+    r'To trust: open Codex|'
+    r'(BEGIN|END) hippocampus-session-hooks'
+    r')')
+
+# A section header is any line matching ^[ ; it is a hooks section iff it matches
+# ^[[?hooks. . On ANY header we recompute skip = is_hooks_header, so a non-hooks
+# array-of-tables ([[profiles.x]], etc.) correctly ENDS the skip region and is
+# preserved (the old logic only ended skip on single-bracket headers and thus
+# deleted following [[...]] sections: code-review #52).
+is_header = re.compile(r'^\s*\[')
+is_hooks_header = re.compile(r'^\s*\[\[?hooks\.')
+
+lines = content.splitlines(keepends=True)
+out = []
+skip = False
+for line in lines:
+    if STRAY.match(line):
+        continue
+    if is_header.match(line):
+        skip = bool(is_hooks_header.match(line))
+        if skip:
+            continue
+    if not skip:
+        out.append(line)
+
+result = ''.join(out).rstrip('\n')
+with open(block_path) as bf:
+    block = bf.read()
+with open(out_path, 'w') as f:
+    f.write((result + '\n' if result else '') + block.rstrip('\n') + '\n')
+os.replace(out_path, config_path)
+print(f"rebuilt {config_path} (hooks block regenerated atomically)")
 PYEOF
 
 echo "wrote hooks to $CODEX_CONFIG (set: $(jq -r '.codex.hooks | length' "$OVERLAY") + $(jq -r '.codex.external | length' "$OVERLAY") external)"

@@ -27,19 +27,43 @@ set -uo pipefail
 REAL_BASH="${HARNESS_KIMI_REAL_BASH:-/bin/bash}"
 GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Never exec ourselves: if REAL_BASH resolves back to this shim (e.g. a nested
+# guarded launch left HARNESS_KIMI_REAL_BASH pointing at guard_dir/bash), that
+# would be an infinite exec loop (code-review #52 finding). Fall back to the
+# system bash on the default PATH.
+_self="$GUARD_DIR/bash"
+if [[ "$REAL_BASH" == "$_self" || "$REAL_BASH" -ef "$_self" ]] 2>/dev/null; then
+    REAL_BASH="$(command -v -p bash 2>/dev/null || echo /bin/bash)"
+fi
+
 # If not enabled, or already inside a guard execution, pass through.
 if [[ "${HARNESS_KIMI_BASH_GUARD:-0}" != "1" ]]; then
     exec "$REAL_BASH" "$@"
 fi
 
-# Extract a `-c` command from bash arguments using getopts, so combined
-# options like `-lc 'cmd'` are handled the same as `-c 'cmd'`.
+# Extract the `-c` command string. getopts mishandles this: options that
+# precede -c (`bash -o pipefail -c ...`, `bash --norc -c ...`) make it return
+# CMD="" (pass-through, unguarded) or the literal "-c" (code-review #52
+# finding). Parse manually the way bash resolves -c: skip leading options
+# (accounting for -o/+o/--rcfile/--init-file which take an argument), and take
+# the word after `-c` / a combined short cluster ending in `c` (e.g. -lc).
 CMD=""
-while getopts ":c:" opt; do
-    case "$opt" in
-        c) CMD="$OPTARG" ;;
-        *) ;;
+args=("$@")
+n=${#args[@]}
+i=0
+while (( i < n )); do
+    a="${args[$i]}"
+    case "$a" in
+        --) break ;;                       # end of options; rest are operands
+        -o|+o|--rcfile|--init-file)        # option that consumes the next word
+            i=$(( i + 2 )); continue ;;
+        --*) ;;                            # other long option, no operand here
+        -*c)                               # short cluster ending in c → next is cmd
+            CMD="${args[$(( i + 1 ))]:-}"; break ;;
+        -?*) ;;                            # other short cluster, no -c
+        *) break ;;                        # first operand (e.g. `bash script.sh`)
     esac
+    i=$(( i + 1 ))
 done
 
 # No -c command: pass through unchanged.

@@ -16,7 +16,7 @@
 - 既存ファイルへの `> file` 上書き
 - マイグレーション / schema 変更 / 一括置換 (`sed -i`, `find ... -exec sed`)
 
-backup 先: `/tmp/sanada_backup/<task>_<YYYYMMDD_HHMMSS>/`。24h で揮発。復元が必要になった瞬間だけ言え。
+backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent。/tmp は揮発するので使うな)。復元が必要になった瞬間だけ言え。
 
 ## 2. SOPS 2-command 原則
 

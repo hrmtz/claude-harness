@@ -189,15 +189,27 @@ setup_bash_guard() {
         return 0
     fi
     local real_bash guard_dir
-    real_bash="$(command -v bash 2>/dev/null || echo /bin/bash)"
     guard_dir="$HOME/.kimi-code/bin/guarded-bash-dir"
     if [[ ! -x "$guard_dir/bash" ]]; then
         echo "[harness-kimi] warning: HARNESS_KIMI_BASH_GUARD is set but $guard_dir/bash is missing." >&2
         echo "  Run: $HERE/install-kimi-bash-guard.sh" >&2
         return 0
     fi
+    # Resolve the REAL bash, never the shim. In a nested guarded launch PATH
+    # already starts with guard_dir, so `command -v bash` would return the shim
+    # and guarded-bash.sh would exec-loop on itself (code-review #52 finding).
+    # Use `command -v -p` (default system PATH) and reject the shim explicitly.
+    real_bash="$(command -v -p bash 2>/dev/null || echo /bin/bash)"
+    if [[ "$real_bash" == "$guard_dir/bash" || "$real_bash" -ef "$guard_dir/bash" ]] 2>/dev/null; then
+        real_bash="/bin/bash"
+    fi
     export HARNESS_KIMI_REAL_BASH="$real_bash"
-    export PATH="$guard_dir:$PATH"
+    # Idempotent PATH prepend: don't stack guard_dir if a parent launch already
+    # added it (keeps PATH bounded across nested launches).
+    case ":$PATH:" in
+        *":$guard_dir:"*) ;;
+        *) export PATH="$guard_dir:$PATH" ;;
+    esac
 
     if [[ -f "$guard_dir/guard-env.sh" ]]; then
         export BASH_ENV="$guard_dir/guard-env.sh"

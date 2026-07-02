@@ -20,10 +20,17 @@
 if [[ -n "${BASH_EXECUTION_STRING:-}" \
       && "${HARNESS_KIMI_BASH_GUARD:-0}" == "1" \
       && "${HARNESS_KIMI_GUARD_ACTIVE:-0}" != "1" ]]; then
-    export HARNESS_KIMI_GUARD_ACTIVE=1
+    # NOTE: do NOT `export HARNESS_KIMI_GUARD_ACTIVE` into this (the guarded)
+    # shell — it would be inherited by the allowed command and every descendant
+    # process, permanently disabling the guard for the rest of that process
+    # tree (code-review #52 finding). The sentinel is needed ONLY so the
+    # guard-check subprocess (a non-interactive bash that re-sources this file)
+    # skips re-entry, so pass it inline on that one invocation. Each nested
+    # `bash -c` the command spawns is then independently re-guarded, as intended.
     _hk_guard_check="${HARNESS_KIMI_GUARD_CHECK:-$HOME/.kimi-code/bin/guarded-bash-dir/guard-check.sh}"
     if [[ -f "$_hk_guard_check" ]]; then
         if ! HARNESS_KIMI_GUARD_CMD="$BASH_EXECUTION_STRING" \
+             HARNESS_KIMI_GUARD_ACTIVE=1 \
              "${HARNESS_KIMI_REAL_BASH:-/bin/bash}" "$_hk_guard_check"; then
             unset _hk_guard_check
             exit 2
