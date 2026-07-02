@@ -479,3 +479,13 @@ Claude Code のような agent CLI は今後も性能が上がっていくが、
 │   └── publish/                 # 本稿のような shareable artifact
 └── ...
 ```
+
+### Kimi Code CLI への移植
+
+Kimi Code CLI には Claude のような hook API が存在しない。同じ思想を適用するには:
+
+1. **behavioral 層** — プロジェクトルートの `AGENTS.md` に本稿の 1-liner rule を移植する。
+2. **structural guard 層** — Kimi 起動時に `BASH_ENV` を注入する。bash は非対話起動 (絶対パス `/bin/bash -c` 含む) のたびに `BASH_ENV` の指すファイルを source し、`$BASH_EXECUTION_STRING` にコマンド全文が入るため、PreToolUse 相当の**実行前 block** が純 bash で実現できる (claude-harness #52、[docs/kimi_hooks.md](../docs/kimi_hooks.md))。
+3. **post-hoc scrubbing 層** — `~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl` を定期的にスキャンし、既知 credential 値を redact する。
+
+claude-harness リポジトリの `plugins/harness-kimi/` に 3 層すべての実装を置いている。guard hook の選択は `plugins/cross_cli_hooks.json` (cross-CLI overlay) で Claude / Codex と共通管理する。
