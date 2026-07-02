@@ -14,3 +14,6 @@ __pycache__/
 *.pyo
 *.egg-info/
 docs/**/.dual-magi/
+
+# Formation runtime artifacts (briefings may contain operator PII) — keep local only
+formation/briefings/
