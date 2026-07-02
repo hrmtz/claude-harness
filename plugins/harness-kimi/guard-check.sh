@@ -28,22 +28,33 @@ PAYLOAD=$(jq -n \
     --arg cwd "$PWD" \
     '{tool_name:"Bash", tool_input:{command:$cmd}, cwd:$cwd}')
 
-CORE_HOOKS="${HARNESS_CORE_HOOKS:-$HOME/projects/claude-harness/plugins/harness-core/hooks}"
-RAILS_HOOKS="${HARNESS_RAILS_HOOKS:-$HOME/projects/claude-harness/plugins/harness-rails/hooks}"
+PLUGINS_DIR="${HARNESS_PLUGINS:-$HOME/projects/claude-harness/plugins}"
+OVERLAY="$PLUGINS_DIR/cross_cli_hooks.json"
 
-# Order matters: insurance first, then gates, then hints.
-GUARD_HOOKS=(
-    "$CORE_HOOKS/sanada_autobackup.sh"
-    "$CORE_HOOKS/bash_command_guard.sh"
-    "$CORE_HOOKS/branch_policy_guard.sh"
-    "$CORE_HOOKS/pg_rotation_propagation_guard.sh"
-    "$RAILS_HOOKS/pipeline_preflight_gate.sh"
-    "$RAILS_HOOKS/phase_review_gate.sh"
-)
-
-HINT_HOOKS=(
-    "$CORE_HOOKS/long_task_advisor.sh"
-)
+# Hook set comes from the cross-CLI overlay (gh #55) so Claude/Codex/Kimi
+# stay in sync. Order matters: insurance first, then gates, then hints.
+# Fallback to a builtin list if the overlay is missing (e.g. repo moved).
+if [[ -f "$OVERLAY" ]]; then
+    mapfile -t INSURANCE_HOOKS < <(jq -r '.kimi.insurance[]' "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
+    mapfile -t GATE_HOOKS      < <(jq -r '.kimi.gates[]'     "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
+    mapfile -t HINT_HOOKS      < <(jq -r '.kimi.hints[]'     "$OVERLAY" | sed "s|^|$PLUGINS_DIR/|")
+else
+    CORE_HOOKS="${HARNESS_CORE_HOOKS:-$PLUGINS_DIR/harness-core/hooks}"
+    RAILS_HOOKS="${HARNESS_RAILS_HOOKS:-$PLUGINS_DIR/harness-rails/hooks}"
+    INSURANCE_HOOKS=(
+        "$CORE_HOOKS/sanada_autobackup.sh"
+    )
+    GATE_HOOKS=(
+        "$CORE_HOOKS/bash_command_guard.sh"
+        "$CORE_HOOKS/branch_policy_guard.sh"
+        "$CORE_HOOKS/pg_rotation_propagation_guard.sh"
+        "$RAILS_HOOKS/pipeline_preflight_gate.sh"
+        "$RAILS_HOOKS/phase_review_gate.sh"
+    )
+    HINT_HOOKS=(
+        "$CORE_HOOKS/long_task_advisor.sh"
+    )
+fi
 
 log_guard() {
     local msg="$1"
@@ -79,17 +90,13 @@ extract_hint() {
 }
 
 # ── insurance (never blocks) ──
-for hook in "${GUARD_HOOKS[@]}"; do
-    case "$hook" in
-        */sanada_autobackup.sh)
-            run_hook "$hook" "$PAYLOAD" >/dev/null 2>&1 || true
-            ;;
-    esac
+for hook in "${INSURANCE_HOOKS[@]}"; do
+    [[ ! -f "$hook" ]] && continue
+    run_hook "$hook" "$PAYLOAD" >/dev/null 2>&1 || true
 done
 
 # ── gates ──
-for hook in "${GUARD_HOOKS[@]}"; do
-    [[ "$hook" == */sanada_autobackup.sh ]] && continue
+for hook in "${GATE_HOOKS[@]}"; do
     [[ ! -f "$hook" ]] && continue
 
     out=$(run_hook "$hook" "$PAYLOAD")

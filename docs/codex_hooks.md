@@ -130,8 +130,19 @@ bash ~/projects/claude-harness/install-codex-hooks.sh
 This:
 1. Runs `codex features enable plugin_hooks`
 2. Strips any existing hook blocks from `~/.codex/config.toml`
-3. Appends the harness-core hook config (PreToolUse / PostToolUse / UserPromptSubmit)
+3. Generates and appends the hook config from `plugins/cross_cli_hooks.json`
+   (hook set) + each plugin's `hooks/hooks.json` (event/matcher/timeout SSOT —
+   the same files that drive Claude via `sync_hooks_to_live.py`)
 4. Verifies the config parses
+
+To add/remove a Codex hook: edit the `codex` section of
+`plugins/cross_cli_hooks.json`, re-run the installer, re-trust. Script
+*content* changes need no re-run — the config references repo paths directly.
+Check sync state anytime with:
+
+```bash
+bash ~/projects/claude-harness/scripts/check_cross_cli_hooks.sh --live
+```
 
 ### Trust step (one-time per machine)
 
@@ -152,11 +163,17 @@ re-trust.
 
 ## What each hook does in Codex
 
-| Hook | Event | Function |
+The authoritative hook set lives in `plugins/cross_cli_hooks.json` (`codex`
+section) — as of gh #55 it includes the full cross-CLI gate set (sanada,
+bash_command_guard, branch_policy, pg_rotation, pipeline_preflight,
+phase_review, long_task_advisor) plus credential_value_scrub (PostToolUse),
+admission_reminder (UserPromptSubmit), and the hippocampus SessionStart hook.
+Hook behavior is identical to Claude Code — same scripts, same pattern
+catalogs. Notable Codex-specific point:
+
+| Hook | Event | Codex-specific note |
 |---|---|---|
-| `bash_command_guard.sh` | PreToolUse / Bash | Blocks SOPS credential exposure patterns, `env \| grep KEY`, etc. Same pattern catalog as Claude Code. |
-| `credential_value_scrub.sh` | PostToolUse / Bash | Scans tool output for credential values; sanitizes active session JSONL in-place. Uses `transcript_path` from hook JSON to locate the Codex session file. |
-| `admission_reminder.sh` | UserPromptSubmit | Injects terse reminders for known failure modes (credential leak, silent lead, etc.) |
+| `credential_value_scrub.sh` | PostToolUse / Bash | Uses `transcript_path` from hook JSON to locate the Codex session file under `~/.codex/sessions/`. |
 
 ---
 

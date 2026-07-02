@@ -1,0 +1,40 @@
+{
+  "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
+  "codex": {
+    "note": "Bash/PostToolUse/UserPromptSubmit hooks only — Codex has no Read/Write/Edit tool names, so those matchers are excluded. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
+    "hooks": [
+      "harness-core/hooks/sanada_autobackup.sh",
+      "harness-core/hooks/bash_command_guard.sh",
+      "harness-core/hooks/branch_policy_guard.sh",
+      "harness-core/hooks/pg_rotation_propagation_guard.sh",
+      "harness-rails/hooks/pipeline_preflight_gate.sh",
+      "harness-rails/hooks/phase_review_gate.sh",
+      "harness-core/hooks/long_task_advisor.sh",
+      "harness-core/hooks/credential_value_scrub.sh",
+      "harness-core/hooks/admission_reminder.sh"
+    ],
+    "external": [
+      {
+        "event": "SessionStart",
+        "command": "bash /home/hrmtz/projects/hippocampus-mcp/scripts/hooks/codex_session_start.sh",
+        "timeout": 10
+      }
+    ]
+  },
+  "kimi": {
+    "note": "Bash-command-string guards only (BASH_ENV interception, gh #52) — Kimi has no native hook API, so only PreToolUse/Bash-shaped hooks apply. insurance runs first and never blocks; gates deny with rc=2; hints go to stderr.",
+    "insurance": [
+      "harness-core/hooks/sanada_autobackup.sh"
+    ],
+    "gates": [
+      "harness-core/hooks/bash_command_guard.sh",
+      "harness-core/hooks/branch_policy_guard.sh",
+      "harness-core/hooks/pg_rotation_propagation_guard.sh",
+      "harness-rails/hooks/pipeline_preflight_gate.sh",
+      "harness-rails/hooks/phase_review_gate.sh"
+    ],
+    "hints": [
+      "harness-core/hooks/long_task_advisor.sh"
+    ]
+  }
+}
