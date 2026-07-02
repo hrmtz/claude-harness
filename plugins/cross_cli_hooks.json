@@ -18,6 +18,12 @@
         "event": "SessionStart",
         "command": "bash /home/hrmtz/projects/hippocampus-mcp/scripts/hooks/codex_session_start.sh",
         "timeout": 10
+      },
+      {
+        "event": "SessionStart",
+        "command": "bash /home/hrmtz/projects/claude-harness/plugins/harness-core/hooks/codex_tmux_self_name.sh",
+        "timeout": 5,
+        "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead"
       }
     ]
   },
