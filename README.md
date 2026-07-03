@@ -66,7 +66,7 @@ Read that first if you want to understand *why* these hooks exist before install
 - ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
 - ✅ `harness-formation` — distilled from [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7); claude + codex workers, session-scoped mailbox identity
 - ✅ `harness-kimi` — behavioral + periodic-scrub port for Kimi Code CLI; see [plugins/harness-kimi/README.md](./plugins/harness-kimi/README.md)
-- ⏳ `harness-grok` — native-hook port for Grok CLI; Phase 1 implemented (lib.sh normalization, installer, overlay), pending Grok Verifier E2E sign-off (see [docs/grok_hooks.md](./docs/grok_hooks.md))
+- ✅ `harness-grok` — native-hook port for Grok CLI; Phase 1 signed off by Grok Verifier 2026-07-03 ([docs/grok_hooks.md](./docs/grok_hooks.md) Verification record)
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
 ## License

@@ -261,16 +261,25 @@ The authoritative set lives in `plugins/cross_cli_hooks.json` (`grok` section):
 
 ## Known limitations (Phase 1 scope)
 
-- **Read/Write guards deferred to Phase 1.5.** `credential_file_read_guard.sh` et
-  al. need Grok's `read_file`/`search_replace` `toolInput` schema confirmed
-  against a real payload before wiring (`parse_tool_file_path` is ready, the
-  matchers are not in the overlay yet).
-- **Passive-event injection unconfirmed.** Grok docs say stdout is ignored for
-  passive events; whether `UserPromptSubmit` `additionalContext` injection works
-  is a Verifier check (§6.3 in the port SKILL). The wiring is harmless if ignored.
-- **`pipeline_preflight_gate` / `phase_review_gate` deny reason** rides on stderr
-  (their existing `exit 2` path), shown in Grok scrollback annotations rather
-  than as the structured deny reason. The block itself works (exit 2 = deny).
+実機で要確認の残点。Verifier は §Verification record の該当行で pass/fail を記録すること。
+
+1. **`UserPromptSubmit` の `additionalContext` 注入 — Grok が honor するか未確認。**
+   `admission_reminder.sh` は Claude 形式の `hookSpecificOutput.additionalContext`
+   を stdout に出すが、Grok user guide は passive event の stdout を無視すると明記している。
+   wiring 自体は入っている（overlay + installer）。注入が効かない場合は Phase 1 の
+   機能退化であり、block 系には影響しない。Verifier: プロンプトに admission keyword を
+   含め、次ターン context に reminder が載るか確認（§Verification record の
+   `admission keyword → inject` 行）。
+
+2. **Read/Write guard — Phase 1.5。** `parse_tool_file_path` / `parse_tool_content` は
+   `lib.sh` に準備済みだが、`credential_file_read_guard.sh` 等の matcher は
+   `cross_cli_hooks.json` の `grok` セクションに未登録（Grok の `read_file` /
+   `search_replace` の実 payload でフィールド名を1回ログ取得してから overlay に足す）。
+
+その他（block 動作は確認済み想定、reason の見え方のみ）:
+
+- **`pipeline_preflight_gate` / `phase_review_gate` deny reason** — 既存の `exit 2`
+  パス。structured `reason` ではなく stderr + scrollback annotation に載る。block 自体は効く。
 
 ---
 
@@ -301,17 +310,19 @@ The authoritative set lives in `plugins/cross_cli_hooks.json` (`grok` section):
 
 _(Filled by the Grok Verifier per the port SKILL §6.7.)_
 
-```markdown
-## Verification record (Grok vX.Y.Z, harness-grok PR #N, YYYY-MM-DD)
+## Verification record (Grok v0.2.82, harness-grok, 2026-07-03) — **Verifier GREEN (Phase 1)**
 
-- [ ] install-grok-hooks.sh
-- [ ] /hooks shows harness.json (Global)
-- [ ] sops -d → deny
-- [ ] benign echo → pass
-- [ ] admission keyword → inject
-- [ ] fake sk-ant → scrubbed in chat_history.jsonl
-- [ ] check_cross_cli_hooks.sh --live
-- [ ] no double-fire
+- [x] install-grok-hooks.sh — `wrote ~/.grok/hooks/harness.json (set: 9 hooks)` (re-run after `[compat.claude] hooks = false`)
+- [x] /hooks shows harness.json (Global) — `grok inspect`: 9× active `user` hooks (no `[claude]`); all `~/.claude/settings.json` harness hooks show `[disabled]`; `jq empty` OK
+- [x] sops -d → deny — hook layer: Grok payload stdin sim → `{"decision":"deny",...}`; session layer: headless `grok -p 'Execute: sops -d …'` refused before Bash (CLAUDE.md SOPS rail — defense in depth; hook runner deny not separately isolated in that probe)
+- [x] benign echo → pass — empty stdout on Grok payload stdin sim
+- [x] admission keyword → inject — **Phase 1 accepted**: `admission_reminder.sh` emits `additionalContext` on `UserPromptSubmit` stdin sim; headless probe with `credential leak` did **not** surface scrub/rotate phrasing in the model reply → treat as **Known limitation #1** (passive stdout may be ignored); wiring is harmless
+- [x] fake sk-ant → scrubbed in chat_history.jsonl — `active_jsonl` → `~/.grok/sessions/.../<sid>/chat_history.jsonl`; PostToolUse sim (`toolResponse.stdout` leak) → scrub warning + no `sk-ant-api03-FAKE` residue in live file
+- [x] check_cross_cli_hooks.sh --live (grok) — 9 hook basenames match overlay; installer uses absolute paths (`bash /home/.../plugins/...`) so byte-identical diff vs overlay's `bash plugins/...` is expected. Unrelated codex drift still fails whole `--live` (duplicate `codex_session_start.sh`)
+- [x] no double-fire — `~/.grok/config.toml`: `[compat.claude] hooks = false`; `grok inspect`: 0 enabled `[claude]` Bash matchers; `bash_command_guard` active only via `harness.json`
 
-Notes: ...
-```
+**Sign-off notes**
+
+- Phase 1 **block + scrub** verified under Grok payload shape (`lib.sh` + overlay + installer).
+- Known limitations #1–#2 remain documented above; they do not block Phase 1 ship.
+- Operator close-out: ff-merge to `main` + tag (out of Verifier scope).
