@@ -1,5 +1,5 @@
 {
-  "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
+  "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), install-grok-hooks.sh (grok), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
   "codex": {
     "note": "Bash/PostToolUse/UserPromptSubmit hooks only — Codex has no Read/Write/Edit tool names, so those matchers are excluded. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
     "hooks": [
@@ -26,6 +26,21 @@
         "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead"
       }
     ]
+  },
+  "grok": {
+    "note": "Native Grok hooks via ~/.grok/hooks/harness.json (install-grok-hooks.sh). Bash-shaped PreToolUse/PostToolUse/UserPromptSubmit only; Read/Write matchers deferred to Phase 1.5 (Grok toolInput schema confirmation). Grok maps matcher 'Bash' -> run_terminal_command; event/matcher/timeout are looked up from the owning plugin's hooks.json (same SSOT as codex). Deny shape + payload differences are absorbed by harness-core/hooks/lib.sh (emit_deny/parse_tool_command). Order within an event is preserved.",
+    "hooks": [
+      "harness-core/hooks/sanada_autobackup.sh",
+      "harness-core/hooks/bash_command_guard.sh",
+      "harness-core/hooks/branch_policy_guard.sh",
+      "harness-core/hooks/pg_rotation_propagation_guard.sh",
+      "harness-rails/hooks/pipeline_preflight_gate.sh",
+      "harness-rails/hooks/phase_review_gate.sh",
+      "harness-core/hooks/long_task_advisor.sh",
+      "harness-core/hooks/credential_value_scrub.sh",
+      "harness-core/hooks/admission_reminder.sh"
+    ],
+    "external": []
   },
   "kimi": {
     "note": "Bash-command-string guards only (BASH_ENV interception, gh #52) — Kimi has no native hook API, so only PreToolUse/Bash-shaped hooks apply. insurance runs first and never blocks; gates deny with rc=2; hints go to stderr.",

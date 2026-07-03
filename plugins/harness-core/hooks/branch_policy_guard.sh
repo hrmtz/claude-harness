@@ -18,22 +18,13 @@
 
 source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+# Cross-CLI: parse_tool_command + emit_deny (lib.sh) absorb the Claude/Codex vs
+# Grok payload + deny-shape differences. The local emit_deny that used to live
+# here (Claude-only shape) is retired in favor of the shared CLI-aware one.
+HOOK_INPUT=$(cat); export HOOK_INPUT
+CMD=$(parse_tool_command)
 
 [ -z "$CMD" ] && exit 0
-
-emit_deny() {
-    local msg="$1"
-    jq -n --arg msg "$msg" '{
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": $msg
-        }
-    }'
-    exit 0
-}
 
 # cwd 抽出 (= `cd <dir> && git ...` 対応、 default は PWD)
 extract_cwd() {

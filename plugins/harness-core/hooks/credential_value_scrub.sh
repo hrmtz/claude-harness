@@ -126,7 +126,7 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     # Step 2 (issue) — fire the follow-up DETACHED so gh latency never blocks this
     # hook. setsid + </dev/null + redirected fds = fully decoupled from the hook
     # process group; it self-dedups and is fail-safe. We do NOT wait on it.
-    SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+    SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // .sessionId // empty' 2>/dev/null)
     FOLLOWUP="$(dirname "$0")/credential_leak_followup.sh"
     if [ -f "$FOLLOWUP" ]; then
         LEAK_SOURCE="value_scrub" \
@@ -147,7 +147,7 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     # Source-trust classification (gh #41, shared lib fn). AUTO requires a
     # positively-identified trusted-op (allowlist); untrusted/ambiguous never auto
     # without a human ack — so a denylist-evading external fetch cannot reach auto.
-    CMD_TEXT=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    CMD_TEXT=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.command // .toolInput.command // empty' 2>/dev/null)
     LEAK_TRUST=$(classify_leak_trust "$CMD_TEXT")
     AUTOROTATE="$(dirname "$0")/autorotate_leaked_cred.sh"
     if [ -f "$AUTOROTATE" ]; then

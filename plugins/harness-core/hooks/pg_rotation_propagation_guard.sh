@@ -21,8 +21,9 @@
 
 source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+# Cross-CLI: parse_tool_command handles Claude/Codex + Grok payload shapes.
+HOOK_INPUT=$(cat); export HOOK_INPUT
+CMD=$(parse_tool_command)
 [ -z "$CMD" ] && exit 0
 
 # conscious-confirmation bypass
@@ -85,13 +86,6 @@ propagate 先 (全部): mars (canonical) / talisker / zetithnas + edge workers
   • 含まれている → 先頭に PG_ROTATION_PROPAGATION_ACK=1 を付けて再実行
   • 含まれていない → 同手順に propagation を追加してから実行
 （rotation 自体は禁止していない。読む/検索/言及/引数に語が入るだけのコマンドは block しない。）"
-    jq -n --arg msg "$MSG" '{
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": $msg
-        }
-    }'
-    exit 0
+    emit_deny "$MSG"
 fi
 exit 0

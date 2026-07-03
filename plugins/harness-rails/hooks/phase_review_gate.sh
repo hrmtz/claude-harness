@@ -23,10 +23,13 @@
 set -e
 
 INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || true)
-[ "$TOOL_NAME" != "Bash" ] && exit 0
+# Cross-CLI (gh #55): accept Grok's .toolName="run_terminal_command" alongside
+# Claude/Codex .tool_name="Bash", else a Grok payload silently skips (fail-open).
+# Blocks via `exit 2` (+ stderr reason), which Grok honors as a deny.
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // ""' 2>/dev/null || true)
+case "$TOOL_NAME" in Bash|run_terminal_command) ;; *) exit 0 ;; esac
 
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || true)
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // .toolInput.command // ""' 2>/dev/null || true)
 [ -z "$CMD" ] && exit 0
 
 # Skip if --dry-run / --rollback / --help (Layer 3 自体 / abort path)

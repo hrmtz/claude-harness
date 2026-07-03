@@ -1,11 +1,23 @@
 #!/bin/bash
-# Shared utilities for harness hooks (Claude Code + Codex).
+# Shared utilities for harness hooks (Claude Code + Codex + Grok).
 #
 # Codex compat: set HOOK_INPUT="$(cat)" at the top of each hook script before
 # calling any lib function. lib functions prefer HOOK_INPUT over stdin so that
 # stdin is not consumed twice across multiple calls (e.g. parse_tool_output +
 # active_jsonl in the same script). Hooks that don't set HOOK_INPUT fall back
 # to reading stdin directly (backward-compatible with older Claude Code style).
+#
+# Grok compat (gh #55, harness-grok): Grok delivers a different payload shape —
+# tool input under `.toolInput` (camelCase) not `.tool_input`, tool name under
+# `.toolName` (= run_terminal_command/read_file/search_replace) not `.tool_name`,
+# and a PreToolUse deny is `{"decision":"deny","reason":...}` on stdout instead
+# of `hookSpecificOutput.permissionDecision`. Grok also has no `transcript_path`;
+# it injects GROK_SESSION_ID + GROK_WORKSPACE_ROOT and stores the transcript at
+# ~/.grok/sessions/<pct-encoded-workspace>/<sessionId>/chat_history.jsonl. The
+# parse_* / emit_deny / active_jsonl helpers below absorb all three differences so
+# the hook scripts stay CLI-agnostic. Without this, a Grok payload slips past the
+# named-field jq and the guard silently passes (fail-open) — the exact defect the
+# harness-grok port closes.
 
 CLAUDE_HOME="$HOME/.claude"
 STATE_DIR="$CLAUDE_HOME/state"
@@ -16,18 +28,92 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 # Active session jsonl path resolver
 # ----------------------------------------
 # Prefers transcript_path from hook JSON context (works for both Claude Code and
-# Codex). Falls back to scanning ~/.claude/projects/ for Claude Code sessions
-# that don't set HOOK_INPUT.
+# Codex). For Grok, which has no transcript_path, resolves the session's
+# chat_history.jsonl by its unique sessionId. Falls back to scanning
+# ~/.claude/projects/ for Claude Code sessions that don't set HOOK_INPUT.
 active_jsonl() {
     if [ -n "${HOOK_INPUT:-}" ]; then
         local tp
-        tp=$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+        tp=$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // .transcriptPath // empty' 2>/dev/null)
         if [ -n "$tp" ] && [ -f "$tp" ]; then
             echo "$tp"
             return 0
         fi
     fi
+    # Grok: transcript lives at ~/.grok/sessions/<pct-encoded-workspace>/<sid>/
+    # chat_history.jsonl. The sessionId is a UUID (globally unique), so we glob it
+    # across the percent-encoded workspace dirs rather than re-deriving Grok's path
+    # encoding — robust to whatever quote()-variant Grok uses. sid comes from the
+    # runner-injected GROK_SESSION_ID env, or the payload's .sessionId as fallback.
+    local sid="${GROK_SESSION_ID:-}"
+    if [ -z "$sid" ] && [ -n "${HOOK_INPUT:-}" ]; then
+        sid=$(printf '%s' "$HOOK_INPUT" | jq -r '.sessionId // empty' 2>/dev/null)
+    fi
+    if [ -n "$sid" ]; then
+        local gj
+        gj=$(ls -t "$HOME"/.grok/sessions/*/"$sid"/chat_history.jsonl 2>/dev/null | head -1)
+        [ -n "$gj" ] && { echo "$gj"; return 0; }
+    fi
     ls -t "$CLAUDE_HOME"/projects/*/[a-z0-9-]*.jsonl 2>/dev/null | head -1
+}
+
+# ----------------------------------------
+# Tool-input field parsers (cross-CLI: Claude/Codex snake_case + Grok camelCase)
+# ----------------------------------------
+# Read HOOK_INPUT (preferred) or stdin, once. Each parser accepts BOTH the
+# Claude/Codex `.tool_input.*` shape and the Grok `.toolInput.*` shape so the
+# calling hook never has to know which CLI invoked it. A Grok payload that these
+# did NOT cover would return empty and the guard would silently pass — so the
+# camelCase alternates are the load-bearing part of the harness-grok fix.
+_hook_input() {
+    if [ -n "${HOOK_INPUT:-}" ]; then printf '%s' "$HOOK_INPUT"; else cat; fi
+}
+
+# Bash command string: `.tool_input.command` (Claude/Codex) // `.toolInput.command` (Grok).
+parse_tool_command() {
+    _hook_input | jq -r '.tool_input.command // .toolInput.command // empty' 2>/dev/null
+}
+
+# Read/Write/Edit target path. Grok's read_file uses `.path`; search_replace and
+# Claude Read/Write use `file_path`. Covers all three (Phase 1.5 Read/Write guards).
+parse_tool_file_path() {
+    _hook_input | jq -r '.tool_input.file_path // .toolInput.file_path // .toolInput.path // empty' 2>/dev/null
+}
+
+# Write/Edit content or replacement text: `.content` (Write) or `.new_string`
+# (Edit/search_replace), in either snake_case or camelCase.
+parse_tool_content() {
+    _hook_input | jq -r '.tool_input.content // .toolInput.content // .tool_input.new_string // .toolInput.new_string // empty' 2>/dev/null
+}
+
+# ----------------------------------------
+# PreToolUse deny — CLI-aware output shape
+# ----------------------------------------
+# Claude Code + Codex read `hookSpecificOutput.permissionDecision == "deny"`.
+# Grok reads a top-level `{"decision":"deny","reason":...}` and ignores
+# hookSpecificOutput. We DETECT Grok via its runner-injected env (GROK_SESSION_ID /
+# GROK_HOOK_EVENT are set on EVERY Grok hook process, including Claude-compat ones)
+# and emit exactly the one shape that CLI honors — so Claude/Codex output stays
+# byte-identical to before (zero regression) and Grok gets a shape it can act on.
+# Emitting BOTH as two JSON objects was rejected: Claude parses stdout as a single
+# JSON document and a second object would break its parse → fail-open on deny.
+# Terminal: prints the decision and exits 0 (Grok honors a stdout deny regardless
+# of exit code; Claude/Codex expect exit 0 with the JSON). A deny is always the
+# end of a hook's logic, so callers need no separate exit.
+emit_deny() {
+    local msg="$1"
+    if [ -n "${GROK_SESSION_ID:-}${GROK_HOOK_EVENT:-}" ]; then
+        jq -n --arg r "$msg" '{"decision":"deny","reason":$r}'
+    else
+        jq -n --arg msg "$msg" '{
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": $msg
+            }
+        }'
+    fi
+    exit 0
 }
 
 # ----------------------------------------
@@ -40,7 +126,7 @@ parse_prompt() {
     else
         input=$(cat)
     fi
-    printf '%s' "$input" | jq -r '.prompt // .input // .content // .message // empty' 2>/dev/null \
+    printf '%s' "$input" | jq -r '.prompt // .userPrompt // .user_prompt // .input // .content // .message // empty' 2>/dev/null \
         | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
@@ -65,12 +151,22 @@ parse_tool_output() {
     # The `?` after each index suppresses jq's "cannot index string with X" error
     # when tool_response is a bare string (an error-wrapped shape) — without it the
     # whole filter aborts before the tostring fallback runs.
+    # Grok compat (gh #55): Grok's PostToolUse carries the result under camelCase
+    # `.toolResponse` (or `.toolOutput`). We add those alternates + a tostring
+    # fallback so a Grok-shaped result is scanned too; the trailing tostring on each
+    # container serializes whatever shape survives so no leak silently escapes.
     printf '%s' "$input" | jq -r '
         (.tool_response.stdout? // empty),
         (.tool_response.stderr? // empty),
         (.tool_response.output? // empty),
         (.tool_response.content? // empty),
-        (.tool_response | select(. != null) | tostring)
+        (.tool_response | select(. != null) | tostring),
+        (.toolResponse.stdout? // empty),
+        (.toolResponse.stderr? // empty),
+        (.toolResponse.output? // empty),
+        (.toolResponse.content? // empty),
+        (.toolResponse | select(. != null) | tostring),
+        (.toolOutput? // empty)
     ' 2>/dev/null
 }
 
@@ -180,7 +276,11 @@ recent_assistant_turns() {
     jsonl=$(active_jsonl)
     [ -z "$jsonl" ] && return 1
     [ ! -f "$jsonl" ] && return 1
+    # Claude/Codex: assistant text under .message.content[].text (array of parts).
+    # Grok chat_history.jsonl: {"type":"assistant","content":"<string>"} — plain
+    # string content. Try the Claude array walk first, then the Grok string.
     tac "$jsonl" 2>/dev/null \
-        | jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' 2>/dev/null \
+        | jq -r 'select(.type == "assistant")
+                 | (.message.content[]?.text // (.content | select(type == "string")) // empty)' 2>/dev/null \
         | head -n "$n"
 }

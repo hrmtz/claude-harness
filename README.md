@@ -15,6 +15,7 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 | **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
 | **harness-formation** | Spawn and coordinate long-running peer AI agent panes (claude or codex) in sibling tmux panes. Append-only jsonl mailbox with session-scoped identity, auto-relay daemon, credential-safe body guard. | Tasks that justify hours of wall time and need live observability or mid-flight redirection |
 | **harness-kimi** | Port of harness-core to Kimi Code CLI. Project-level `AGENTS.md` (behavioral) + a `BASH_ENV` interception layer that runs the harness PreToolUse guards before every Bash command, including absolute-path `/bin/bash -c` ([#52](https://github.com/hrmtz/claude-harness/issues/52), [docs/kimi_hooks.md](./docs/kimi_hooks.md)) + a periodic session-log scrubber. | Every Kimi session; guard active with `HARNESS_KIMI_BASH_GUARD=1` + cron scrubber every minute |
+| **harness-grok** | Port of harness-core/rails to the Grok CLI via its **native** hook API. `install-grok-hooks.sh` writes `~/.grok/hooks/harness.json` from the shared overlay; `lib.sh` absorbs Grok's camelCase payload (`toolInput`/`toolName`/`sessionId`) and `{"decision":"deny"}` output shape so the same guards fire ([docs/grok_hooks.md](./docs/grok_hooks.md)). Closes a fail-open where a Grok payload silently passed the guard. | Every Grok session; `bash install-grok-hooks.sh` + `[compat.claude] hooks = false` to avoid double-fire |
 
 More plugins are planned (CLAUDE.md persona templates, repo-init skeleton). See [GitHub issues](https://github.com/hrmtz/claude-harness/issues) for status.
 
@@ -65,6 +66,7 @@ Read that first if you want to understand *why* these hooks exist before install
 - ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
 - ✅ `harness-formation` — distilled from [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7); claude + codex workers, session-scoped mailbox identity
 - ✅ `harness-kimi` — behavioral + periodic-scrub port for Kimi Code CLI; see [plugins/harness-kimi/README.md](./plugins/harness-kimi/README.md)
+- ⏳ `harness-grok` — native-hook port for Grok CLI; Phase 1 implemented (lib.sh normalization, installer, overlay), pending Grok Verifier E2E sign-off (see [docs/grok_hooks.md](./docs/grok_hooks.md))
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton
 
 ## License

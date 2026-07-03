@@ -12,7 +12,8 @@
 set -euo pipefail
 
 payload=$(head -c 65536 || true)
-cmd=$(echo "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+# Cross-CLI: Claude/Codex .tool_input.command // Grok .toolInput.command.
+cmd=$(echo "$payload" | jq -r '.tool_input.command // .toolInput.command // ""' 2>/dev/null || echo "")
 
 if [[ -z "$cmd" ]]; then exit 0; fi
 if echo "$cmd" | grep -qE 'long-task\.sh|long_task\.sh'; then exit 0; fi

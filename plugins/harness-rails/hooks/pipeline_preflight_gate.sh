@@ -24,11 +24,15 @@
 set -e
 
 # Read PreToolUse JSON envelope from stdin.
+# Cross-CLI (gh #55): Claude/Codex send .tool_name="Bash"; Grok sends
+# .toolName="run_terminal_command". Accept both — otherwise a Grok payload has an
+# empty TOOL_NAME, fails the != "Bash" test, and the gate silently skips (fail-open).
+# This gate blocks via `exit 2` (+ stderr reason), which Grok honors as a deny.
 INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || true)
-[ "$TOOL_NAME" != "Bash" ] && exit 0
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // ""' 2>/dev/null || true)
+case "$TOOL_NAME" in Bash|run_terminal_command) ;; *) exit 0 ;; esac
 
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null || true)
+CMD=$(echo "$INPUT" | jq -r '.tool_input.command // .toolInput.command // ""' 2>/dev/null || true)
 [ -z "$CMD" ] && exit 0
 
 # Whitelist commands whose -m/--body args often quote patterns described

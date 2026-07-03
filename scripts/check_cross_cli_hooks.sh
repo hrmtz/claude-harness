@@ -10,6 +10,7 @@
 #   3. ~/.codex/config.toml contains exactly the overlay's codex hook commands
 #   4. installed kimi guard core (~/.kimi-code/bin/guarded-bash-dir/guard-check.sh)
 #      is identical to the repo version
+#   5. ~/.grok/hooks/harness.json contains exactly the overlay's grok hook commands
 #
 # Exit: 0 in sync, 1 drift found.
 set -uo pipefail
@@ -26,7 +27,7 @@ err() { echo "DRIFT: $*" >&2; fail=1; }
 [[ -f "$OVERLAY" ]] || { echo "error: $OVERLAY missing" >&2; exit 1; }
 
 # All hook paths referenced anywhere in the overlay.
-mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .kimi.insurance[], .kimi.gates[], .kimi.hints[]] | unique | .[]' "$OVERLAY")
+mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .grok.hooks[], .kimi.insurance[], .kimi.gates[], .kimi.hints[]] | unique | .[]' "$OVERLAY")
 
 for hook in "${ALL_HOOKS[@]}"; do
     plugin="${hook%%/*}"
@@ -61,6 +62,24 @@ if [[ $LIVE -eq 1 ]]; then
         rm -f "$want" "$got"
     else
         echo "skip: $CODEX_CONFIG not present"
+    fi
+
+    # 5. grok harness.json carries exactly the overlay set (commands only)
+    GROK_HOOKS="$HOME/.grok/hooks/harness.json"
+    if [[ -f "$GROK_HOOKS" ]]; then
+        want=$(mktemp); got=$(mktemp)
+        {
+            jq -r '.grok.hooks[]' "$OVERLAY" | sed "s|^|bash $PLUGINS_DIR/|"
+            jq -r '.grok.external[]?.command // empty' "$OVERLAY"
+        } | sort > "$want"
+        jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$GROK_HOOKS" 2>/dev/null \
+            | grep -E 'hooks/' | sort > "$got"
+        if ! diff -u "$want" "$got" >&2; then
+            err "grok harness.json hook set differs from overlay (run install-grok-hooks.sh)"
+        fi
+        rm -f "$want" "$got"
+    else
+        echo "skip: $GROK_HOOKS not present"
     fi
 
     # 4. installed kimi guard core is current

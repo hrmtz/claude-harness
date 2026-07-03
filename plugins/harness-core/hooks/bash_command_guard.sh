@@ -12,8 +12,10 @@
 
 source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+# Cross-CLI: parse_tool_command handles Claude/Codex `.tool_input.command` AND
+# Grok `.toolInput.command`. HOOK_INPUT is set so the helper doesn't re-read stdin.
+HOOK_INPUT=$(cat); export HOOK_INPUT
+CMD=$(parse_tool_command)
 
 [ -z "$CMD" ] && exit 0
 
@@ -264,14 +266,9 @@ if [ "$VIOLATION_FOUND" -eq 1 ]; then
     # `printf -- '%b'` so VIOLATION_MSGS leading "- " isn't parsed as a flag,
     # and so embedded \n escape sequences are interpreted as real newlines.
     MSG=$(printf -- '%b\n次これで行こう。' "$VIOLATION_MSGS")
-    jq -n --arg msg "$MSG" '{
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": $msg
-        }
-    }'
-    exit 0
+    # emit_deny picks the CLI-correct shape (Claude/Codex hookSpecificOutput vs
+    # Grok {"decision":"deny"}) and exits 0.
+    emit_deny "$MSG"
 fi
 
 exit 0

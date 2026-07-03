@@ -24,8 +24,10 @@
 umask 077
 source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+# Cross-CLI: parse_tool_command reads Claude/Codex `.tool_input.command` AND Grok
+# `.toolInput.command` — else the backup insurance silently no-ops under Grok.
+INPUT=$(cat); HOOK_INPUT="$INPUT"; export HOOK_INPUT
+CMD=$(parse_tool_command)
 [ -z "$CMD" ] && exit 0
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 [ -n "$CWD" ] && cd "$CWD" 2>/dev/null
