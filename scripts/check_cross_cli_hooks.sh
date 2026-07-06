@@ -52,7 +52,7 @@ if [[ $LIVE -eq 1 ]]; then
         want=$(mktemp); got=$(mktemp)
         {
             jq -r '.codex.hooks[]' "$OVERLAY" | sed "s|^|bash $PLUGINS_DIR/|"
-            jq -r '.codex.external[].command' "$OVERLAY"
+            python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
         } | sort > "$want"
         grep -E '^command = ' "$CODEX_CONFIG" | sed 's/^command = "//;s/"$//' \
             | grep -E 'hooks/' | sort > "$got"
@@ -70,7 +70,7 @@ if [[ $LIVE -eq 1 ]]; then
         want=$(mktemp); got=$(mktemp)
         {
             jq -r '.grok.hooks[]' "$OVERLAY" | sed "s|^|bash $PLUGINS_DIR/|"
-            jq -r '.grok.external[]?.command // empty' "$OVERLAY"
+            python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" grok "$HARNESS_DIR"
         } | sort > "$want"
         jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$GROK_HOOKS" 2>/dev/null \
             | grep -E 'hooks/' | sort > "$got"

@@ -90,11 +90,13 @@ for hook in overlay["hooks"]:
         matcher = None
     groups.setdefault((event, matcher), []).append(
         (f"bash {plugins_dir}/{hook}", timeout))
-for ext in overlay.get("external", []):
+sys.path.insert(0, f"{harness_dir}/scripts/lib")
+from cross_cli_externals import resolve  # noqa: E402
+for ext in resolve(overlay_path, "grok", harness_dir):
     event = ext["event"]
-    matcher = None if event in LIFECYCLE else ext.get("matcher")
+    matcher = None if event in LIFECYCLE else ext["matcher"]
     groups.setdefault((event, matcher), []).append(
-        (ext["command"], ext.get("timeout", 10)))
+        (ext["command"], ext["timeout"]))
 
 # Assemble the Grok hooks.json structure.
 events = collections.OrderedDict()

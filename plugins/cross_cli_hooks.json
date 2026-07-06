@@ -16,14 +16,16 @@
     "external": [
       {
         "event": "SessionStart",
-        "command": "bash /home/hrmtz/projects/hippocampus-mcp/scripts/hooks/codex_session_start.sh",
-        "timeout": 10
+        "command": "bash ${HOME}/projects/hippocampus-mcp/scripts/hooks/codex_session_start.sh",
+        "timeout": 10,
+        "optional": true,
+        "note": "author's ghost-context injector; lives in the companion hippocampus-mcp repo, not in claude-harness. optional=true → the installer and drift test auto-skip it when that repo is absent, so a standalone claude-harness install ignores it rather than wiring a dead path. ${HOME} is expanded at install time (see scripts/lib/cross_cli_externals.py)."
       },
       {
         "event": "SessionStart",
-        "command": "bash /home/hrmtz/projects/claude-harness/plugins/harness-core/hooks/codex_tmux_self_name.sh",
+        "command": "bash ${HARNESS_DIR}/plugins/harness-core/hooks/codex_tmux_self_name.sh",
         "timeout": 5,
-        "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead"
+        "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead. ${HARNESS_DIR} is expanded to the cloned repo root at install time, so this works wherever the repo lives."
       }
     ]
   },
