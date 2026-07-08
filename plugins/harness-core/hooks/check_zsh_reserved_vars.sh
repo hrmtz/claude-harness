@@ -22,27 +22,36 @@
 
 set -uo pipefail
 
-payload=$(head -c 131072 || true)
-# Claude Code PreToolUse payload shape: {"tool_use_name": "Write", "tool_input": {...}}
-tool=$(echo "$payload" | jq -r '.tool_use_name // .tool_name // ""' 2>/dev/null || echo "")
-file_path=$(echo "$payload" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
+source "$(dirname "$0")/lib.sh"
 
-# Scope: Write or Edit only
-[[ "$tool" == "Write" || "$tool" == "Edit" ]] || exit 0
+HOOK_INPUT=$(head -c 131072 || true)
+export HOOK_INPUT
+tool=$(parse_tool_name)
+file_path=$(parse_tool_file_path)
+
+# Scope: Write/Edit or Codex apply_patch only
+[[ "$tool" == "Write" || "$tool" == "Edit" || "$tool" == "apply_patch" ]] || exit 0
 
 # Scope: shell scripts only (.sh, .bash, .zsh, or no extension for unrecognised shebang)
 if [[ -n "$file_path" ]]; then
   [[ "$file_path" =~ \.(sh|bash|zsh)$ ]] || exit 0
 fi
 
-# Extract content being written/edited
-if [[ "$tool" == "Write" ]]; then
-  content=$(echo "$payload" | jq -r '.tool_input.content // ""' 2>/dev/null)
-else
-  content=$(echo "$payload" | jq -r '.tool_input.new_string // ""' 2>/dev/null)
-fi
-
+content=$(parse_tool_content)
 [[ -n "$content" ]] || exit 0
+
+if [[ "$tool" == "apply_patch" ]]; then
+  file_path=$(printf '%s\n' "$content" |
+    awk '/^\*\*\* (Add|Update) File: / { sub(/^\*\*\* (Add|Update) File: /, ""); print; exit }')
+  content=$(printf '%s\n' "$content" |
+    sed -n 's/^+\([^+].*\)$/\1/p')
+  # apply_patch often carries only a hunk, not the file shebang. Keep the
+  # blocking zsh rail conservative under Codex to avoid false positives on bash
+  # .sh files whose shebang is outside the patch.
+  if [[ ! "$file_path" =~ \.zsh$ ]] && ! printf '%s\n' "$content" | head -5 | grep -qE '^#!.*zsh'; then
+    exit 0
+  fi
+fi
 
 # Skip if explicit bash shebang (zsh reserved vars don't apply to bash)
 first_line=$(echo "$content" | head -1)

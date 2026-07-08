@@ -1,8 +1,10 @@
 {
   "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), install-grok-hooks.sh (grok), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
   "codex": {
-    "note": "Bash/PostToolUse/UserPromptSubmit hooks only — Codex has no Read/Write/Edit tool names, so those matchers are excluded. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
+    "note": "Codex consumes the portable subset: Bash-shaped gates/reminders, UserPromptSubmit hints, Stop hooks, and SessionStart context. Claude-specific Read/Write/Edit/SubagentStop hooks remain excluded until a Codex tool-name adapter exists. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
     "hooks": [
+      "harness-core/hooks/stall_autocontinue.sh",
+      "harness-core/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
       "harness-core/hooks/sanada_autobackup.sh",
       "harness-core/hooks/bash_command_guard.sh",
       "harness-core/hooks/branch_policy_guard.sh",
@@ -10,8 +12,17 @@
       "harness-rails/hooks/pipeline_preflight_gate.sh",
       "harness-rails/hooks/phase_review_gate.sh",
       "harness-core/hooks/long_task_advisor.sh",
+      "harness-core/hooks/check_zsh_reserved_vars.sh",
+      "harness-core/hooks/check_early_check_timer.sh",
+      "harness-rails/hooks/ssh_fanout_canonical_check.sh",
       "harness-core/hooks/credential_value_scrub.sh",
-      "harness-core/hooks/admission_reminder.sh"
+      "harness-core/hooks/credential_scrub.sh",
+      "harness-core/hooks/admission_reminder.sh",
+      "harness-core/hooks/code_review_suggest.sh",
+      "harness-core/hooks/temporal_anchor.sh",
+      "harness-rails/hooks/self_check_reminder.sh",
+      "harness-rails/hooks/vastai_create_followup_check.sh",
+      "harness-formation/hooks/formation_suggest.sh"
     ],
     "external": [
       {

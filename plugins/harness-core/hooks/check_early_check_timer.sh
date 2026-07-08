@@ -23,20 +23,26 @@
 
 set -uo pipefail
 
-payload=$(head -c 131072 || true)
-tool=$(echo "$payload" | jq -r '.tool_use_name // .tool_name // ""' 2>/dev/null || echo "")
-file_path=$(echo "$payload" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
+source "$(dirname "$0")/lib.sh"
 
-# Scope: Write or Edit only
-[[ "$tool" == "Write" || "$tool" == "Edit" ]] || exit 0
+HOOK_INPUT=$(head -c 131072 || true)
+export HOOK_INPUT
+tool=$(parse_tool_name)
+file_path=$(parse_tool_file_path)
+
+# Scope: Write/Edit or Codex apply_patch only
+[[ "$tool" == "Write" || "$tool" == "Edit" || "$tool" == "apply_patch" ]] || exit 0
 
 # Extract content being written/edited
-if [[ "$tool" == "Write" ]]; then
-    content=$(echo "$payload" | jq -r '.tool_input.content // ""' 2>/dev/null)
-else
-    content=$(echo "$payload" | jq -r '.tool_input.new_string // ""' 2>/dev/null)
-fi
+content=$(parse_tool_content)
 [[ -n "$content" ]] || exit 0
+
+if [[ "$tool" == "apply_patch" ]]; then
+    file_path=$(printf '%s\n' "$content" |
+        awk '/^\*\*\* (Add|Update) File: / { sub(/^\*\*\* (Add|Update) File: /, ""); print; exit }')
+    content=$(printf '%s\n' "$content" |
+        sed -n 's/^+\([^+].*\)$/\1/p')
+fi
 
 # ============================================================
 # Block A: bash/sh polling loop detection

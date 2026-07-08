@@ -24,21 +24,26 @@
 
 set -uo pipefail
 
-payload=$(head -c 131072 || true)
-tool=$(echo "$payload" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
-file_path=$(echo "$payload" | jq -r '.tool_input.file_path // ""' 2>/dev/null || echo "")
+source "$(dirname "$0")/../../harness-core/hooks/lib.sh"
 
-# Scope: Write or Edit on .sh files
-[[ "$tool" == "Write" || "$tool" == "Edit" ]] || exit 0
-[[ "$file_path" =~ \.sh$ ]] || exit 0
+HOOK_INPUT=$(head -c 131072 || true)
+export HOOK_INPUT
+tool=$(parse_tool_name)
+file_path=$(parse_tool_file_path)
 
-# Extract content being written
-if [[ "$tool" == "Write" ]]; then
-  content=$(echo "$payload" | jq -r '.tool_input.content // ""' 2>/dev/null)
-else
-  content=$(echo "$payload" | jq -r '.tool_input.new_string // ""' 2>/dev/null)
-fi
+# Scope: Write/Edit or Codex apply_patch on .sh files
+[[ "$tool" == "Write" || "$tool" == "Edit" || "$tool" == "apply_patch" ]] || exit 0
+
+content=$(parse_tool_content)
 [[ -n "$content" ]] || exit 0
+
+if [[ "$tool" == "apply_patch" ]]; then
+  file_path=$(printf '%s\n' "$content" |
+    awk '/^\*\*\* (Add|Update) File: / { sub(/^\*\*\* (Add|Update) File: /, ""); print; exit }')
+  content=$(printf '%s\n' "$content" |
+    sed -n 's/^+\([^+].*\)$/\1/p')
+fi
+[[ "$file_path" =~ \.sh$ ]] || exit 0
 
 # Bypass: explicit annotation
 if echo "$content" | grep -q "canonical-pattern-reviewed"; then

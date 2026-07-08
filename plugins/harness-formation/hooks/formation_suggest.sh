@@ -17,7 +17,13 @@
 
 set -uo pipefail
 
-PROMPT="$(cat)"
+source "$(dirname "$0")/../../harness-core/hooks/lib.sh"
+
+HOOK_INPUT=$(cat)
+export HOOK_INPUT
+
+PROMPT="$(parse_prompt)"
+[ -z "$PROMPT" ] && PROMPT="$HOOK_INPUT"
 MODE="${FORMATION_SUGGEST_MODE:-shadow}"
 LOG="${FORMATION_SUGGEST_LOG:-$HOME/.local/log/formation_suggest.log}"
 mkdir -p "$(dirname "$LOG")"
@@ -41,7 +47,7 @@ if echo "$PROMPT" | grep -qiE "$TRIGGERS"; then
     # Single-keyword inject. njslyr7 is the unambiguous formation-context
     # token that user reaches for when they want a peer-pane worker. Claude
     # sees it as additional context and triggers the formation skill.
-    echo "njslyr7"
+    emit_context "UserPromptSubmit" "njslyr7"
   fi
 fi
 

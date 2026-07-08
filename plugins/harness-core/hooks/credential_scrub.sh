@@ -27,9 +27,9 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # ----------------------------------------------------------------------------
 # Source lib.sh for parse_tool_output / active_jsonl / hook_log / emit_context
 # ----------------------------------------------------------------------------
-if [ -f "$HOME/.claude/hooks/lib.sh" ]; then
+if [ -f "$HERE/lib.sh" ]; then
     # shellcheck source=/dev/null
-    source "$HOME/.claude/hooks/lib.sh"
+    source "$HERE/lib.sh"
 else
     exit 0  # fail-safe: lib.sh absent → can't operate
 fi

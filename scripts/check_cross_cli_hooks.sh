@@ -33,8 +33,10 @@ for hook in "${ALL_HOOKS[@]}"; do
     plugin="${hook%%/*}"
     name="${hook##*/}"
 
-    # 1. file exists
-    [[ -f "$PLUGINS_DIR/$hook" ]] || err "$hook: file missing under plugins/"
+    # 1. file exists. Overlay entries may include arguments when the owning
+    # hooks.json command is not a simple `bash <file>` shape.
+    hook_file="${hook%% *}"
+    [[ -f "$PLUGINS_DIR/$hook_file" ]] || err "$hook: file missing under plugins/"
 
     # 2. registered in owning plugin's hooks.json
     hooks_json="$PLUGINS_DIR/$plugin/hooks/hooks.json"
@@ -51,7 +53,24 @@ if [[ $LIVE -eq 1 ]]; then
     if [[ -f "$CODEX_CONFIG" ]]; then
         want=$(mktemp); got=$(mktemp)
         {
-            jq -r '.codex.hooks[]' "$OVERLAY" | sed "s|^|bash $PLUGINS_DIR/|"
+            python3 - "$OVERLAY" "$HARNESS_DIR" <<'PYEOF'
+import json, sys
+overlay_path, harness_dir = sys.argv[1], sys.argv[2]
+plugins_dir = f"{harness_dir}/plugins"
+overlay = json.load(open(overlay_path))["codex"]
+lookup = {}
+for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
+    hooks_json = json.load(open(f"{plugins_dir}/{plugin}/hooks/hooks.json"))
+    for blocks in hooks_json.get("hooks", {}).values():
+        for blk in blocks:
+            for h in blk.get("hooks", []):
+                name = h["command"].split("/hooks/")[-1]
+                lookup.setdefault(f"{plugin}/hooks/{name}", h["command"])
+for hook in overlay["hooks"]:
+    plugin = hook.split("/", 1)[0]
+    plugin_root = f"{plugins_dir}/{plugin}"
+    print(lookup[hook].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
+PYEOF
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
         } | sort > "$want"
         grep -E '^command = ' "$CODEX_CONFIG" | sed 's/^command = "//;s/"$//' \

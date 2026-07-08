@@ -62,7 +62,7 @@ overlay_path, harness_dir = sys.argv[1], sys.argv[2]
 plugins_dir = f"{harness_dir}/plugins"
 overlay = json.load(open(overlay_path))["codex"]
 
-# Look up (event, matcher, timeout) for each selected hook from the owning
+# Look up (event, matcher, timeout, command) for each selected hook from the owning
 # plugin's hooks.json — the same SSOT that drives Claude Code.
 lookup = {}
 for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
@@ -72,7 +72,8 @@ for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
             matcher = blk.get("matcher")
             for h in blk.get("hooks", []):
                 name = h["command"].split("/hooks/")[-1]
-                lookup[f"{plugin}/hooks/{name}"] = (event, matcher, h.get("timeout", 5))
+                lookup.setdefault(f"{plugin}/hooks/{name}", (
+                    event, matcher, h.get("timeout", 5), h["command"]))
 
 # Group by (event, matcher) preserving overlay order.
 groups = collections.OrderedDict()
@@ -80,8 +81,8 @@ for hook in overlay["hooks"]:
     if hook not in lookup:
         print(f"error: {hook} not registered in its plugin hooks.json", file=sys.stderr)
         sys.exit(1)
-    event, matcher, timeout = lookup[hook]
-    groups.setdefault((event, matcher), []).append((hook, timeout))
+    event, matcher, timeout, command = lookup[hook]
+    groups.setdefault((event, matcher), []).append((hook, timeout, command))
 sys.path.insert(0, f"{harness_dir}/scripts/lib")
 from cross_cli_externals import resolve  # noqa: E402
 for ext in resolve(overlay_path, "codex", harness_dir):
@@ -100,7 +101,10 @@ for (event, matcher), entries in groups.items():
         if entry[0] is None:
             command, timeout = entry[2], entry[1]
         else:
-            command, timeout = f"bash {plugins_dir}/{entry[0]}", entry[1]
+            plugin = entry[0].split("/", 1)[0]
+            plugin_root = f"{plugins_dir}/{plugin}"
+            command = entry[2].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
+            timeout = entry[1]
         print(f"\n[[hooks.{event}.hooks]]")
         print('type = "command"')
         print(f'command = "{command}"')

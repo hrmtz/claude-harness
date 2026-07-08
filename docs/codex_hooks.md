@@ -164,16 +164,27 @@ re-trust.
 ## What each hook does in Codex
 
 The authoritative hook set lives in `plugins/cross_cli_hooks.json` (`codex`
-section) — as of gh #55 it includes the full cross-CLI gate set (sanada,
-bash_command_guard, branch_policy, pg_rotation, pipeline_preflight,
-phase_review, long_task_advisor) plus credential_value_scrub (PostToolUse),
-admission_reminder (UserPromptSubmit), and the hippocampus SessionStart hook.
-Hook behavior is identical to Claude Code — same scripts, same pattern
-catalogs. Notable Codex-specific point:
+section). It includes the portable Bash gates (sanada, bash_command_guard,
+branch_policy, pg_rotation, pipeline_preflight, phase_review,
+long_task_advisor), patch-aware Write/Edit rails (`check_zsh_reserved_vars`,
+`check_early_check_timer`, `ssh_fanout_canonical_check`), Stop hooks
+(`stall_autocontinue`, `sr_depth_gate`), Bash PostToolUse hooks
+(`credential_value_scrub`, `credential_scrub`, `self_check_reminder`,
+`vastai_create_followup_check`), UserPromptSubmit hooks (`admission_reminder`,
+`code_review_suggest`, `formation_suggest`), and SessionStart context
+(`temporal_anchor`, hippocampus injector, codex tmux self-name). Hook behavior
+uses the same scripts and pattern catalogs where the Codex payload shape is
+compatible. Notable Codex-specific points:
 
 | Hook | Event | Codex-specific note |
 |---|---|---|
 | `credential_value_scrub.sh` | PostToolUse / Bash | Uses `transcript_path` from hook JSON to locate the Codex session file under `~/.codex/sessions/`. |
+| `credential_scrub.sh` | PostToolUse / Bash and compatible tool events | Sources repo-local `lib.sh`, then uses `transcript_path` rather than Claude project scanning when available. |
+| `formation_suggest.sh` | UserPromptSubmit | Emits JSON `additionalContext` so Codex honors the hint when `FORMATION_SUGGEST_MODE=active`. |
+| `sr_depth_gate.py` | Stop | Claude also wires this on `SubagentStop`; Codex overlay uses the Stop hook. |
+| `check_zsh_reserved_vars.sh` | PreToolUse / `apply_patch` | Blocks only when the patch itself shows zsh context (`.zsh` path or zsh shebang), avoiding false positives on bash `.sh` hunks. |
+| `check_early_check_timer.sh`, `ssh_fanout_canonical_check.sh` | PreToolUse / `apply_patch` | Extract added lines from the patch body and run the existing warning checks against those lines. |
+| `credential_file_read_guard.sh` parity | PreToolUse / Bash | Codex has no standalone Read tool in the observed payloads; the same sensitive-file coverage is enforced through `bash_command_guard.sh` for `exec_command` reads. |
 
 ---
 
