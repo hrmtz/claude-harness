@@ -19,7 +19,14 @@ review state: `.dual-magi/round_1.json` (25 findings / 6 CRITICAL) → `round_2_
 | v0.2 | CLI 実挙動 5 件の誤りを訂正、INV を構造 rail 化 | round 1 (Claude ×3、25 findings) |
 | v0.3 | 脅威モデル (T1/T2) を導入、原典修理を scope に編入 | round 2 (codex REJECT、5 CRITICAL) |
 | v0.4 | **flock 採用で lock 問題を一掃 / 実装不能な gate 条件を削除 / DB grounding を scope 外へ / 移行手順を明記** | round 3 (codex REJECT、3 new) |
-| **v0.5** | **削除した機構への dangling reference を除去** (§2 図 / §3 tree / §4.4 が `mkdir` lock と `nonce` を規範として残していた = doc 内矛盾) | round 4 (codex REJECT、**new 0**、CRITICAL 1 = 自己矛盾) |
+| v0.5 | **削除した機構への dangling reference を除去** (§2 図 / §3 tree / §4.4 が `mkdir` lock と `nonce` を規範として残していた = doc 内矛盾) | round 4 (codex REJECT、**new 0**、CRITICAL 1 = 自己矛盾) |
+| — | **round 5 = codex `GO` / findings 0 / grounding PASS → PLATEAU** (`.dual-magi/state.json`) | round 5 |
+| **v0.6** | **G8 / G9 を追加** (= 実装後 bug-hunt が発見: gate が verdict field しか見ず、CRITICAL を抱えた `REVISE` に plateau を与えていた。grounding FAIL も素通ししていた) | 実装 bug-hunt (design round ではない) |
+
+> **注**: plateau marker は **v0.5 の `artifact_sha` に対して**発行された。v0.6 の編集で doc の sha は変わったため、
+> 私自身の G3 assert により **その marker は現在の doc を certify しない**。これは仕様どおりの挙動であり、
+> 「design が実装後に変わったなら、plateau は取り直せ」という不変条件が自分自身に適用された記録として残す。
+> v0.6 の変更は gate を **厳しくする**方向 (= 追加 assert) のみで、緩めていない。
 
 ---
 

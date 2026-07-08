@@ -23,8 +23,11 @@ PATTERNS = [
     # DSN userinfo: scheme://user:secret@host  -> keep scheme/user/host shape
     (re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<user>[^:/@\s]+):(?P<pw>[^@/\s]+)@"),
      lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}@"),
-    # PGPASSWORD=... / PASSWORD=... / *_TOKEN=... / *_SECRET=... / *_KEY=...
-    (re.compile(r"\b(?P<k>[A-Z_]*(?:PASSWORD|PASSWD|TOKEN|SECRET|APIKEY|API_KEY))\s*=\s*(?P<v>[^\s'\"]+)"),
+    # KEY=VALUE secrets. Case-insensitive, and the name may end in _KEY: AWS_SECRET_ACCESS_KEY=,
+    # ANTHROPIC_API_KEY=, and libpq's lowercase conninfo `password=` all have to be caught.
+    # Anchor on a name that ENDS in a secret word so `--json-schema key=` style flags are unaffected.
+    (re.compile(r"(?i)\b(?P<k>[a-z0-9_]*(?:password|passwd|token|secret|api_?key|access_key|_key))"
+                r"\s*=\s*(?P<v>[^\s'\"]+)"),
      lambda m: f"{m.group('k')}={REDACTED}"),
     # Bearer tokens
     (re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._\-]{12,}"), lambda m: f"Bearer {REDACTED}"),

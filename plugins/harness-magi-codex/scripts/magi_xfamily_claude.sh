@@ -29,6 +29,9 @@ usage() { echo "usage: $0 <doc-path> <round> <prior-findings-json|-> <out-prefix
 DOC_PATH="$1"; ROUND="$2"; PRIOR="$3"; OUT_PREFIX="$4"
 [ -f "$DOC_PATH" ] || { echo "magi-xfamily: doc not found: $DOC_PATH" >&2; exit 64; }
 [ -f "$SCHEMA_FILE" ] || { echo "magi-xfamily: schema not found: $SCHEMA_FILE" >&2; exit 64; }
+# ROUND is embedded in the FAILED sentinel as an integer; reject a non-numeric label here rather
+# than crashing the sentinel writer on the failure path (which would silently break fail-closed).
+case "$ROUND" in ''|*[!0-9]*) echo "magi-xfamily: round must be an integer: $ROUND" >&2; exit 64 ;; esac
 
 STATE_DIR="$(dirname "$OUT_PREFIX")"
 mkdir -p "$STATE_DIR"
@@ -49,13 +52,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # --- INV-7: flock. Kernel releases on fd close, including SIGKILL. ------------
-magi_lock_acquire "$STATE_DIR/.xfamily.lock" || {
-    echo "magi-xfamily: lock held (recursion or concurrent review of this doc)" >&2
-    exit 3
-}
-
-# --- prerequisites: fail closed, and say why ----------------------------------
-command -v claude >/dev/null 2>&1 || { echo "magi-xfamily: claude CLI not found" >&2; exit 2; }
+# magi_lock_acquire returns 1 for contention and 2 for "cannot open the lock file". Do not
+# conflate them: an unwritable state dir is an I/O fault (fail closed), not a recursion guard.
+lock_rc=0
+magi_lock_acquire "$STATE_DIR/.xfamily.lock" || lock_rc=$?
+case "$lock_rc" in
+    0) ;;
+    1) echo "magi-xfamily: lock held (recursion or concurrent review of this doc)" >&2; exit 3 ;;
+    *) echo "magi-xfamily: cannot acquire lock (I/O error) in $STATE_DIR" >&2; exit 2 ;;
+esac
 
 MODEL="${MAGI_XFAMILY_MODEL:-claude-fable-5}"
 TIMEOUT_S="${MAGI_XFAMILY_TIMEOUT_S:-900}"
@@ -74,6 +79,24 @@ rm -f "$FINDINGS_OUT" "$META_OUT" "$FAILED_OUT"
 
 ARTIFACT_SHA="$(sha256sum "$DOC_PATH" | cut -d' ' -f1)"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+_fail_closed() {
+    local reason="$1"
+    python3 - "$FAILED_OUT" "$reason" "$ROUND" "$ARTIFACT_SHA" <<'PY'
+import json, sys
+out, reason, rnd, sha = sys.argv[1:5]
+json.dump({"verdict": "UNPARSEABLE", "reason": reason, "round": int(rnd),
+           "artifact_sha": sha}, open(out, "w"), indent=2)
+PY
+    echo "magi-xfamily: FAIL-CLOSED ($reason). No plateau may be claimed. -> $FAILED_OUT" >&2
+    exit 2
+}
+
+# --- prerequisites -------------------------------------------------------------
+# Checked AFTER the stale-artifact rm and via _fail_closed: a missing CLI must leave no prior
+# round's findings on disk (the gate would certify them) and must write the sentinel the
+# fail-closed contract promises.
+command -v claude >/dev/null 2>&1 || _fail_closed "claude CLI not found"
 
 # --- build the prompt; deliver on stdin, never in argv -------------------------
 # argv is world-readable via /proc/<pid>/cmdline for the whole run.
@@ -126,18 +149,6 @@ rc=$?
 set -e
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-_fail_closed() {
-    local reason="$1"
-    python3 - "$FAILED_OUT" "$reason" "$ROUND" "$ARTIFACT_SHA" <<'PY'
-import json, sys
-out, reason, rnd, sha = sys.argv[1:5]
-json.dump({"verdict": "UNPARSEABLE", "reason": reason, "round": int(rnd),
-           "artifact_sha": sha}, open(out, "w"), indent=2)
-PY
-    echo "magi-xfamily: FAIL-CLOSED ($reason). No plateau may be claimed. -> $FAILED_OUT" >&2
-    exit 2
-}
 
 [ $rc -eq 0 ] || _fail_closed "claude exited $rc (timeout=${TIMEOUT_S}s)"
 

@@ -82,7 +82,7 @@ The model does not get to say review is finished. `magi_plateau_gate.sh` does, a
 | `G6` | a `session_id` resolving to no transcript (meta hand-written; adapter never ran) |
 | `G7` | a `REJECT` **or `REVISE`** verdict |
 | `G8` | any unresolved `REJECT`/`CRITICAL` finding — a `GO-WITH-REVISE` hiding a critical is not a plateau |
-| `G9` | a self-reported `schema_grounding_verdict: FAIL`, or commands claimed while the transcript shows no tool use at all |
+| `G9` | ungrounded rounds: a self-reported `schema_grounding_verdict: FAIL`, an **empty** `verify_commands_executed`, or commands claimed while the transcript shows no tool use |
 
 gh #195's root cause was an AI forgetting a behavioral rule. A sentence in a SKILL.md is not a
 rail. This is.

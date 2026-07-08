@@ -25,6 +25,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
+SCRUB="$SELF_DIR/magi_scrub.py"
 CANON="$REPO_ROOT/plugins/harness-magi/skills"
 
 usage() { echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt]" >&2; exit 64; }
@@ -132,8 +133,27 @@ for p in "${PERSONAS[@]}"; do
     if [ ! -s "$out" ] || ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$out" 2>/dev/null; then
         echo "fanout: reviewer $p produced no valid output" >&2
         rc=1
+        continue
+    fi
+    # INV-5: `codex exec -o` wrote this file directly, so it has never seen the scrubber. A
+    # persona following the grounding mandate can land a DSN in verify_commands_executed; the
+    # README promises redaction "before anything hits disk", so redact in place now.
+    if scrubbed="$(python3 "$SCRUB" < "$out")"; then
+        printf '%s\n' "$scrubbed" > "$out"
+    else
+        echo "fanout: scrub failed for $p; removing its output rather than leaving it unredacted" >&2
+        rm -f "$out"
+        rc=1
     fi
 done
 
-[ $rc -eq 0 ] && echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"
-exit $rc
+if [ $rc -ne 0 ]; then
+    # Remove this run's partial outputs. We hold the round lock, so these files are ours.
+    # Leaving them behind would make the INV-3 sibling check reject every subsequent retry
+    # (exit 5) forever -- a permanent dead-end after one transient codex timeout.
+    echo "fanout: clearing partial round-$ROUND outputs so a retry is possible" >&2
+    for p in "${PERSONAS[@]}"; do rm -f "$OUT_DIR/round_${ROUND}_${p}.json"; done
+    exit $rc
+fi
+
+echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

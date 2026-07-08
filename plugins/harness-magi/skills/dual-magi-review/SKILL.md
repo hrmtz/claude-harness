@@ -403,7 +403,7 @@ skill 内動作:
 
 - `codex exec` exit non-zero → log + retry 1 回、 失敗継続なら continue、 但し round に **`external-failed` を mark**
 - timeout → kill + retry なし、 continue、 但し **`external-failed`**
-- output parse 失敗 → raw output を保存 + warning、 **`external-failed`**
+- output parse 失敗 → **raw output を round N+1 entry に保存** (= 次 round の reviewer が現物を見られる位置。 v0.6.0 の挙動を維持) + warning、 **`external-failed`**
 
 **`external-failed` が付いた round を含む review は、 `plateau` / 「plateau CONFIRM」 を report に書いてはならない。**
 「internal-only で継続できた」 ことと 「cross-family round が走った」 ことは別物である。

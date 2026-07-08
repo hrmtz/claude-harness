@@ -90,6 +90,28 @@ denied "G8 GO-WITH-REVISE with a CRITICAL finding" "$P"
 P="$TMP/g9"; mkfind "$P" "GO" 0 "FAIL"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G9 schema_grounding_verdict=FAIL" "$P"
 
+# G9: PASS with an empty command list is the ungrounded state -- constrained decoding will
+# happily emit it. (Code review found this bypassing every assert.)
+P="$TMP/g9b"; mkfind "$P" "GO" 0 "PASS"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+denied "G9 grounding=PASS with zero commands" "$P"
+
+# A denial must REVOKE a marker previously granted for the same doc revision.
+if [ -n "$REAL_SID" ]; then
+  P="$TMP/revoke"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  if ls "$TMP"/PLATEAU.* >/dev/null 2>&1; then
+      # now corrupt the round the marker certified, and re-gate
+      mkfind "$P" "REJECT" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+      "$GATE" "$DOC" "$P" >/dev/null 2>&1
+      ls "$TMP"/PLATEAU.* >/dev/null 2>&1 \
+          && bad "denial left a previously granted marker in place" \
+          || ok "denial revokes the previously granted marker"
+  else
+      bad "setup: valid round did not produce a marker"
+  fi
+  rm -f "$TMP"/PLATEAU.*
+fi
+
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
 if [ -n "$REAL_SID" ]; then
   P="$TMP/g2ok"; mkfind "$P" "GO" 3; mkmeta "$P" "us.anthropic.claude-fable-5" "$SHA" 4 "$REAL_SID"

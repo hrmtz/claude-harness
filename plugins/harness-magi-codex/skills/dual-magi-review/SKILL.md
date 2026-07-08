@@ -59,7 +59,7 @@ refuses unless it can confirm all of:
 | G6 | a `session_id` that resolves to no transcript (meta hand-written, adapter never ran) |
 | G7 | a `REJECT` or `REVISE` verdict |
 | G8 | any unresolved `REJECT`/`CRITICAL` finding, whatever the headline verdict says |
-| G9 | a self-reported `schema_grounding_verdict: FAIL`, or commands claimed while the transcript shows no tool use |
+| G9 | ungrounded rounds: `schema_grounding_verdict: FAIL`, an **empty** `verify_commands_executed`, or commands claimed while the transcript shows no tool use |
 
 If the gate exits non-zero, the design is **not** at plateau. Do not say it is. Do not proceed to
 the irreversible step. This is a structural rail precisely because gh #195's root cause was an AI

@@ -58,6 +58,10 @@ for skill in dual-magi-review ultramagi; do
         else
             cp -R "$src" "$dst" || { echo "[harness-magi-codex] error: cp failed" >&2; exit 1; }
         fi
+        # Ownership marker: uninstall removes a copied dir ONLY if it finds this. Without it,
+        # a user's own hand-written skill of the same name is indistinguishable from ours and
+        # would be rm -rf'd.
+        printf 'installed by harness-magi-codex from %s\n' "$src" > "$dst/.harness-magi-codex"
         echo "[harness-magi-codex] copied $dst"
     fi
 done

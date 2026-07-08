@@ -16,8 +16,13 @@ for skill in dual-magi-review ultramagi; do
         else
             echo "[harness-magi-codex] skipping $dst (symlink points elsewhere)" >&2
         fi
-    elif [ -d "$dst" ] && [ -f "$dst/SKILL.md" ]; then
+    elif [ -d "$dst" ] && [ -f "$dst/.harness-magi-codex" ]; then
+        # Only remove a copied dir carrying OUR ownership marker. "contains a SKILL.md" would
+        # also match a user's hand-written skill of the same name -- an irreversible rm -rf of
+        # someone else's work.
         rm -rf "$dst"; echo "[harness-magi-codex] removed $dst"
+    elif [ -d "$dst" ]; then
+        echo "[harness-magi-codex] refusing to remove $dst (no ownership marker; not ours)" >&2
     else
         echo "[harness-magi-codex] not installed: $dst"
     fi

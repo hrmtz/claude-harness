@@ -41,7 +41,17 @@ fails = []
 def fail(tag, msg):
     fails.append(f"{tag}: {msg}")
 
+actual_sha = hashlib.sha256(open(doc, "rb").read()).hexdigest()
+marker = os.path.join(state_dir, f"PLATEAU.{actual_sha[:16]}")
+
 def bail():
+    # A denial must also revoke any marker previously granted for this same revision.
+    # Otherwise a granted marker outlives the provenance it certified: a later failed re-run
+    # correctly deletes findings+meta, the gate then denies -- and an orchestrator checking
+    # "does PLATEAU.<sha> exist?" still proceeds to the irreversible step.
+    if os.path.exists(marker):
+        os.unlink(marker)
+        fails.append(f"revoked stale marker {os.path.basename(marker)}")
     print("PLATEAU DENIED:", *fails, sep="\n  - ", file=sys.stderr)
     sys.exit(1)
 
@@ -93,7 +103,6 @@ elif not all(cross_family(k) for k in keys):
     fail("G2", f"modelUsage keys {keys} are not all cross-family")
 
 # G3 -- the round reviewed THIS revision of THIS doc (kills stale-round reuse).
-actual_sha = hashlib.sha256(open(doc, "rb").read()).hexdigest()
 if meta.get("artifact_sha") != actual_sha:
     fail("G3", f"artifact_sha mismatch: round reviewed {str(meta.get('artifact_sha'))[:16]}…, "
                f"doc is now {actual_sha[:16]}… (stale round, or doc edited after review)")
@@ -136,16 +145,23 @@ if blocking:
     fail("G8", f"{len(blocking)} unresolved REJECT/CRITICAL finding(s): {titles}")
 
 # G9 -- the round was actually grounded.
-# Self-reported grounding is honest in the T1 model (the prompt orders a FAIL self-report when
-# ungrounded), so a FAIL must block. Additionally: constrained decoding will FABRICATE required
-# fields, so cross-check the self-report against the transcript. We do not demand an exact
-# command-for-command match -- that would false-fail on paraphrase. We demand the weaker,
-# non-flaky invariant: if the reviewer claims it ran commands, the transcript must show it used
-# tools at all. Detects omission and inconsistency; NOT semantic truth.
+#
+# Three independent ways a round can be ungrounded, and all three must block. Checking only
+# `grounding == "FAIL"` is not enough: constrained decoding FABRICATES required fields, so a
+# reviewer that ran nothing can still emit PASS with an empty command list, and every other
+# assert passes. An empty verify_commands_executed IS the ungrounded state -- the prompt
+# contract makes "PASS with zero commands" impossible for an honest reviewer.
+#
+# We do not demand a command-for-command transcript match: that would false-fail on paraphrase.
+# We demand the weaker, non-flaky invariant that the reviewer used tools at all.
+# Detects omission and inconsistency; NEVER semantic truth.
 grounding = findings.get("schema_grounding_verdict")
 if grounding == "FAIL":
     fail("G9", "reviewer self-reported schema_grounding_verdict=FAIL")
-elif cmds and transcripts:
+elif not cmds:
+    fail("G9", f"grounding={grounding} but verify_commands_executed is empty "
+               f"(a grounded round must have run commands)")
+elif transcripts:
     tool_uses = 0
     try:
         with open(transcripts[0], encoding="utf-8") as fh:
@@ -168,7 +184,6 @@ elif cmds and transcripts:
 if fails:
     bail()
 
-marker = os.path.join(state_dir, f"PLATEAU.{actual_sha[:16]}")
 with open(marker, "w") as f:
     json.dump({"artifact": os.path.basename(doc), "artifact_sha": actual_sha,
                "verdict": verdict, "model_id": model_id,
