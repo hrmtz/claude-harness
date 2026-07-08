@@ -392,11 +392,29 @@ skill 内動作:
 - `codex login` 通過済 (= `codex doctor` で auth status)
 - 対象 repo 内に対象 doc 存在
 
-#### error handling
+#### error handling (= v0.6.1、 S1 stage。 詳細 `docs/designs/CODEX_MAGI_MIRROR.md` §7.1)
 
-- `codex exec` exit non-zero → log + retry 1 回、 失敗継続なら fail-open (= mailbox adapter fallback)
-- timeout → kill + retry なしで fail-open
-- output parse 失敗 → raw output を round N+1 entry に保存 + warning
+> **不変条件**: cross-family round は plateau の **必要条件** (= v0.6.0)。 それが満たされないまま
+> 「plateau」 を名乗ることはできない。 fail-open は cross-family が opt-in だった v0.5 以前の名残であり、
+> 「skip が静かにできてしまう構造」 = gh #195 の root cause そのもの。
+
+以下は **既存 workflow を止めないための移行段階 (= S1)**。 継続するか否かの挙動は当面 fail-open のままだが、
+**plateau を名乗る資格は失われる**:
+
+- `codex exec` exit non-zero → log + retry 1 回、 失敗継続なら continue、 但し round に **`external-failed` を mark**
+- timeout → kill + retry なし、 continue、 但し **`external-failed`**
+- output parse 失敗 → raw output を保存 + warning、 **`external-failed`**
+
+**`external-failed` が付いた round を含む review は、 `plateau` / 「plateau CONFIRM」 を report に書いてはならない。**
+「internal-only で継続できた」 ことと 「cross-family round が走った」 ことは別物である。
+
+移行段階: **S1 (= 現在)** = 止めない、 但し plateau 不可 → S2 = `--no-cross-family <reason>` 明示時のみ継続 →
+S3 = fail-closed (= exit 非 0)。 「止める」 より先に 「plateau を名乗らせない」。 行動を壊さずに不変条件を回復する。
+
+構造 rail (= 文ではなく script) は `plugins/harness-magi-codex/scripts/magi_plateau_gate.sh` に実装済 (= G1-G7)。
+原典側にも同等の gate を入れるのが S2/S3 の作業 (= 原典は現在 provenance を一切記録していない)。
+Codex 側 provenance は実在する: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` の
+`session_meta` + `turn_context.model` (= 実測、 380 files)。
 
 ### `codex-mailbox` (= njslyr7 mailbox-based、 v0.3.0: per-project channel + spawn options)
 

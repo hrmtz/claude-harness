@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""mailbox-retention — trim the transient formation mailbox to a recent window.
+
+The mailbox (~/.njslyr7/mailbox/log.jsonl) is a transient inter-worker IPC device,
+NOT an archive. Its durable copy is captured elsewhere: each worker's session jsonl
+(which contains the injected mailbox exchanges) is ingested into hippocampus at the
+nightly 03:00 cron, and memories are ghost-dubbed at 03:30. So after 03:00 the prior
+mailbox content is redundant, and keeping months of it only grows blast-radius — a
+new agent that reads the whole log loads every past cluster's context (the
+2026-07-08 anagram-CVE safeguard-contamination incident), plus a growing leak and
+jq-breakage surface.
+
+Keeps: entries whose ts is within --keep-days, PLUS the last --keep-tail physical
+lines (a margin for active relays and undated fragments). Drops the rest.
+
+SAFETY
+- Relay-gated: a mailbox_relay daemon tracks a last_line offset into log.jsonl that
+  truncation would invalidate. If any relay is running, this SKIPS (exit 0). Run it
+  in a quiet post-03:30 window.
+- Snapshots the pre-trim log to <mailbox>/archive/log_pretrim_<ts>.jsonl.gz before
+  truncating and prunes archives older than --archive-days. Reversible.
+- Atomic write (tmp + os.replace); a parse error on a line never drops newer data.
+
+Usage: mailbox-retention [--keep-days N] [--keep-tail K] [--archive-days D] [--dry-run]
+Exit 0 = trimmed or skipped (both fine) · 2 = usage/IO error.
+"""
+from __future__ import annotations
+import argparse
+import datetime as dt
+import glob
+import gzip
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+MAILBOX = os.environ.get("FORMATION_MAILBOX", f"{HOME}/.njslyr7/mailbox/log.jsonl")
+
+
+def relay_active() -> bool:
+    try:
+        r = subprocess.run(["pgrep", "-f", "mailbox_relay"], capture_output=True)
+        return r.returncode == 0
+    except OSError:
+        # pgrep missing → be conservative, treat as active (skip)
+        return True
+
+
+def parse_ts(line: str):
+    try:
+        d = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    t = d.get("ts") if isinstance(d, dict) else None
+    if not t:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(t.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # normalize to aware (UTC) so comparison with the aware cutoff never raises
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--keep-days", type=int, default=2, help="keep entries newer than N days (default 2)")
+    ap.add_argument("--keep-tail", type=int, default=50, help="always keep the last K physical lines (default 50)")
+    ap.add_argument("--archive-days", type=int, default=14, help="prune gz snapshots older than D days (default 14)")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+
+    if not os.path.exists(MAILBOX):
+        print(f"mailbox-retention: no mailbox at {MAILBOX}; nothing to do")
+        return 0
+
+    if relay_active():
+        print("mailbox-retention: a mailbox_relay is active — skipping (truncation would "
+              "invalidate its last_line offset). Try again in a quiet window.")
+        return 0
+
+    with open(MAILBOX, encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    n = len(lines)
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=a.keep_days)
+    tail_start = max(0, n - a.keep_tail)
+
+    kept, dropped = [], []
+    for i, line in enumerate(lines):
+        keep = i >= tail_start          # tail margin (relays / undated fragments)
+        if not keep:
+            ts = parse_ts(line)
+            keep = (ts is not None and ts >= cutoff)
+        (kept if keep else dropped).append(line)
+
+    if not dropped:
+        print(f"mailbox-retention: {n} lines, none older than {a.keep_days}d + tail {a.keep_tail}; nothing to trim")
+        return 0
+
+    print(f"mailbox-retention: {n} lines -> keep {len(kept)}, drop {len(dropped)} "
+          f"(older than {a.keep_days}d, outside last {a.keep_tail})")
+    if a.dry_run:
+        print("  (dry-run: no changes)")
+        return 0
+
+    # snapshot before trim (reversible), then atomic replace
+    archdir = os.path.join(os.path.dirname(MAILBOX), "archive")
+    os.makedirs(archdir, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    snap = os.path.join(archdir, f"log_pretrim_{stamp}.jsonl.gz")
+    try:
+        with open(MAILBOX, "rb") as src, gzip.open(snap, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    except OSError as e:
+        print(f"mailbox-retention: snapshot failed ({e}); aborting without trimming")
+        return 2
+
+    tmp = MAILBOX + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("".join(kept))
+    os.replace(tmp, MAILBOX)
+    print(f"  trimmed; pre-trim snapshot -> {snap}")
+
+    # prune old snapshots
+    horizon = dt.datetime.now().timestamp() - a.archive_days * 86400
+    pruned = 0
+    for f in glob.glob(os.path.join(archdir, "log_pretrim_*.jsonl.gz")):
+        try:
+            if os.path.getmtime(f) < horizon:
+                os.remove(f); pruned += 1
+        except OSError:
+            pass
+    if pruned:
+        print(f"  pruned {pruned} snapshot(s) older than {a.archive_days}d")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
