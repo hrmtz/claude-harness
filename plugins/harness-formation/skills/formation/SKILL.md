@@ -84,8 +84,10 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
 - `--model` is omitted by default, so the worker inherits the global default
   model; set it explicitly when a worker needs a different tier than the
   session default.
-- Splits the current tmux window, launches `claude --session-name
-  formation-<name>` in the new pane, paste-loads the briefing.
+- **Placement defaults to a new tmux window** (isolates the worker's SessionStart
+  window-rename from the parent — the ember-tanuki incident); pass `--split` for
+  the old split-pane behavior. Either way it launches `claude --session-name
+  formation-<name>` in the new pane and paste-loads the briefing.
 - Registers the worker in `~/.njslyr7/formation/registry.jsonl`.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.

@@ -10,7 +10,8 @@ Reads:
 Detects:
   T1 stale (heartbeat older than threshold)
   T2 eta overrun (elapsed_hours / eta_hours > factor)
-  T3 progress stall (sampler metric not advancing)
+  (T3 progress-stall — sampler metric not advancing — is planned but NOT yet
+   implemented; evaluate() currently fires T1 and T2 only.)
 
 Reports:
   Discord notify (via local discord-notify CLI if available)

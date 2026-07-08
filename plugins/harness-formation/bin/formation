@@ -112,10 +112,10 @@ Parent (lead) commands:
                                           Create new window (default; isolates worker SessionStart
                                           rename-window from parent pane) or split current window (--split)
                                           Launches agent, injects briefing.
-                                          Sandbox default is per-cli (#38):
-                                            claude => normal sandbox/approval (security win)
-                                            codex  => bypass (codex must write ~/.njslyr7/mailbox
-                                                      to ack its briefing via 'formation report')
+                                          Sandbox default (2026-07-08): bypass for BOTH clis
+                                            (a normal-approval worker stalls at its first
+                                             permission prompt; codex also needs to write
+                                             ~/.njslyr7/mailbox to ack via 'formation report')
                                           --bypass-sandbox forces full privilege bypass
                                           (claude bypassPermissions / codex dangerously-bypass).
                                           --sandbox forces normal sandbox/approval mode.

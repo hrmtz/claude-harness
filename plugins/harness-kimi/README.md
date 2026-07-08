@@ -55,9 +55,15 @@ rm ~/.kimi-code/harness-scrub.disabled
 
 ## Limitations
 
-- Kimi に hook API がないため、**実行前のリアルタイム block はできない**。AGENTS.md が遵守を促す。
-- Scrubber は事後処理。漏洩検知後は必ず該当 credential を rotate すること。
-- 現状は Bash 経由の credential leak を主眼としている。Read/Edit/Write の PreToolUse guard は Kimi 側で interception できない。
+- Kimi に native hook API は無いが、`BASH_ENV` + `$BASH_EXECUTION_STRING` の
+  interception で **Bash の実行前 preventive block を実現している** (opt-in:
+  `install-kimi-bash-guard.sh` + `HARNESS_KIMI_BASH_GUARD=1`)。絶対パスの
+  `/bin/bash -c` も捕捉する。仕組みの詳細 → [docs/kimi_hooks.md](../../docs/kimi_hooks.md)。
+  AGENTS.md (behavioral) はその上位の遵守 rail。
+- 実行前 block の対象は **Bash 経由に限定**。Read/Edit/Write など非 Bash の操作は
+  Kimi 側で interception できない (native hook API 不在)。
+- Scrubber は事後処理 (detective)。`kimi_wire_watcher` が毎分 cron で wire.jsonl を
+  再走査する 2nd wall だが、漏洩検知後は必ず該当 credential を rotate すること。
 
 ## Files
 
@@ -66,3 +72,10 @@ rm ~/.kimi-code/harness-scrub.disabled
 - `kimi_session_scrub.sh` — cron から呼ばれる wrapper
 - `install-kimi-agents.sh` / `install-kimi-scrubber.sh` / `uninstall-kimi-scrubber.sh`
 - `kimi-wrapper.sh` / `install-kimi-wrapper.sh` — `kimi` コマンドをラップして AGENTS.md 自動配置
+- **BASH_ENV preventive guard**: `guard-env.sh` (BASH_ENV entrypoint) / `guard-check.sh`
+  (判定) / `guarded-bash.sh` / `install-kimi-bash-guard.sh` — Bash 実行前 block (1st wall)
+- **detective 2nd wall**: `kimi_wire_watcher.py` / `kimi_wire_watcher.sh` /
+  `install-kimi-watcher.sh` / `uninstall-kimi-watcher.sh` — 毎分 cron で wire.jsonl を
+  再走査し bash_command_guard を後追い適用、gap を discord-bot に alert
+- **skills port**: `install-kimi-skills.sh` + `skills/magi` / `skills/bug-hunt` — Kimi 側の
+  magi / bug-hunt skill 移植
