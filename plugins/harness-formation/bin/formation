@@ -146,29 +146,30 @@ USAGE
 }
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
-# Input $2 (bypass): "" => pick per-cli default, "1"/"0" => explicit override.
-# Per-cli default: codex => 1 (bypass) because the worker must write
-# ~/.njslyr7/mailbox to ack its briefing via `formation report` — a sandboxed
-# codex worker dies before that ack. claude => 0 (normal sandbox; security win,
-# claude does not need to escape the workspace for the formation protocol).
+# Input $2 (bypass): "" => pick default, "1"/"0" => explicit override.
+# Default (user directive 2026-07-08): 1 (bypass) for BOTH clis — an autonomous
+# worker that stalls on approval prompts is useless. codex always needed bypass
+# (must write ~/.njslyr7/mailbox to ack via `formation report`); claude now
+# matches so workers run unattended. Opt back into normal approval with --sandbox.
 # Echoes 1 (bypass) or 0 (normal sandbox).
 resolve_bypass_default() {
   local cli="$1" bypass="$2"
   if [[ -n "$bypass" ]]; then echo "$bypass"; return; fi
-  if [[ "$cli" == "codex" ]]; then echo 1; else echo 0; fi
+  # user directive 2026-07-08: formation workers default to BYPASS for BOTH clis.
+  # A normal-approval claude worker stalls at its first permission prompt and the
+  # lead has to babysit it (observed twice this session), defeating the point of
+  # an autonomous peer. --sandbox is the explicit opt-out back to normal approval.
+  echo 1
 }
 
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
   # window 名を巻き込み identity drift。 別 window 化で隔離。 --split で旧挙動)
-  # Sandbox default is per-cli (#38 decision):
-  #   claude => normal sandbox/approval (security win; claude does not need to
-  #             write outside the workspace for the formation protocol).
-  #   codex  => bypass, because a codex worker genuinely needs to write
-  #             ~/.njslyr7/mailbox to run `formation report` and ack its
-  #             briefing; a sandboxed codex worker dies before that ack.
-  # bypass is tri-state: "" = pick the per-cli default, 1 = force bypass
+  # Sandbox default (user directive 2026-07-08): BYPASS for both clis, so a
+  # spawned worker runs unattended instead of stalling at approval prompts.
+  # Use --sandbox to force normal approval for a specific spawn.
+  # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
   local cli="claude" model="" placement="new-window" bypass=""
