@@ -123,6 +123,25 @@ OK to tag + push?
 Wait for explicit confirmation. Acceptable: `OK`, `go`, `yes`, an alternative
 version (`make it v2.0.0`), or `pick a different theme`.
 
+### 4b. Doc-drift gate (MINOR / MAJOR only)
+
+A feature-bearing release is where docs most often drift. Before tagging a
+**MINOR or MAJOR**, run both layers of the anti-drift check
+(`docs/designs/ANTI_DOC_DRIFT.md`):
+
+1. **Deterministic** — run the public-contract tests and require exit 0:
+   ```bash
+   for t in $(git ls-files 'plugins/*/tests/test_docs_*.py'); do python3 "$t" || exit 1; done
+   ```
+   A DRIFT (exit 1) means a documented contract no longer matches the code — fix the
+   doc (or the test's premise) before tagging. A raised error means the test's parser
+   is stale — fix the test, don't tag around it.
+2. **Generative** — for a MINOR that adds a subsystem, or any MAJOR, run
+   `docs/DOC_AUDIT_RUNBOOK.md` (the human-gated sweep for *thin* docs the tests can't
+   see). Skippable for a docs/fix-only MINOR; note the skip.
+
+PATCH releases skip this gate.
+
 ### 5. Tag + push
 
 ```bash

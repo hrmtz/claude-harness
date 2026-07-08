@@ -1,6 +1,6 @@
 # harness-core
 
-A defense-in-depth set of Claude Code hooks against credential leaks and workflow lapses. The full wired set is in `hooks/hooks.json` (authoritative — currently 18 hooks); this README documents the original core trio in detail, but the plugin has grown well beyond it (credential scrubbers, branch-policy / rotation-propagation / 真田 auto-backup guards, session-context rails, and a Stop/SubagentStop **security-review depth gate** — `sr_depth_gate.py`, which blocks a `/security-review` no-findings verdict when a changed file was never opened with Read — etc.).
+A defense-in-depth set of Claude Code hooks against credential leaks and workflow lapses. The full wired set is in `hooks/hooks.json` (authoritative — the count lives there, deliberately not copied into prose that would drift); this README documents the original core trio in detail, but the plugin has grown well beyond it (credential scrubbers, branch-policy / rotation-propagation / 真田 auto-backup guards, session-context rails, and a Stop/SubagentStop **security-review depth gate** — `sr_depth_gate.py`, which blocks a `/security-review` no-findings verdict when a changed file was never opened with Read — etc.).
 
 ## Hooks
 

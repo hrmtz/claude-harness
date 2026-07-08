@@ -1,5 +1,5 @@
 {
-  "description": "harness-core — credential leak prevention + workflow guardrails (18 hooks, defense-in-depth)",
+  "description": "harness-core — credential leak prevention + workflow guardrails (defense-in-depth; this file is the authoritative hook set)",
   "hooks": {
     "Stop": [
       {
