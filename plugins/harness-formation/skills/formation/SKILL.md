@@ -73,9 +73,17 @@ Template: `~/.claude/skills/formation/templates/briefing.md`.
 ### 2. Spawn
 
 ```bash
-formation spawn <path/to/briefing.md> [worker_name]
+formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
+  [--model <model>] <path/to/briefing.md> [worker_name]
 ```
 
+- **Permission mode defaults to bypass** for both claude and codex workers
+  (a normal-approval worker stalls at its first permission prompt and the lead
+  has to babysit it). Pass `--sandbox` to force normal approval for a specific
+  spawn. Flags go **before** the briefing path.
+- `--model` is omitted by default, so the worker inherits the global default
+  model; set it explicitly when a worker needs a different tier than the
+  session default.
 - Splits the current tmux window, launches `claude --session-name
   formation-<name>` in the new pane, paste-loads the briefing.
 - Registers the worker in `~/.njslyr7/formation/registry.jsonl`.
