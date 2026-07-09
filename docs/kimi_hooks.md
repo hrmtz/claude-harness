@@ -87,9 +87,10 @@ bash plugins/harness-kimi/install-kimi-watcher.sh      # detective 2nd wall (cro
 A per-minute cron re-runs `bash_command_guard` over every executed Bash command
 in each wire.jsonl. A command that the gate would deny but whose result lacks the
 guard's block marker means the 1st wall did not fire — a **gap** — and the
-watcher alerts via `discord-bot post claude-harness` (falling back to
-`~/.kimi-code/harness-guard/watcher.log` if discord-bot is absent). It is
-reactive (a race window exists), a detective net behind the preventive guard.
+watcher alerts via `discord-bot post "$HARNESS_KIMI_DISCORD_CHANNEL"` when
+that environment variable is set (falling back to
+`~/.kimi-code/harness-guard/watcher.log` otherwise). It is reactive (a race
+window exists), a detective net behind the preventive guard.
 
 - **First run establishes a baseline**: pre-install history is recorded as
   settled without alerting, so installing on a machine with existing sessions

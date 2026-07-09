@@ -1,8 +1,8 @@
 """safety-rails: pre-flight + in-flight + post-execution rails for long-running ops.
 
-Built after a 23h sunk-cost incident where philosophy-level "early bleeding
-detection" failed because it lived only in CLAUDE.md memory, not in
-structural rails. See: https://github.com/hrmtz/PRS-LLM/issues/59
+Built after a long-running indexing incident where philosophy-level "early
+bleeding detection" failed because it lived only in agent memory, not in
+structural rails.
 
 Components:
   preflight   — algorithm fitness check (working set vs RAM, alternatives)

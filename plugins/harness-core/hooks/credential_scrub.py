@@ -551,27 +551,38 @@ def resume_context(replaced: int, scan_complete: bool = True) -> str:
     the output was fully auto-handled, so it drops the "no manual steps needed" wording
     and asks for manual review (MED finding: an incomplete-but-redacted scan previously
     routed through the all-clear wording, contradicting the manual-review caveat)."""
-    ref = ""
-    try:
-        last = (STATE_DIR / "last_issue").read_text().strip()
-        if last:
-            ref = f" (tracked in claude-harness#{last})"
-    except OSError:
-        pass
+    issue_enabled = (
+        os.environ.get("HARNESS_CREDENTIAL_LEAK_ISSUES") == "1"
+        and bool(os.environ.get("CREDENTIAL_LEAK_ISSUE_REPO"))
+    )
+    if issue_enabled:
+        ref = ""
+        try:
+            last_ref = (STATE_DIR / "last_issue").read_text().strip()
+            repo = os.environ["CREDENTIAL_LEAK_ISSUE_REPO"]
+            if last_ref.startswith(f"{repo}#"):
+                ref = f" (tracked in {last_ref})"
+        except OSError:
+            pass
+        incident_status = f"incident issue filing is enabled{ref}"
+        action_status = "No manual transcript cleanup is needed. Rotation for the affected credential is tracked in that issue."
+    else:
+        incident_status = (
+            "incident issue filing is disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 "
+            "and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable it"
+        )
+        action_status = "No manual transcript cleanup is needed, but rotate the affected credential if this was a real exposure."
     base = (
         f"⚠️  credential leak auto-handled: transcript sanitized ({replaced} replacement(s)) "
-        f"+ incident logged to the claude-harness `credential-leak` issue{ref}. "
+        f"+ {incident_status}. "
     )
     if scan_complete:
-        return base + (
-            "No manual steps needed — continue your current task. "
-            "Rotation for the affected credential is tracked in that issue."
-        )
+        return base + action_status
     return base + (
         "NOTE: the output was very large and the scan was INCOMPLETE — the matched "
         "credential(s) were redacted, but some regions were NOT checked. Manual review "
         "IS needed: inspect the tool output for other secrets before continuing. "
-        "Rotation for the affected credential is tracked in that issue."
+        f"{action_status}"
     )
 
 

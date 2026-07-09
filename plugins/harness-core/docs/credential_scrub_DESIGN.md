@@ -29,9 +29,9 @@
 | **Balthasar-5 HIGH** (TOCTOU staleness) | Build script stores `source_mtime`. `--check-staleness` CLI mode for audit. `sops_edit_wrapper.sh` makes regeneration atomic with rotation. |
 | **Caspar-1/2 REJECT** (blake3 + log path) | Build preflight hard-fails on missing blake3. Hook log path = `~/.claude/state/hook_logs/hooks.log` (canonical). |
 | **Caspar-3 REJECT** (rotation friction) | `sops_edit_wrapper.sh` runs `sops edit` then auto-regenerates manifest atomically. Drop-in for `sops edit` muscle memory; recommended `~/.local/bin/sops-rotate` alias. |
-| **Caspar-4 REJECT** (multi-host scope) | DESIGN.md §7 explicit: hook + manifests are **chichibu-only**. Per-host salt, per-host manifest dir. NOT committed to creds-migration repo. |
+| **Caspar-4 REJECT** (multi-host scope) | DESIGN.md §7 explicit: hook + manifests are per-host operational state. Per-host salt, per-host manifest dir. NOT committed to a secrets repo. |
 | **Caspar-6/7/8 HIGH** (settings wiring + perf + bootstrap) | §6 explicit settings entry. Perf: 256KB cap + candidate-run filter. Bootstrap: `credential_scrub_build_all.sh` loops 27 files in one invocation. |
-| **Caspar-9 HIGH** (gitignore policy) | Manifests live in `~/.claude/state/`, NOT in creds-migration repo. No gitignore policy needed; physical separation enforces P2. |
+| **Caspar-9 HIGH** (gitignore policy) | Manifests live in `~/.claude/state/`, NOT in a secrets repo. No gitignore policy needed; physical separation enforces P2. |
 | **Caspar-10 HIGH** (format_version) | Manifest declares `format_version: 1`. Hook refuses mismatched versions. Phase C will bump to version 2. |
 | **Caspar-17 LOW** (kill switch) | `touch ~/.claude/hooks/credential_scrub.disabled` → hook exits 0 immediately. |
 | **Balthasar-8 HIGH** (split / base64 / assistant / discord-notify) | §10 Limitations section enumerates uncovered vectors explicitly. Phase C considers Stop-event scrubbing + PreToolUse on `discord-notify`. |
@@ -96,7 +96,7 @@ Replace the v1 split (= L2 hash + L3 pattern) with **one unified PostToolUse scr
 ## 3. Properties (= honest)
 
 - **P1**: Hook process loads only `(key_name, byte_length, hmac_hex)`. Plaintext is never read from manifest, never written to manifest.
-- **P2**: Manifest files live in `~/.claude/state/credential_scrub/manifest/` (mode 0600), with HMAC values keyed by a per-host salt in `~/.claude/state/credential_scrub/salt.bin` (mode 0400). Manifests do NOT travel with the sops repo and are NOT safe to share across hosts. Same-host attacker with read access to salt+manifest can dictionary-attack short low-entropy values; mitigate by avoiding short low-entropy values in sops.
+- **P2**: Manifest files live in `~/.claude/state/credential_scrub/manifest/` (mode 0600), with HMAC values keyed by a per-host salt in `~/.claude/state/credential_scrub/salt.bin` (mode 0400). Manifests do NOT travel with the secrets repo and are NOT safe to share across hosts. Same-host attacker with read access to salt+manifest can dictionary-attack short low-entropy values; mitigate by avoiding short low-entropy values in sops.
 - **P3** (honest reframe): **The hook narrows on-disk persistence of leaked credentials in the active jsonl. It does NOT prevent exposure.** By the time PostToolUse fires:
   - The tool_response has already been written to the jsonl
   - The decoded content is already in Claude's active context window for the current turn
@@ -115,11 +115,11 @@ Replace the v1 split (= L2 hash + L3 pattern) with **one unified PostToolUse scr
 | `~/.claude/hooks/credential_scrub.sh` | bash wrapper, sources lib.sh, sets env, execs Python |
 | `~/.claude/hooks/credential_scrub.py` | scan + redact implementation |
 | `~/.claude/hooks/credential_scrub_build.py` | manifest generator (invoked under `sops exec-env`) |
-| `~/projects/creds-migration/scripts/credential_scrub_build_all.sh` | bootstrap loop |
+| `<secrets-repo>/scripts/credential_scrub_build_all.sh` | bootstrap loop |
 | `~/.local/bin/sops-rotate` (symlink) | wrapper around `sops edit` + auto-rebuild |
 | `~/.claude/state/credential_scrub/salt.bin` | 32-byte per-host HMAC salt, 0o400 |
 | `~/.claude/state/credential_scrub/manifest/<basename>.scrub.json` | per-source manifest, 0o600 |
-| `~/projects/creds-migration/secrets-template/<file>.scrub.yaml` (optional) | explicit include manifest (Phase A production-grade coverage) |
+| `<secrets-repo>/secrets-template/<file>.scrub.yaml` (optional) | explicit include manifest (Phase A production-grade coverage) |
 
 ## 5. Manifest schema (= format_version 1)
 
@@ -171,24 +171,24 @@ Insert AFTER the existing `credential_value_scrub.sh` entry so the new hook runs
 
 Timeout 30s budget split: ~50ms python startup + ~5-10ms yaml load × ≤64 manifests + ~5s scan worst-case (256KB cap + candidate-run filter). 30s allows margin for cold-cache filesystem access.
 
-## 7. Multi-host scope (= chichibu-only)
+## 7. Multi-host scope (= per-host)
 
-- Hook runs ONLY on chichibu (= primary dev box, the only Claude Code host).
+- Hook and manifest state are local to each Claude/Codex host.
 - Salt + manifests are per-host operational state, NOT git-tracked.
-- The `creds-migration/` repo continues to be the canonical sops storage and continues to git-sync to laddie/talisker/mars/zetithnas via existing pipeline, **without** sidecars/manifests riding along.
-- If Claude Code is ever invoked on another host, that host needs its own salt + manifest build pass (= run `--init-salt` + `build_all.sh`).
-- This boundary keeps the security control simple and matches the actual deploy reality.
+- A secrets repo can remain the canonical sops storage and sync through its own pipeline, **without** sidecars/manifests riding along.
+- Each host needs its own salt + manifest build pass (= run `--init-salt` + `build_all.sh`).
+- This boundary keeps the security control simple and avoids sharing HMAC material across hosts.
 
 ## 8. Coverage health-check
 
 After bootstrap, expected state:
-- ≥ N manifests in `~/.claude/state/credential_scrub/manifest/` where N = `ls ~/projects/creds-migration/secrets-template/*.enc.yaml | wc -l`
+- ≥ N manifests in `~/.claude/state/credential_scrub/manifest/` where N = `ls "$SECRETS_REPO"/secrets-template/*.enc.yaml | wc -l`
 - All manifests have `source_mtime` within 1 second of the corresponding sops file mtime
 
 Audit commands:
 ```bash
 # Current sops file count
-find ~/projects/creds-migration/secrets-template -maxdepth 1 -name '*.enc.yaml' | wc -l
+find "$SECRETS_REPO"/secrets-template -maxdepth 1 -name '*.enc.yaml' | wc -l
 
 # Current manifest count
 ls ~/.claude/state/credential_scrub/manifest/ 2>/dev/null | wc -l
@@ -229,7 +229,7 @@ This hook does **NOT** cover the following leak vectors. These require complemen
 | **Split across tool calls** | NOT covered — credential split into two Bash invocations bypasses literal-match. Phase C considers a rolling buffer of recent tool outputs. |
 | **base64 / hex / URL encode / gzip** | Partially covered by existing pattern-based hook (= matches `sk-ant-*` etc. prefix patterns); HMAC literal-match cannot. KEEP `credential_value_scrub.sh` during migration. |
 | **Anthropic API retention** | Out of scope — the moment a credential is in tool_response, it has been sent to Anthropic infrastructure for the current turn. Hook cannot retract. Mitigated by rotation policy. |
-| **Codex / formation peer panes** | NOT covered — peer agents run their own sessions; their tool outputs do not flow through chichibu's Claude Code hook. Each peer needs its own scrubber (Codex side is a separate skill out of scope here). |
+| **Codex / formation peer panes** | NOT covered — peer agents run their own sessions; their tool outputs do not flow through another agent's Claude Code hook. Each peer needs its own scrubber (Codex side is a separate skill out of scope here). |
 
 The reader is expected to internalize: **this hook is one layer in a defense-in-depth chain, not a complete solution**. Rotation discipline + sops 2-command principle + PreToolUse guards + this hook + L3 pattern + AgentShield nightly scan together form the chain. Removing any one layer leaves a known gap.
 
@@ -250,12 +250,12 @@ cp /tmp/cred_hash_skeleton/v2/hooks/credential_scrub_build.py ~/.claude/hooks/
 chmod +x ~/.claude/hooks/credential_scrub.sh
 
 # 2. Place ops scripts
-mkdir -p ~/projects/creds-migration/scripts
+mkdir -p "$SECRETS_REPO"/scripts
 cp /tmp/cred_hash_skeleton/v2/scripts/credential_scrub_build_all.sh \
-   ~/projects/creds-migration/scripts/
+   "$SECRETS_REPO"/scripts/
 cp /tmp/cred_hash_skeleton/v2/scripts/sops_edit_wrapper.sh \
    ~/.claude/hooks/sops_edit_wrapper.sh
-chmod +x ~/projects/creds-migration/scripts/credential_scrub_build_all.sh \
+chmod +x "$SECRETS_REPO"/scripts/credential_scrub_build_all.sh \
          ~/.claude/hooks/sops_edit_wrapper.sh
 
 # 3. Install sops-rotate symlink so muscle memory uses the wrapper (H4 round 2 fix)
@@ -266,7 +266,7 @@ ln -sf ~/.claude/hooks/sops_edit_wrapper.sh ~/.local/bin/sops-rotate
 python3 ~/.claude/hooks/credential_scrub_build.py --init-salt
 
 # 5. Build all manifests
-bash ~/projects/creds-migration/scripts/credential_scrub_build_all.sh
+bash "$SECRETS_REPO"/scripts/credential_scrub_build_all.sh
 
 # 6. Wire into settings.json (see §6)
 
@@ -304,15 +304,15 @@ on save.
 
 If using `sops-rotate` wrapper (= recommended):
 ```bash
-sops-rotate ~/projects/creds-migration/secrets-template/llm.enc.yaml
+sops-rotate "$SECRETS_REPO"/secrets-template/llm.enc.yaml
 # → opens sops edit; on save, automatically regenerates the manifest
 ```
 
 If using raw `sops edit`:
 ```bash
-sops edit ~/projects/creds-migration/secrets-template/llm.enc.yaml
+sops edit "$SECRETS_REPO"/secrets-template/llm.enc.yaml
 # → manually trigger rebuild:
-bash /tmp/cred_hash_skeleton/v2/scripts/credential_scrub_build_all.sh --secrets-dir ~/projects/creds-migration/secrets-template
+bash /tmp/cred_hash_skeleton/v2/scripts/credential_scrub_build_all.sh --secrets-dir "$SECRETS_REPO"/secrets-template
 ```
 
 ### 11.3 Disable hook (incident triage)

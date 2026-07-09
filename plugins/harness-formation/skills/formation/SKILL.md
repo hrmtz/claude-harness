@@ -7,7 +7,7 @@ description: |
   redirection, or phone-based human-in-the-loop acks. Use this when the Task
   tool's ephemeral subagent model is insufficient: specifically for work where
   the user wants to tail the worker's pane, send follow-up instructions, or
-  approve decisions from a phone via /remote-control while away from the desk.
+  approve decisions via mailbox or /remote-control while away from the desk.
   NOT for quick lookups or single-shot research — use Task for those.
 allowed-tools:
   - Bash
@@ -30,7 +30,7 @@ Paradigm comparison:
 | Lifetime | one-shot, returns | persistent pane |
 | Observability | result only | user tails the pane live |
 | Mid-flight redirect | impossible | `formation msg` |
-| Remote ack from phone | no | `/rc formation-<id>` |
+| Remote ack | no | `/rc formation-<id>` |
 | Nesting | shallow | worker can spawn its own |
 
 **Do not invoke for:** quick greps, single-file reads, one-shot research.
@@ -48,7 +48,7 @@ Reach for this skill when the user says things like:
 ## Prerequisites (verify before first spawn)
 
 1. Running inside tmux (`[[ -n "$TMUX" ]]`). If not, tell the user to attach.
-2. `formation` is on PATH (symlinked into `~/.local/bin` by `install.sh`).
+2. `formation` is on PATH (symlink the plugin's `bin/formation` into `~/.local/bin`).
 3. `jq`, `flock`, `sops`, and `inotifywait` (from `inotify-tools`) available.
    The relay daemon falls back to 10s polling if `inotifywait` is missing,
    but inotify is strongly recommended for sub-second mailbox delivery.
@@ -88,16 +88,16 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
   window-rename from the parent — the ember-tanuki incident); pass `--split` for
   the old split-pane behavior. Either way it launches `claude --session-name
   formation-<name>` in the new pane and paste-loads the briefing.
-- Registers the worker in `~/.njslyr7/formation/registry.jsonl`.
+- Registers the worker in `~/.formation/formation/registry.jsonl`.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
 - **Auto-starts a mailbox relay daemon** (`lib/mailbox_relay.sh`) in the
-  background that watches `~/.njslyr7/mailbox/log.jsonl` via inotify and
+  background that watches `~/.formation/mailbox/log.jsonl` via inotify and
   injects any new entries addressed to this worker into its tmux pane.
   Without this, the worker only notices new mailbox entries when it idly
   polls — the user historically had to poke each worker manually. The relay
-  pid is recorded at `~/.njslyr7/formation/<name>.relay_pid`; logs at
-  `/tmp/njslyr7_relay_<name>.log`.
+  pid is recorded at `~/.formation/formation/<name>.relay_pid`; logs at
+  `/tmp/formation_relay_<name>.log`.
 
 ### 3. Supervise
 
@@ -119,9 +119,9 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   `formation report "<1-line status>"`
 - When a decision exceeds its boundary:
   `formation ask "<question>"` — writes to the lead's mailbox AND sends a
-  LINE push so the user can reply from phone via `/rc formation-<id>`.
+  mailbox entry so the lead can reply or attach via `/rc formation-<id>`.
 - On completion:
-  `formation done "<summary>"` — mailbox + LINE push.
+  `formation done "<summary>"` — mailbox.
 
 ### 5. Remote intervention path
 
@@ -183,7 +183,7 @@ should still respect R3.
 Long-run upsert / generate / transform writes intermediate state to R2 at a
 fixed cadence (e.g., per 20M points per daemon, or per 100 GB of output).
 Local snapshot is deleted post-push to relieve disk pressure.
-Path convention: `r2:mafutsu-<bucket>/checkpoints/<phase>/<worker>_<units>_<ts>.<ext>`
+Path convention: `r2:<bucket>/checkpoints/<phase>/<worker>_<units>_<ts>.<ext>`
 
 ### R2 — Disk pre-flight (output × 1.5)
 Before the contract: `required_disk_gb = expected_output_bytes / 1e9 * 1.5`.
@@ -220,7 +220,7 @@ a leaked key lives there forever and shows up in every `tail`.
   spawn` (briefing file content) all run the same credential pattern check
   and **hard-refuse with exit 3** on match. Patterns covered: `sk-*`,
   `ghp_*`, `AKIA*`, `*_API_KEY=...`, PEM private keys, long JWTs, etc. The
-  refusal is logged to `~/.njslyr7/mailbox/refuse.log` (timestamp + channel
+  refusal is logged to `~/.formation/mailbox/refuse.log` (timestamp + channel
   + from-id only; the body itself is NOT logged).
 - If you hit the refusal, re-frame the message around a SOPS decrypt
   command — do not try to work around the filter by splitting the secret
@@ -241,7 +241,7 @@ If SOPS is not yet set up for the project, stop and ask the user to do
   pane. Do not support cross-project spawning in v1.
 - **Sanada and Matsuoka** protocols (backup-before-destructive, no-retreat)
   live in global `~/.claude/CLAUDE.md` and apply to all panes automatically.
-- **Observer privilege**: the user can `tail -f ~/.njslyr7/mailbox/log.jsonl`
+- **Observer privilege**: the user can `tail -f ~/.formation/mailbox/log.jsonl`
   to watch all formation traffic. Never encrypt the mailbox itself — the
   redaction filter + SOPS discipline is what keeps secrets out of it.
 
@@ -283,7 +283,7 @@ worker never promotes on its own.
 - **`formation: refusing — body matches credential pattern`**: the
   redaction filter caught something that looks like a secret in an outgoing
   mailbox entry, a `msg` text, or a briefing file. Re-phrase around a SOPS
-  decrypt command. Check `~/.njslyr7/mailbox/refuse.log` to confirm which
+  decrypt command. Check `~/.formation/mailbox/refuse.log` to confirm which
   channel tripped it.
 - **Worker pane stuck at claude login prompt**: spawn waited 30s for the `│ >`
   prompt and timed out. Manually complete login in the pane and re-send the
@@ -313,8 +313,8 @@ worker never promotes on its own.
   Enter. If you hand-roll an injection: cancel copy-mode, use `paste-buffer -p`
   (not `send-keys -l`), and sleep ~0.4 s before the Enter. Diagnose with
   `tmux display-message -p -t <pane> '#{pane_in_mode}'` (1 = in copy-mode). If
-  your installation pre-dates this fix, re-run the project's `install.sh` from
-  your njslyr7 clone.
+  your installation pre-dates this fix, update the plugin and refresh the
+  `formation` symlink from your plugin install.
 - **Mailbox has a new entry but the worker isn't reading it**: the relay
   daemon may have died. Check with `ps aux | grep mailbox_relay | grep
   <worker_id>`. If absent, restart it manually (the lib path is derived
@@ -322,9 +322,9 @@ worker never promotes on its own.
   ```bash
   LIB="$(dirname "$(readlink -f "$(command -v formation)")")/../lib"
   nohup bash "$LIB/mailbox_relay.sh" <worker_id> <pane_id> \
-    > /tmp/njslyr7_relay_<worker_id>.log 2>&1 &
-  echo $! > ~/.njslyr7/formation/<worker_id>.relay_pid
+    > /tmp/formation_relay_<worker_id>.log 2>&1 &
+  echo $! > ~/.formation/formation/<worker_id>.relay_pid
   ```
-  Tail `/tmp/njslyr7_relay_<worker_id>.log` to confirm inotify events are
+  Tail `/tmp/formation_relay_<worker_id>.log` to confirm inotify events are
   firing. If the log shows `mode=polling`, install `inotify-tools` for
   sub-second delivery.

@@ -3,11 +3,16 @@
 DRYRUN=1 + PATH hiding gh/discord-bot => no real rotation, no external side effects.
 'DRYRUN decision' in stdout == auto-rotation reached; absent == escalated/ack-gated.
 Run: python3 plugins/harness-core/tests/test_autorotate_gate.py"""
-import subprocess, os
+import subprocess, os, tempfile
 
 H = os.path.join(os.path.dirname(__file__), "..", "hooks", "autorotate_leaked_cred.sh")
+tmp = tempfile.NamedTemporaryFile("w", delete=False)
+tmp.write("#!/bin/sh\nexit 0\n")
+tmp.close()
+os.chmod(tmp.name, 0o700)
 BASE = {"PATH": "/usr/bin:/bin", "HOME": os.path.expanduser("~"),
-        "AUTOROTATE_DRYRUN": "1", "LEAK_CLASS": "pg_dsn", "LEAK_ROLE": "prs_ingest"}
+        "AUTOROTATE_DRYRUN": "1", "LEAK_CLASS": "pg_dsn", "LEAK_ROLE": "prs_ingest",
+        "HARNESS_AUTOROTATE_SCRIPT": tmp.name}
 
 def run(extra, sid):
     e = dict(BASE); e.update(extra); e["LEAK_SESSION_ID"] = sid
@@ -29,5 +34,9 @@ ok = True
 for name, extra, sid, want in cases:
     got = run(extra, sid)
     if got != want: ok = False; print(f"  ✗ FAIL {got} (want {want}) :: {name}")
+try:
+    os.remove(tmp.name)
+except FileNotFoundError:
+    pass
 print("autorotate gate: ALL PASS ✓" if ok else "autorotate gate: FAILURES ✗")
 raise SystemExit(0 if ok else 1)

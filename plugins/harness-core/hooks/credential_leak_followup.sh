@@ -9,6 +9,8 @@
 # Design invariants:
 #   - NEVER includes a credential value. Inputs are pattern prefixes / key names
 #     only (the calling scrubbers pass non-sensitive metadata by construction).
+#   - Public-safe default: gh issue filing is disabled unless the target repo is
+#     configured explicitly.
 #   - Fail-safe: gh absent / unauthed / network down / repo unreachable → log + exit 0.
 #     A failed issue filing must never disrupt the session.
 #   - Dedup: one rolling issue per repo (label `credential-leak`); per-session +
@@ -24,11 +26,13 @@
 #   LEAK_REPLACED     replacement count (string ok)
 #   LEAK_TRANSCRIPT   transcript path that was sanitized
 #   LEAK_SESSION_ID   session id (for dedup + audit)
-#   CREDENTIAL_LEAK_ISSUE_REPO   override target repo (default: hrmtz/claude-harness)
+#   CREDENTIAL_LEAK_ISSUE_REPO   target repo for rolling incident issue, e.g. owner/repo
+#   HARNESS_CREDENTIAL_LEAK_ISSUES=1  opt in to issue filing
 
 set -u
 
-REPO="${CREDENTIAL_LEAK_ISSUE_REPO:-hrmtz/claude-harness}"
+REPO="${CREDENTIAL_LEAK_ISSUE_REPO:-}"
+ISSUES_ENABLED="${HARNESS_CREDENTIAL_LEAK_ISSUES:-0}"
 STATE_DIR="$HOME/.claude/state/credential_scrub"
 FILED_DIR="$STATE_DIR/filed"
 LOG_DIR="$HOME/.claude/state/hook_logs"
@@ -43,6 +47,11 @@ LEAK_DETAIL="${LEAK_DETAIL:-(unspecified)}"
 LEAK_REPLACED="${LEAK_REPLACED:-?}"
 LEAK_TRANSCRIPT="${LEAK_TRANSCRIPT:-}"
 LEAK_SESSION_ID="${LEAK_SESSION_ID:-unknown}"
+
+if [ "$ISSUES_ENABLED" != "1" ] || [ -z "$REPO" ]; then
+    _log "incident issue filing disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable"
+    exit 0
+fi
 
 # ----------------------------------------------------------------------------
 # Dedup: hash(session + detail) → one comment per leak class per session.
@@ -133,7 +142,7 @@ fi
 
 if timeout 20 gh issue comment -R "$REPO" "$NUM" --body "$COMMENT" >/dev/null 2>&1; then
     touch "$MARKER" 2>/dev/null
-    echo "$NUM" > "$STATE_DIR/last_issue" 2>/dev/null
+    echo "$REPO#$NUM" > "$STATE_DIR/last_issue" 2>/dev/null
     _log "appended incident to $REPO#$NUM (source=$LEAK_SOURCE)"
 else
     _log "comment append failed on $REPO#$NUM; transcript already sanitized"

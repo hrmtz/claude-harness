@@ -9,10 +9,9 @@
 # `grep -c <KEY> <file>` (件数のみ) / `cut -d= -f1 <file>` (key 名のみ) に置換。
 # ⚠ `grep -n <KEY>` は match 行全体 (= 値込み) を出すので NG (gh #15 訂正)。
 #
-# bypass: HRMTZ_ACK_CRED_READ=1 env を Bash invocation の前に立てる
-#         (= 月 1-2 回想定の正当 archeology 用、 1 回 limit、 意識的に書く必要)
+# bypass: create ~/.claude/state/cred_read_ack before the one intentional read.
 #
-# coverage: .env / .env.<host> / rclone.conf / .netrc / .aws/credentials /
+# coverage: .env / .env.<suffix> / rclone.conf / .netrc / .aws/credentials /
 #           .cloudflared/*.json / *.pem / *.key / *.p12
 
 source "$(dirname "$0")/lib.sh"
@@ -38,11 +37,11 @@ esac
 BLOCK=0
 case "$FILE_PATH" in
   # plain .env / .env.<host> family
-  */.env | */.env.common | */.env.prod | */.env.production | */.env.local | */.env.dev | */.env.staging)
+  */.env)
     BLOCK=1; REASON=".env (= plain credential SoT)"
     ;;
-  */.env.hetzner | */.env.laddie | */.env.chichibu | */.env.zetithnas | */.env.talisker | */.env.mars | */.env.farm)
-    BLOCK=1; REASON=".env.<host> (= host-specific credentials)"
+  */.env.*)
+    BLOCK=1; REASON=".env.<suffix> (= environment-specific credentials)"
     ;;
   # rclone / aws / netrc
   */rclone.conf | *.config/rclone/rclone.conf)
@@ -67,8 +66,8 @@ esac
 [ "$BLOCK" -eq 0 ] && exit 0
 
 # ----------------------------------------
-# ack bypass — genuinely ONE-TIME + EXPIRING (gh #19). The old `$HRMTZ_ACK_CRED_READ`
-# env check was EXPORTABLE: `export HRMTZ_ACK_CRED_READ=1` once → the bypass persisted
+# ack bypass — genuinely ONE-TIME + EXPIRING (gh #19). The old `$HARNESS_ACK_CRED_READ`
+# env check was EXPORTABLE: `export HARNESS_ACK_CRED_READ=1` once → the bypass persisted
 # for ALL subsequent reads (neither one-time nor expiring). A Read tool call has no
 # command-prefix, so we use a CONSUMABLE marker file instead: create it to authorize
 # the NEXT credential-file read within 120s; the guard consumes it (one read) and

@@ -9,7 +9,7 @@
 #
 # Intended for tasks that justify minutes-to-hours of wall time where Task
 # tool subagents are insufficient (observability, mid-flight redirection,
-# human-in-the-loop acks).
+# human-in-the-loop acks through the mailbox).
 
 set -euo pipefail
 
@@ -20,8 +20,17 @@ while [[ -L "$SELF" ]]; do SELF="$(readlink -f "$SELF")"; done
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 
-NJSLYR_HOME="${NJSLYR_HOME:-$HOME/.njslyr7}"
-FORMATION_DIR="$NJSLYR_HOME/formation"
+if [[ -z "${FORMATION_HOME:-}" ]]; then
+  if [[ -n "${NJSLYR_HOME:-}" ]]; then
+    FORMATION_HOME="$NJSLYR_HOME"
+  elif [[ ! -e "$HOME/.formation" && -e "$HOME/.njslyr7" ]]; then
+    FORMATION_HOME="$HOME/.njslyr7"
+  else
+    FORMATION_HOME="$HOME/.formation"
+  fi
+fi
+NJSLYR_HOME="$FORMATION_HOME"  # legacy alias for sourced helper compatibility.
+FORMATION_DIR="$FORMATION_HOME/formation"
 REGISTRY="$FORMATION_DIR/registry.jsonl"
 
 # shellcheck source=/dev/null
@@ -34,7 +43,7 @@ source "$LIB_DIR/redact.sh"
 mkdir -p "$FORMATION_DIR"
 touch "$REGISTRY"
 
-REFUSE_LOG="$NJSLYR_HOME/mailbox/refuse.log"
+REFUSE_LOG="$FORMATION_HOME/mailbox/refuse.log"
 
 refuse_credential() {
   # $1 = channel (mailbox/msg/briefing), $2 = from_id, $3 = context
@@ -63,20 +72,6 @@ self_id() {
   else
     echo "shell-$$"
   fi
-}
-
-line_push() {
-  local msg="$1"
-  local script
-  for script in \
-    "$HOME/projects/multi-agent-njslyr/scripts/line_push.sh" \
-    "$HOME/project/multi-agent-njslyr/scripts/line_push.sh"; do
-    if [[ -x "$script" ]]; then
-      bash "$script" "$msg" >/dev/null 2>&1 || true
-      return 0
-    fi
-  done
-  return 0
 }
 
 registry_add() {
@@ -115,7 +110,7 @@ Parent (lead) commands:
                                           Sandbox default (2026-07-08): bypass for BOTH clis
                                             (a normal-approval worker stalls at its first
                                              permission prompt; codex also needs to write
-                                             ~/.njslyr7/mailbox to ack via 'formation report')
+                                             ~/.formation/mailbox to ack via 'formation report')
                                           --bypass-sandbox forces full privilege bypass
                                           (claude bypassPermissions / codex dangerously-bypass).
                                           --sandbox forces normal sandbox/approval mode.
@@ -127,16 +122,16 @@ Parent (lead) commands:
 
 Worker-side commands (invoked by the worker agent via Bash):
   formation report <text>                 Append status to parent mailbox
-  formation done <summary>                Mark finished (mailbox + LINE push)
-  formation ask <question>                Request ack (mailbox + LINE push)
+  formation done <summary>                Mark finished (mailbox)
+  formation ask <question>                Request ack (mailbox)
 
 Env:
-  NJSLYR_HOME      default ~/.njslyr7
+  FORMATION_HOME   default ~/.formation
   FORMATION_SELF   override caller id (else tmux @formation_id, else pane-%N)
 
 Credential safety:
   spawn / msg / report / done / ask all run is_credential_like on their body.
-  Matches exit 3 and append to ~/.njslyr7/mailbox/refuse.log. To send a
+  Matches exit 3 and append to ~/.formation/mailbox/refuse.log. To send a
   credential, encrypt it with SOPS and reference the decrypt command.
 
 Remote access:
@@ -149,7 +144,7 @@ USAGE
 # Input $2 (bypass): "" => pick default, "1"/"0" => explicit override.
 # Default (user directive 2026-07-08): 1 (bypass) for BOTH clis — an autonomous
 # worker that stalls on approval prompts is useless. codex always needed bypass
-# (must write ~/.njslyr7/mailbox to ack via `formation report`); claude now
+# (must write ~/.formation/mailbox to ack via `formation report`); claude now
 # matches so workers run unattended. Opt back into normal approval with --sandbox.
 # Echoes 1 (bypass) or 0 (normal sandbox).
 resolve_bypass_default() {
@@ -235,7 +230,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   if [[ "$cli" == "codex" ]]; then
     # Codex: pass seed as initial prompt argument.
     # Default (per #38): bypass, because --dangerously-bypass-approvals-and-sandbox
-    # is what lets the worker write to ~/.njslyr7/ mailbox and formation dirs
+    # is what lets the worker write to ~/.formation/ mailbox and formation dirs
     # outside the workspace sandbox — required for `formation report`/ack.
     # --sandbox forces normal sandbox/approval mode.
     session_name="codex-$name"
@@ -243,7 +238,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     [[ -n "$model" ]] && codex_model_flag="-m $model"
     if [[ "$bypass" == "1" ]]; then
       codex_sandbox_flag="--dangerously-bypass-approvals-and-sandbox"
-      echo "formation: spawning codex worker '$name' with sandbox BYPASS (codex default) — needed so the worker can write ~/.njslyr7/mailbox for 'formation report'. Use --sandbox to force normal mode." >&2
+      echo "formation: spawning codex worker '$name' with sandbox BYPASS (codex default) — needed so the worker can write ~/.formation/mailbox for 'formation report'. Use --sandbox to force normal mode." >&2
     else
       echo "formation: spawning codex worker '$name' in normal sandbox/approval mode (--sandbox) — mailbox writes outside the workspace may prompt or be blocked, which can stop the worker from acking its briefing." >&2
     fi
@@ -282,7 +277,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   # Auto-start mailbox relay daemon: inotifywait on mailbox, inject new msgs
   # addressed to this worker into its tmux pane. Without this, the worker
   # only notices new mailbox entries when it idly polls; user has to poke.
-  local relay_log="/tmp/njslyr7_relay_${name}.log"
+  local relay_log="/tmp/formation_relay_${name}.log"
   local relay_pid_file="$FORMATION_DIR/$name.relay_pid"
   nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
     > "$relay_log" 2>&1 &
@@ -410,7 +405,6 @@ cmd_done() {
   local to="${FORMATION_PARENT:-lead}"
   local msg="[DONE] $*"
   mailbox_send "$from" "$to" "$msg"
-  line_push "[formation/$from] $msg"
 }
 
 cmd_ask() {
@@ -419,7 +413,6 @@ cmd_ask() {
   local to="${FORMATION_PARENT:-lead}"
   local msg="[ASK] $*"
   mailbox_send "$from" "$to" "$msg"
-  line_push "[formation/$from] $msg  (reply via /rc formation-$from)"
 }
 
 # Only dispatch when executed directly; allow `source`-ing for unit tests

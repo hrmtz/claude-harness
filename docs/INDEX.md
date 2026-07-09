@@ -31,5 +31,5 @@
 ## External
 
 - Repository: <https://github.com/hrmtz/claude-harness>
-- Companion (long-running tmux peer workers): <https://github.com/hrmtz/njslyr7>
+- Peer workers: `harness-formation` plugin (`formation` skill + CLI)
 - Issue tracker: <https://github.com/hrmtz/claude-harness/issues>

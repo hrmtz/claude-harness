@@ -183,15 +183,29 @@ def _gh_issue(project_repo: str, anom: Anomaly) -> None:
 
 
 def _project_to_repo(project: str) -> Optional[str]:
-    """Map project name to GitHub repo. Override via env or config later."""
-    overrides = {
-        "PRS-LLM": "hrmtz/PRS-LLM",
-        "PRS-LLM-dev": "hrmtz/PRS-LLM",
-        "zetith-emdash": "hrmtz/zetith-emdash",
-        "content-forge": "hrmtz/content-forge",
-        "claude-harness": "hrmtz/claude-harness",
-    }
-    return overrides.get(project)
+    """Map project name to GitHub repo from operator-owned config.
+
+    Public builds must not file issues into the author's repos. Configure either:
+      HARNESS_RAILS_PROJECT_REPOS='{"my-project":"owner/repo"}'
+      ~/.config/safety-rails/project_repos.json
+    """
+    raw = os.environ.get("HARNESS_RAILS_PROJECT_REPOS", "")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and isinstance(data.get(project), str):
+                return data[project]
+        except json.JSONDecodeError:
+            return None
+
+    cfg = Path(os.path.expanduser("~/.config/safety-rails/project_repos.json"))
+    try:
+        data = json.loads(cfg.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get(project), str):
+        return data[project]
+    return None
 
 
 def main(argv=None) -> int:

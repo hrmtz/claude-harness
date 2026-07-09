@@ -42,7 +42,7 @@ v, _ = rg(h);                       ok &= (v == "BLOCK") or (print("  ✗ FAIL #
 v, left = rg(h, "stale");           ok &= (v == "BLOCK" and not left) or (print("  ✗ FAIL #19 stale marker should BLOCK + be cleared") or False)
 # env var must NOT bypass any more (exportable -> persistent was the bug)
 r = subprocess.run(["bash", RG], input=json.dumps({"tool_input": {"file_path": "/x/.env"}}),
-                   capture_output=True, text=True, env=dict(os.environ, HOME=tempfile.mkdtemp(), HRMTZ_ACK_CRED_READ="1"))
+                   capture_output=True, text=True, env=dict(os.environ, HOME=tempfile.mkdtemp(), HARNESS_ACK_CRED_READ="1"))
 ok &= (r.returncode != 0) or (print("  ✗ FAIL #19 exported env should NO LONGER bypass") or False)
 
 print("guard deobf(#14) + ack(#19): ALL PASS ✓" if ok else "guard deobf(#14) + ack(#19): FAILURES ✗")

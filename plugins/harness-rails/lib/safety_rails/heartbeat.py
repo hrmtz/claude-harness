@@ -14,11 +14,11 @@ Usage:
             r = cur.fetchone()
             return {"tuples_done": r[0] if r else 0}
 
-    with heartbeat.beat("hnsw_shard_build", project="PRS-LLM",
+    with heartbeat.beat("hnsw_shard_build", project="my-project",
                        eta_hours=4, sampler=_sample_pg_progress):
         run_long_operation()
 
-    # bash side: source <(safety-rails-beat init --project PRS-LLM \
+    # bash side: source <(safety-rails-beat init --project my-project \
     #                       --job hnsw_shard_build --eta 4h)
 """
 from __future__ import annotations

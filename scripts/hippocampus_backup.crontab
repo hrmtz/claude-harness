@@ -1,5 +1,5 @@
-# Daily encrypted backup of the hippocampus jsonl SSOT to R2 (chichibu local cron).
+# Daily encrypted backup of the hippocampus jsonl SSOT to R2 (local cron).
 # 04:30 JST. flock prevents overlap with a still-running prior/initial run. Incremental.
 # Install idempotently:
 #   (crontab -l 2>/dev/null | grep -v hippocampus_jsonl_backup; grep -v '^#' scripts/hippocampus_backup.crontab) | crontab -
-30 4 * * * /usr/bin/flock -n /tmp/hippocampus_backup.lock bash /home/hrmtz/projects/claude-harness/scripts/backup_jsonl_to_r2.sh >> /home/hrmtz/.local/log/hippocampus_backup.log 2>&1 # hippocampus_jsonl_backup
+30 4 * * * HARNESS_JSONL_BACKUP_DEST="rclone-remote:path/jsonl" HARNESS_JSONL_BACKUP_RECIPIENT="age1..." /usr/bin/flock -n /tmp/hippocampus_backup.lock bash "$HOME/projects/claude-harness/scripts/backup_jsonl_to_r2.sh" >> "$HOME/.local/log/hippocampus_backup.log" 2>&1 # hippocampus_jsonl_backup

@@ -85,5 +85,5 @@ Save under `docs/magi/<YYYYMMDD>_<change-slug>.md` for written ADR-style trail, 
 
 ## Related
 
-- `formation` (from [njslyr7](https://github.com/hrmtz/njslyr7)) — long-running peer pane workers; complements Magi for changes needing both pre-flight AND multi-hour observability
+- `formation` — long-running peer pane workers; complements Magi for changes needing both pre-flight AND multi-hour observability
 - `harness-core` (this marketplace) — defense-in-depth runtime hooks for credential / command safety

@@ -21,6 +21,17 @@ Allowlist filters out placeholders (`<REDACTED>`, `placeholder`, `example`, `cha
 
 > **Important**: This hook is **backward-only damage control**. It sanitizes the session jsonl after the leak. **You still need to rotate the credential** — the value may have already flowed into log shippers, prompt caches, or telemetry.
 
+Incident issue filing is disabled by default for public installs. To opt in:
+
+```bash
+export HARNESS_CREDENTIAL_LEAK_ISSUES=1
+export CREDENTIAL_LEAK_ISSUE_REPO=owner/repo
+```
+
+Autonomous credential rotation is also disabled unless `HARNESS_AUTOROTATE_SCRIPT`
+points to an operator-owned runbook. Optional notification/comment destinations:
+`HARNESS_AUTOROTATE_DISCORD_CHANNEL` and `HARNESS_AUTOROTATE_ISSUE_REPO`.
+
 ### 2. `bash_command_guard.sh` — PreToolUse / Bash
 
 Blocks dangerous Bash commands **before** they run, with a deny response and an explanation of the safer alternative.
@@ -101,6 +112,7 @@ Hooks write logs to `~/.claude/state/hook_logs/hooks.log` and use `~/.claude/sta
 - **Add a credential pattern**: edit `credential_value_scrub.sh` `PATTERNS` array, format `'<regex>|<replacement>'`
 - **Add a block rule**: edit `bash_command_guard.sh` `PATTERNS_REASONS` array, format `'<regex>:::<explanation>'`
 - **Add an admission keyword**: edit `admission_reminder.sh` `REMINDERS` dict, format `['<regex>']='<reminder text>'`
+- **Include memory mtimes in temporal grounding**: set `HARNESS_TEMPORAL_MEMORY_DIR=/path/to/memory`.
 
 After editing, restart Claude Code (or just start a new session — hooks are loaded at session init).
 

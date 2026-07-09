@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mailbox-retention — trim the transient formation mailbox to a recent window.
 
-The mailbox (~/.njslyr7/mailbox/log.jsonl) is a transient inter-worker IPC device,
+The mailbox (~/.formation/mailbox/log.jsonl) is a transient inter-worker IPC device,
 NOT an archive. Its durable copy is captured elsewhere: each worker's session jsonl
 (which contains the injected mailbox exchanges) is ingested into hippocampus at the
 nightly 03:00 cron, and memories are ghost-dubbed at 03:30. So after 03:00 the prior
@@ -36,7 +36,12 @@ import subprocess
 import sys
 
 HOME = os.path.expanduser("~")
-MAILBOX = os.environ.get("FORMATION_MAILBOX", f"{HOME}/.njslyr7/mailbox/log.jsonl")
+FORMATION_HOME = os.environ.get("FORMATION_HOME") or os.environ.get("NJSLYR_HOME")
+if not FORMATION_HOME:
+    new_home = f"{HOME}/.formation"
+    legacy_home = f"{HOME}/.njslyr7"
+    FORMATION_HOME = legacy_home if (not os.path.exists(new_home) and os.path.exists(legacy_home)) else new_home
+MAILBOX = os.environ.get("FORMATION_MAILBOX", f"{FORMATION_HOME}/mailbox/log.jsonl")
 
 
 def relay_active() -> bool:

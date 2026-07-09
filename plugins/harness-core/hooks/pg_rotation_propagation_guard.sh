@@ -3,9 +3,8 @@
 #
 # User structural request (2026-06-27, separate from the #27 audit findings):
 # rotating a PG credential WITHOUT propagating the new value to EVERY consumer
-# (mars / talisker / zetithnas + edge llm.enc.yaml copies) drops apps onto a dead
-# credential -> Mafutsu (mafutsu.com) PRODUCTION OUTAGE. Make "rotate" and
-# "propagate to all consumers" one atomic operation, structurally.
+# drops apps onto a dead credential. Make "rotate" and "propagate to all
+# consumers" one atomic operation, structurally.
 #
 # v4 (over-fire fix, gh #<over-fire-issue>): v3 split the command on ; && | and
 # judged each segment, but the splitter ignored quoting, so a trigger word inside a
@@ -76,11 +75,12 @@ fi
 
 if [ "$FIRE" -eq 1 ]; then
     hook_log "pg_rotation_propagation_guard" "rotation EXECUTION gated pending propagation ack"
+    TARGETS="${HARNESS_PG_ROTATION_TARGETS:-all app env files, secret stores, containers, workers, and replicas that consume this role}"
     MSG="⚠ PG rotation 検知 — rotation は「新 cred を全 consumer に propagate」するまで未完了。
-古い cred で接続している app が落ちる → Mafutsu (mafutsu.com) 本番停止。
+古い cred で接続している app が落ちる。
 
-propagate 先 (全部): mars (canonical) / talisker / zetithnas + edge workers
-  = 全 llm.enc.yaml copy に新 cred を同期するまでが 1 セット。
+propagate 先 (全部): ${TARGETS}
+  = 新 credential を全 consumer に同期するまでが 1 セット。
 
 この operation に propagation が含まれているか確認:
   • 含まれている → 先頭に PG_ROTATION_PROPAGATION_ACK=1 を付けて再実行

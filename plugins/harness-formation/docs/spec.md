@@ -1,11 +1,11 @@
-# njslyr7 — 蒸留版スペック
+# formation — 蒸留版スペック
 
-> Status: v0.1 shipped (`bin/formation` + `skills/formation/`). 独立リポに昇格済み。
-> 起源: 2026-04-13 PRS-LLM-dev で即興した mini agent system が機能した経験を v6.x 鍛造方針に逆輸入した。`multi-agent-njslyr` (v6) の ceremony を落とし、公式 Claude Code primitives に乗る最小レイヤだけを残した。
+> Status: v0.1 shipped (`bin/formation` + `skills/formation/`) and now bundled as `harness-formation`.
+> 起源: 2026-04-13 の mini agent system が機能した経験を v6.x 鍛造方針に逆輸入した。旧 orchestration prototype の ceremony を落とし、公式 Claude Code primitives に乗る最小レイヤだけを残した。
 
 ## 設計原則
 
-公式 Claude Code (Task ツール / ScheduleWakeup / TaskCreate / Memory) に **乗っかる前提**。njslyr v7 は「公式ツールで足りない部分の最小レイヤ」だけを提供する。
+公式 Claude Code (Task ツール / ScheduleWakeup / TaskCreate / Memory) に **乗っかる前提**。formation は「公式ツールで足りない部分の最小レイヤ」だけを提供する。
 
 ### keep (v6 から継承)
 - `docs/philosophy.md` の 5 原則 (Autonomous Formation / Parallelization / Research First / Continuous Learning / Triangulation)

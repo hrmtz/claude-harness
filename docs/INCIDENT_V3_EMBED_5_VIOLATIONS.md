@@ -1,7 +1,7 @@
 # Incident: v3 embed orchestrator — 5 L1 rule violations in 1 session
 
 **Date**: 2026-05-21 evening → 2026-05-22 morning JST
-**Project**: PRS-LLM / Mafutsu embed pipeline
+**Project**: private embedding pipeline
 **Cost**: ~$15 GPU idle + ~6h debug + 4 production-class bugs surviving 2 dual-magi rounds
 
 ## Summary

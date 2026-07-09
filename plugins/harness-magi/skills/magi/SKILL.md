@@ -175,7 +175,7 @@ Otherwise stay in chat.
 
 ## Related
 
-- `formation` (njslyr7) — long-running peer pane workers; complements Magi
+- `formation` — long-running peer pane workers; complements Magi
   for changes needing both pre-flight AND multi-hour observability
 - `code-review`, `pr-review-toolkit` — *post-change* review; Magi is the
   pre-change counterpart

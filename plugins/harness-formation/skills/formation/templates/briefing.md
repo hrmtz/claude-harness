@@ -54,7 +54,7 @@ discipline. Override only with a written reason below.
 ### Mailbox discipline
 - The relay daemon will inject new mailbox entries into your pane, so most
   messages will arrive as user input. Even so, glance at
-  `tail -5 ~/.njslyr7/mailbox/log.jsonl` whenever you go idle (between long
+  `tail -5 ~/.formation/mailbox/log.jsonl` whenever you go idle (between long
   scripts, before ending a turn, after a `Monitor` tick) — a stalled relay or
   a missed `to` field can hide a parent ack.
 - Skip your own outbound entries; only act on `from` ≠ self.

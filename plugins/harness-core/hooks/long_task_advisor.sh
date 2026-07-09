@@ -25,11 +25,11 @@ if ! echo "$cmd" | grep -qE "$LONG_RE"; then
 	exit 0
 fi
 
-cat <<'EOF'
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "additionalContext": "⏱ long-task pattern 検知。`~/.claude/bin/long-task.sh` 経由を推奨 (= dry-run 自動 + interval polling + anomaly 検知 + 仗助 auto trigger)。例: `~/.claude/bin/long-task.sh --dry-arg --dry --limit-arg --limit -- <cmd> [args]`。bg 化したい時は `--background`。skip 緊急時のみ `--skip-dry`。details: ~/.claude/projects/-home-hrmtz-projects-zetith-emdash/memory/feedback_long_task_polling_protocol.md"
+MSG="⏱ long-task pattern detected. Prefer a supervised long-task wrapper with dry-run, bounded polling, and anomaly checks. Example: \`~/.claude/bin/long-task.sh --dry-arg --dry --limit-arg --limit -- <cmd> [args]\`. For background work use \`--background\`; emergency bypass only with \`--skip-dry\`."
+
+jq -n --arg msg "$MSG" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    additionalContext: $msg
   }
-}
-EOF
+}'

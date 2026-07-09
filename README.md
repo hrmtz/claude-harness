@@ -2,7 +2,7 @@
 
 > 🇯🇵 [日本語版 README はこちら](./README_ja.md)
 
-Operational harness for [Claude Code](https://claude.com/claude-code), distilled from 6+ months of self-hosted production use.
+Operational harness for [Claude Code](https://claude.com/claude-code), distilled from self-hosted production use.
 
 > **Why a "harness"?** LLM agents fail in patterned ways — credential leaks, recovery loops, premature script generation. Behavioral rules in `CLAUDE.md` catch some of these, but the same incidents repeat. This marketplace ships **structural** fixes (hooks, guards, reflexive context injection) that don't rely on the agent remembering.
 
@@ -12,7 +12,7 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 |---|---|---|
 | **harness-core** | Defense-in-depth hook set (`hooks/hooks.json` is authoritative). Flagship trio: credential value scrub (PostToolUse) + dangerous bash guard (PreToolUse) + admission-keyword workflow reminder (UserPromptSubmit); plus branch-policy / rotation-propagation / 真田 auto-backup guards, session-context rails, and a Stop/SubagentStop security-review depth gate. | Every Bash call, user prompt, and session stop |
 | **harness-magi** | Multi-perspective preflight review skill. v0.6.0+: spawns 3 same-family agents (MELCHIOR/BALTHASAR/CASPAR) **plus** a mandatory cross-family reviewer (Codex by default) to cancel shared training-data bias. Synthesizes REJECT/REVISE findings before high-stakes changes execute. | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
-| **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
+| **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord notify, and opt-in gh issue emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
 | **harness-formation** | Spawn and coordinate long-running peer AI agent panes (claude or codex) in sibling tmux panes. Append-only jsonl mailbox with session-scoped identity, auto-relay daemon, credential-safe body guard. | Tasks that justify hours of wall time and need live observability or mid-flight redirection |
 | **harness-kimi** | Port of harness-core to Kimi Code CLI. Project-level `AGENTS.md` (behavioral) + a `BASH_ENV` interception layer that runs the harness PreToolUse guards before every Bash command, including absolute-path `/bin/bash -c` ([#52](https://github.com/hrmtz/claude-harness/issues/52), [docs/kimi_hooks.md](./docs/kimi_hooks.md)) + a periodic session-log scrubber. | Every Kimi session; guard active with `HARNESS_KIMI_BASH_GUARD=1` + cron scrubber every minute |
 | **harness-grok** | Port of harness-core/rails to the Grok CLI via its **native** hook API. `install-grok-hooks.sh` writes `~/.grok/hooks/harness.json` from the shared overlay; `lib.sh` absorbs Grok's camelCase payload (`toolInput`/`toolName`/`sessionId`) and `{"decision":"deny"}` output shape so the same guards fire ([docs/grok_hooks.md](./docs/grok_hooks.md)). Closes a fail-open where a Grok payload silently passed the guard. | Every Grok session; `bash install-grok-hooks.sh` + `[compat.claude] hooks = false` to avoid double-fire |
@@ -32,9 +32,8 @@ After install, Claude Code auto-wires the hooks via `${CLAUDE_PLUGIN_ROOT}/hooks
 ### Verify install
 
 ```bash
-# trigger credential scrub: paste a fake key into a Bash command output
-echo 'sk-ant-api03-FAKE_KEY_FOR_TEST_xxxxxxxxxxxxxxxxxxxx'
-# expected: hook detects pattern, sanitizes active session jsonl, emits warning
+# credential scrub regression tests use synthetic secret-shaped fixtures
+python3 plugins/harness-core/tests/test_value_scrub_jwt.py
 
 # trigger bash guard: try a forbidden pattern
 sops -d secrets.enc.yaml
@@ -64,7 +63,7 @@ Read that first if you want to understand *why* these hooks exist before install
 - ✅ `harness-core` — production-tested locally
 - ✅ `harness-magi` — v0.6.0: cross-family (Codex) round mandatory; plateau CONFIRM requires cross-family pass
 - ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
-- ✅ `harness-formation` — distilled from [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7); claude + codex workers, session-scoped mailbox identity
+- ✅ `harness-formation` — `formation` skill + CLI for claude/codex peer workers, session-scoped mailbox identity
 - ✅ `harness-kimi` — behavioral + periodic-scrub port for Kimi Code CLI; see [plugins/harness-kimi/README.md](./plugins/harness-kimi/README.md)
 - ✅ `harness-grok` — native-hook port for Grok CLI; Phase 1 signed off by Grok Verifier 2026-07-03 ([docs/grok_hooks.md](./docs/grok_hooks.md) Verification record)
 - ⏳ `harness-claude-md-template` — paste-able CLAUDE.md skeleton

@@ -6,9 +6,10 @@
 # scripts/ (harness_red_team_weekly). flock is applied in the crontab line.
 set -u
 
-REPO="/home/hrmtz/projects/claude-harness"
+REPO="${HARNESS_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PROMPT="$REPO/scripts/red_team_cron_prompt.md"
 LOG="$HOME/.local/log/harness_red_team_cron.log"
+DISCORD_CHANNEL="${HARNESS_RED_TEAM_DISCORD_CHANNEL:-}"
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 # codex (cross-family reviewer) lives under nvm's node bin, NOT in the default cron PATH.
 # Glob all node versions so an nvm upgrade doesn't silently degrade the codex round.
@@ -32,6 +33,8 @@ RC=$?
 
 echo "==== red-team cron end rc=$RC $(date -Iseconds) ===="
 if [ "$RC" -ne 0 ]; then
-    discord-bot post claude-harness "⚠️ weekly harness red-team cron FAILED (rc=$RC) on chichibu — see $LOG" 2>/dev/null || true
+    if [ -n "$DISCORD_CHANNEL" ]; then
+        discord-bot post "$DISCORD_CHANNEL" "⚠️ weekly harness red-team cron FAILED (rc=$RC) on $(hostname -s 2>/dev/null || echo host) — see $LOG" 2>/dev/null || true
+    fi
 fi
 exit "$RC"

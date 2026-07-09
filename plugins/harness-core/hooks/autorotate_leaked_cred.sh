@@ -6,7 +6,7 @@
 # ("rotation tracked in the issue"); this makes the safe case autonomous.
 #
 # Policy (deliberately conservative — a leak-DETECTION false-positive must never
-# take down production OR be remotely inducible into rotating canonical mars):
+# take down production OR be remotely inducible into rotating canonical databases):
 #   - NON-PROD PG role  → SOURCE-TRUST gated (gh #41): auto-rotate ONLY when the leak
 #     came from a POSITIVELY-identified trusted local credential op (single no-chain
 #     command whose leading verb is sops exec-env / pg_dump(all) / the rotation
@@ -41,22 +41,18 @@ LEAK_SESSION_ID="${LEAK_SESSION_ID:-unknown}"
 LEAK_TRUST="${LEAK_TRUST:-ambiguous}"   # trusted | untrusted | ambiguous (classified by credential_value_scrub.sh from the producing command; AUTO requires "trusted")
 DRYRUN="${AUTOROTATE_DRYRUN:-0}"   # 1 = decide + log only, no real rotation (for tests)
 
-# Project-specific rotation backend (PRS-LLM / mars). Absent on other projects → PG
-# rotation simply unavailable here (escalate instead).
-# gh #45: repointed from the DEPRECATED _rotate_mars_pg_roles.sh (2026-06-08 prod
-# auth/RAG outage: incomplete distribution — no container env_file, skipped
-# pg_premium :5435, mars-only verify) to the hardened v2 (env_file distribute +
-# force-recreate, pg:5434 + pg_premium:5435 ALTER, per-origin /health/ready
-# fail-closed verify). Arg contract verified compatible: autorotate passes only
-# `--roles <role> --execute` for NON-prod roles (prod -> escalate), so v2's
-# ROTATE_PROD_I_UNDERSTAND gate is never hit; --no-laddie defaults off (full distro).
-ROT_SCRIPT="$HOME/projects/PRS-LLM-dev/scripts/_rotate_pg_roles_v2.sh"
+# Project-specific rotation backend. Public-safe default is disabled; operators
+# that want autonomous rotation must point this at their own audited runbook.
+# Arg contract: `--roles <role> --execute` for NON-prod roles only.
+ROT_SCRIPT="${HARNESS_AUTOROTATE_SCRIPT:-}"
+ISSUE_REPO="${HARNESS_AUTOROTATE_ISSUE_REPO:-${CREDENTIAL_LEAK_ISSUE_REPO:-}}"
+DISCORD_CHANNEL="${HARNESS_AUTOROTATE_DISCORD_CHANNEL:-}"
 
 NON_PROD_ROLES=" prs_owner prs_migration prs_ingest prs_bench prs_zombie_canceler "
 PROD_ROLES=" prs_prod_pro prs_prod_chat prs_prod_search prs_auth prs "
 
 notify() {  # best-effort Discord, never fail the script
-    command -v discord-bot >/dev/null 2>&1 && timeout 15 discord-bot post PRS-LLM "$1" >/dev/null 2>&1
+    [ -n "$DISCORD_CHANNEL" ] && command -v discord-bot >/dev/null 2>&1 && timeout 15 discord-bot post "$DISCORD_CHANNEL" "$1" >/dev/null 2>&1
     return 0
 }
 
@@ -65,18 +61,23 @@ escalate() {  # $1 = reason; mark the incident issue + Discord, no rotation
     _log "ESCALATE (no auto-rotate): $reason"
     notify "🔐 **credential leak — manual rotation required**
 $reason
-session=\`$LEAK_SESSION_ID\`. Runbook: \`scripts/_rotate_mars_pg_roles.sh\` (#263 Phase 2 for prod roles)."
+session=\`$LEAK_SESSION_ID\`. Run the operator-owned rotation runbook configured for this install."
     # append to the rolling incident issue if followup recorded one
-    local last; last=$(cat "$STATE_DIR/last_issue" 2>/dev/null)
-    if [ -n "$last" ] && command -v gh >/dev/null 2>&1; then
-        timeout 20 gh issue comment -R hrmtz/claude-harness "$last" \
+    local last_ref last_num
+    last_ref=$(cat "$STATE_DIR/last_issue" 2>/dev/null)
+    case "$last_ref" in
+        "$ISSUE_REPO#"*) last_num="${last_ref#"$ISSUE_REPO#"}" ;;
+        *) last_num="" ;;
+    esac
+    if [ -n "$last_num" ] && [ -n "$ISSUE_REPO" ] && command -v gh >/dev/null 2>&1; then
+        timeout 20 gh issue comment -R "$ISSUE_REPO" "$last_num" \
             --body "⚠️ **auto-rotate DECLINED — manual action needed.** $reason (session \`$LEAK_SESSION_ID\`). Since gh #33/#41 ALL rotations are human-gated (a leak detection can be attacker-induced), so no credential is rotated without an explicit ack / runbook run." >/dev/null 2>&1
     fi
 }
 
-# ── only the project host (chichibu: has sops age key + ssh mars) can rotate ──
-if [ ! -f "$ROT_SCRIPT" ]; then
-    escalate "PG rotation backend not present on this host ($(hostname -s 2>/dev/null)); class=$LEAK_CLASS role=${LEAK_ROLE:-?}"
+# ── only an explicitly configured host/backend can rotate ────────────────────
+if [ -z "$ROT_SCRIPT" ] || [ ! -f "$ROT_SCRIPT" ]; then
+    escalate "PG rotation backend not configured on this host ($(hostname -s 2>/dev/null)); set HARNESS_AUTOROTATE_SCRIPT to an audited runbook. class=$LEAK_CLASS role=${LEAK_ROLE:-?}"
     exit 0
 fi
 
@@ -96,7 +97,7 @@ fi
 # ── classify role ────────────────────────────────────────────────────────────
 case "$PROD_ROLES" in
     *" $LEAK_ROLE "*)
-        escalate "PROD-serving role \`$LEAK_ROLE\` leaked — rotation needs ALTER + CF LB drain rolling restart (talisker→laddie). Not auto-rotating to avoid self-inflicted outage."
+        escalate "PROD-serving role \`$LEAK_ROLE\` leaked — rotation needs the operator production runbook. Not auto-rotating to avoid self-inflicted outage."
         touch "$MARK" 2>/dev/null
         exit 0 ;;
 esac
@@ -131,7 +132,7 @@ fi
 if [ "$LEAK_TRUST" != "trusted" ]; then
     # AMBIGUOUS (not positively trusted, not untrusted): human-ack fallback ONLY.
     # Corroboration-by-local-file was REMOVED after cross-family review (codex REJECT,
-    # gh #41): the leaked DSN's host is canonical mars, whose @host:port/db tail is
+    # gh #41): the leaked DSN's host tail can be ubiquitous in local config, so
     # ubiquitous in local config, so corroboration granted near-automatic trust and —
     # combined with the necessarily-incomplete untrusted denylist — bridged evasive
     # external fetches (python/openssl/git/ssh/base64) into auto-rotation. AUTO now
@@ -165,11 +166,15 @@ fi
 if timeout 120 bash "$ROT_SCRIPT" --roles "$LEAK_ROLE" --execute >> "$LOG_DIR/autorotate_${LEAK_ROLE}.log" 2>&1; then
     touch "$MARK" 2>/dev/null
     _log "✅ auto-rotated $LEAK_ROLE"
-    notify "🔐✅ **leaked credential auto-rotated**: non-prod PG role \`$LEAK_ROLE\` rotated + propagated (chichibu/mars/talisker). Exposed value is now dead. session=\`$LEAK_SESSION_ID\`."
-    last=$(cat "$STATE_DIR/last_issue" 2>/dev/null)
-    [ -n "$last" ] && command -v gh >/dev/null 2>&1 && \
-        timeout 20 gh issue comment -R hrmtz/claude-harness "$last" \
-            --body "🔐✅ **auto-rotated** non-prod role \`$LEAK_ROLE\` (session \`$LEAK_SESSION_ID\`). Exposed password dead; new value propagated to all llm.enc.yaml copies. No manual action needed for this role." >/dev/null 2>&1
+    notify "🔐✅ **leaked credential auto-rotated**: non-prod PG role \`$LEAK_ROLE\` rotated by the configured runbook. Exposed value should now be dead. session=\`$LEAK_SESSION_ID\`."
+    last_ref=$(cat "$STATE_DIR/last_issue" 2>/dev/null)
+    case "$last_ref" in
+        "$ISSUE_REPO#"*) last_num="${last_ref#"$ISSUE_REPO#"}" ;;
+        *) last_num="" ;;
+    esac
+    [ -n "$last_num" ] && [ -n "$ISSUE_REPO" ] && command -v gh >/dev/null 2>&1 && \
+        timeout 20 gh issue comment -R "$ISSUE_REPO" "$last_num" \
+            --body "🔐✅ **auto-rotated** non-prod role \`$LEAK_ROLE\` (session \`$LEAK_SESSION_ID\`) via the configured runbook. Confirm propagation according to your local rotation policy." >/dev/null 2>&1
 else
     _log "✗ auto-rotate FAILED for $LEAK_ROLE — see autorotate_${LEAK_ROLE}.log"
     escalate "AUTO-ROTATE FAILED for non-prod role \`$LEAK_ROLE\` (see ~/.claude/state/hook_logs/autorotate_${LEAK_ROLE}.log) — rotate manually"

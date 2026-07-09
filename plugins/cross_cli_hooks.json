@@ -27,10 +27,10 @@
     "external": [
       {
         "event": "SessionStart",
-        "command": "bash ${HOME}/projects/hippocampus-mcp/scripts/hooks/codex_session_start.sh",
+        "command": "bash ${HIPPOCAMPUS_HOME}/scripts/hooks/codex_session_start.sh",
         "timeout": 10,
         "optional": true,
-        "note": "author's ghost-context injector; lives in the companion hippocampus-mcp repo, not in claude-harness. optional=true → the installer and drift test auto-skip it when that repo is absent, so a standalone claude-harness install ignores it rather than wiring a dead path. ${HOME} is expanded at install time (see scripts/lib/cross_cli_externals.py)."
+        "note": "hippocampus-mcp companion context injector; lives in the companion repo, not in claude-harness. optional=true → the installer and drift test auto-skip it when that repo is absent, so a standalone claude-harness install ignores it rather than wiring a dead path. ${HIPPOCAMPUS_HOME} defaults to ${HOME}/projects/hippocampus-mcp and can be overridden at install time."
       },
       {
         "event": "SessionStart",

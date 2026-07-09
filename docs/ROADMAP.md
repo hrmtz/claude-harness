@@ -84,11 +84,11 @@ The lesson from the 23h HNSW incident ([INCIDENT_23H_HNSW.md](./INCIDENT_23H_HNS
 | **harness-magi** | v0.1 | 1 skill, 3 persona templates | Pure-prompt skill; production trigger conditions ported from `feedback_magi_preflight_for_major_updates` memory |
 | **harness-rails** | v1.0 | 4 components (preflight CLI, heartbeat helper, cron watcher, preflight_gate hook) | 165M-row HNSW build prevented re-occurrence of 23h incident; 12-bug cascade incident motivated 5 trigger patterns in preflight_gate |
 
-### Companion (separate repo)
+### Bundled Runtime Plugins
 
-| Project | Status | Why separate |
+| Project | Status | Notes |
 |---|---|---|
-| [hrmtz/njslyr7](https://github.com/hrmtz/njslyr7) | Public | Has runtime daemon (`formation` CLI + mailbox) outside Claude Code's plugin model |
+| `harness-formation` | Public | Ships the `formation` CLI + mailbox runtime inside this repository |
 
 ### Repo metrics (informational)
 
@@ -114,7 +114,6 @@ Canonical TODO is the [GitHub issue tracker](https://github.com/hrmtz/claude-har
 These appear in README "Status" sections but don't have a corresponding issue yet. Convert to issues when they become actionable, drop if dropped.
 
 - ⏳ **harness-claude-md-template** — paste-able CLAUDE.md skeleton (personas + SOPS rule + 1-liner pointers)
-- 💭 **njslyr7 plugin packaging** — add `.claude-plugin/plugin.json` so `/plugin marketplace add github:hrmtz/njslyr7` works
 - 💭 **Smoke test runbook** — single-script that validates all plugins install + fire correctly in a fresh session
 - 💭 **Hook test harness** — fixture-based unit tests for the 3 hooks in harness-core + the gate hook in harness-rails
 
@@ -129,7 +128,6 @@ Speculative, ordered by how concrete the trigger is. Not a commitment; revise as
 | Item | Trigger / motivation | Effort |
 |---|---|---|
 | `harness-claude-md-template` plugin | Repeated "what should I put in CLAUDE.md" question; ship a skeleton + how-to | 1-2 days |
-| njslyr7 plugin packaging | Single install path for tmux peer-worker; currently `git clone` + `bash install.sh` | half day (njslyr7 side) |
 | Hook degradation triage (#3) | High-priority bug; structural issue worth a deeper look | unbounded; reproduce first |
 | Zenn article (#2) | Public artifact for harness philosophy + 23h incident teardown | 2-3 days writing |
 
@@ -164,9 +162,9 @@ ADR-flavored notes on key choices. Each is one paragraph, linked back to the art
 
 Plugin install gives version management, upgrade path, and a stable `/plugin install` UX. The marginal cost of `plugin.json` + `.claude-plugin/marketplace.json` was small; the long-term cost of telling users to `git clone && cp` would be larger. (Initial commit `26df710`.)
 
-### njslyr7 stays separate
+### formation ships bundled
 
-`formation` ships a runtime daemon + binary outside the Claude Code plugin sandbox. Bundling would require fitting that into a plugin shape; not worth the contortion. Cross-link from claude-harness README instead. (See `harness-formation` row removed from README in commit `0861acf` and replaced with companion link.)
+`formation` ships a runtime daemon + binary outside the Claude Code plugin sandbox, but it is still part of this repository now. The plugin owns the CLI, skill, mailbox relay, and runtime docs as a single install surface.
 
 ### Personas retained, not depersonalized
 

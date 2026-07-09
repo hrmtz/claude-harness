@@ -69,7 +69,7 @@ expect_block 'printenv | grep -i postgres' '#10 printenv piped to filter'
 expect_block 'set | rg postgres' '#10 set piped to non-keyword filter'
 expect_allow 'set -e' '#10 set -e is not an env dump'
 expect_allow 'set -o pipefail' '#10 set -o pipefail is not an env dump'
-expect_allow 'HRMTZ_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#10 ack-prefixed intentional read bypasses'
+expect_allow 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#10 ack-prefixed intentional read bypasses'
 
 # --- #36: bare relative .env + non-enumerated readers (cross-family hole) ---
 expect_block 'cat .env' '#36 bare relative cat .env'
@@ -89,7 +89,7 @@ expect_allow 'cat environment.md' '#36 environment.md is not .env (no false posi
 expect_allow 'source ./venv/bin/activate' '#36 venv path substring env is not .env'
 expect_allow 'echo "loading credentials"' '#36 prose credentials (no ext) is not a file operand'
 expect_allow 'cat .environment' '#36 .environment dotfile is not .env'
-expect_allow 'HRMTZ_ACK_CRED_READ=1 cat .env' '#36 ack-prefixed intentional read bypasses'
+expect_allow 'HARNESS_ACK_CRED_READ=1 cat .env' '#36 ack-prefixed intentional read bypasses'
 
 # --- #36 REVISE HIGH: obfuscated token-construction bypasses are de-obfuscated ---
 expect_block 'cat .e"nv"' '#36 quote-splice bypass (cat .e"nv")'
@@ -129,14 +129,41 @@ expect_block 'awk '\''{print}'\''<.env' '#36 r3 no-space redirect awk<.env'
 expect_block 'sed -n p<.env' '#36 r3 no-space redirect sed<.env'
 
 # --- #36 REVISE MED: ack is per-pattern (explicit flag), not free-text substring ---
-expect_block 'HRMTZ_ACK_CRED_READ=1 sops -d secrets.enc.yaml' '#36 ack does NOT bypass non-ack pattern (sops -d)'
-expect_allow 'HRMTZ_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#36 ack DOES bypass ack-flagged pattern (printenv)'
+expect_block 'HARNESS_ACK_CRED_READ=1 sops -d secrets.enc.yaml' '#36 ack does NOT bypass non-ack pattern (sops -d)'
+expect_allow 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#36 ack DOES bypass ack-flagged pattern (printenv)'
 
 # --- existing guards still fire (no regression) ---
 expect_block 'sops -d secrets.enc.yaml | head' 'existing: sops -d'
 expect_block 'env | grep KEY' 'existing: env | grep'
 expect_allow 'ls -la /tmp' 'existing: benign ls'
 expect_allow 'git commit -m "fix postgresql://[^:/@]+:...@ self-match note"' 'existing: DSN-shaped text inside -m message is stripped'
+
+# ----------------------------------------------------------------------------
+# Group 2b: credential_file_read_guard parity for template files
+# ----------------------------------------------------------------------------
+echo "== credential_file_read_guard template exemption =="
+read_guard_blocks() {
+    local path="$1"
+    local tmp_home
+    tmp_home="$(mktemp -d)"
+    printf '%s' "{\"tool_input\":{\"file_path\":$(printf '%s' "$path" | jq -Rs .)}}" \
+        | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" >/dev/null 2>/dev/null
+    local rc=$?
+    rm -rf "$tmp_home"
+    [ "$rc" -eq 2 ]
+}
+expect_read_block() { if read_guard_blocks "$1"; then ok "READ BLOCK: $2"; else bad "Read should BLOCK: $2 -> [$1]"; fi; }
+expect_read_allow() { if read_guard_blocks "$1"; then bad "Read should ALLOW: $2 -> [$1]"; else ok "READ ALLOW: $2"; fi; }
+
+expect_read_allow '/tmp/proj/.env.example' 'template .env.example'
+expect_read_allow '/tmp/proj/.env.sample' 'template .env.sample'
+expect_read_allow '/tmp/proj/.env.template' 'template .env.template'
+expect_read_allow '/tmp/proj/.env.dist' 'template .env.dist'
+expect_read_allow '/tmp/proj/.env.test' 'template .env.test'
+expect_read_allow '/tmp/proj/.env.local-example' 'template .env.local-example'
+expect_read_block '/tmp/proj/.env' 'real .env'
+expect_read_block '/tmp/proj/.env.production' 'real .env.production'
+expect_read_block '/tmp/proj/.env.example.bak' 'template suffix not final segment'
 
 # ----------------------------------------------------------------------------
 # Group 3: value_scrub allowlist skips catalog self-match (issue #7 tertiary)

@@ -52,7 +52,7 @@ All three independent design passes initially proposed **transform-reversal**: o
 
 The harness's guiding principle is "enumerate the finite, not the infinite." Attack *methods* and *transforms* are infinite. These three sets are finite and enumerable:
 
-1. **SOURCES** — where a secret enters agent-reachable context: a `Read` of a SOPS file; the `HRMTZ_ACK_CRED_READ` bypass firing; a Bash command string containing `sops exec-env` / `sops edit`.
+1. **SOURCES** — where a secret enters agent-reachable context: a `Read` of a SOPS file; the `HARNESS_ACK_CRED_READ` bypass firing; a Bash command string containing `sops exec-env` / `sops edit`.
 2. **CHANNELS** — egress points that land in the transcript or leave the box: each tool's PostToolUse output (covered by the value sensor); outbound-network Bash commands (`curl`/`wget`/`nc`/external `ssh`/`git push`); file writes outside the repo.
 3. **KNOWN-VALUES** — the HMAC manifest (the value sensor's domain).
 

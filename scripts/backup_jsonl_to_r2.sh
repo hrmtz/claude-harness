@@ -1,5 +1,5 @@
 #!/bin/bash
-# Encrypted backup of ~/.claude/projects/*.jsonl (the hippocampus memory SSOT) to R2.
+# Encrypted backup of ~/.claude/projects/*.jsonl (hippocampus/Claude memory jsonl) to rclone.
 # Local stays PLAINTEXT (easy owner read); the R2 copy is age-encrypted (no plaintext
 # secret in cloud). Incremental via a local mtime manifest — no remote ListObjects (the
 # Object-RW R2 token can't list at account level). Restore: see docs (age -d the .age).
@@ -9,12 +9,17 @@
 set -u
 
 SRC="$HOME/.claude/projects"
-DEST="r2:hippocampus/jsonl"
-REC="age1vrg258ktp7gnz6vwyeh28ss0vx5s37h45xlrjnzd5h0h3kp8lcgs4k33xf"   # public age recipient
-STATE="$HOME/.local/state/hippocampus_backup"
+DEST="${HARNESS_JSONL_BACKUP_DEST:-}"
+REC="${HARNESS_JSONL_BACKUP_RECIPIENT:-}"
+STATE="${HARNESS_JSONL_BACKUP_STATE:-$HOME/.local/state/hippocampus_backup}"
 MANIFEST="$STATE/manifest.tsv"            # relpath \t mtime \t bytes
-LOG="$HOME/.local/log/hippocampus_backup.log"
+LOG="${HARNESS_JSONL_BACKUP_LOG:-$HOME/.local/log/hippocampus_backup.log}"
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+if [ -z "$DEST" ] || [ -z "$REC" ]; then
+  echo "error: set HARNESS_JSONL_BACKUP_DEST (rclone dest) and HARNESS_JSONL_BACKUP_RECIPIENT (age recipient)" >&2
+  exit 2
+fi
 mkdir -p "$STATE" "$(dirname "$LOG")"
 [ -f "$MANIFEST" ] || : > "$MANIFEST"
 

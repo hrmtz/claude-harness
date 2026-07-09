@@ -153,12 +153,14 @@ if complete is False and dt < 1.0:
 else:
     bad(f"T9 deadline guard ineffective (complete={complete}, {dt:.2f}s)")
 
-# T10 (incomplete-messaging honesty, MED): a redacted-but-incomplete scan must NOT use
-# the all-clear "No manual steps needed" wording; a complete scan must.
+# T10 (incomplete-messaging honesty, MED): a redacted-but-incomplete scan must ask
+# for manual review. A complete scan may say transcript cleanup is done, but must not
+# imply credential rotation is unnecessary.
 msg_complete = cs.resume_context(2, scan_complete=True)
 msg_partial = cs.resume_context(2, scan_complete=False)
-if "No manual steps needed" in msg_complete:
-    ok("T10a complete scan keeps all-clear wording")
+if "No manual transcript cleanup is needed" in msg_complete \
+        and "rotate the affected credential if this was a real exposure" in msg_complete:
+    ok("T10a complete scan keeps transcript-cleanup wording without waiving rotation")
 else:
     bad("T10a complete-scan wording regressed")
 if "No manual steps needed" not in msg_partial and "INCOMPLETE" in msg_partial \

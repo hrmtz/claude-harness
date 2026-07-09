@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# recent_topics_inject.sh — SessionStart hook for Phase 6 personal corpus inject.
+# recent_topics_inject.sh — SessionStart hook for hippocampus recent-topic inject.
 #
-# epic #13 / issue #19 — pairs with ~/.claude/hooks/ghost_inject.sh.
-# ghost layer injects cross-project agent memory (= rules / preferences);
-# this hook injects current-project recent conversation topics (= what we
-# were talking about).
+# Pairs with ghost_inject.sh. The hippocampus-mcp companion is optional:
+# auto-detect at $HOME/projects/hippocampus-mcp, override with
+# HARNESS_HIPPOCAMPUS_HOME, and silently no-op when missing. Set
+# HARNESS_HIPPOCAMPUS_SECRETS if credentials live outside the companion repo.
 #
 # Triple-gated:
 #   1. personal.feature_flags.conversation_project_inject = TRUE (= DB)
@@ -15,21 +15,28 @@
 # session startup).
 set -uo pipefail
 
-export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
-export CURRENT_PROJECT_DIR="$PWD"
+HOOK_INPUT=$(cat 2>/dev/null || true)
+CWD=$(printf '%s' "$HOOK_INPUT" | jq -r '.cwd // .workspace.current_dir // empty' 2>/dev/null)
+[ -z "$CWD" ] && CWD="$PWD"
 
-CREDS_DIR="${CREDS_DIR:-$HOME/projects/creds-migration/secrets-template}"
-SECRETS="$CREDS_DIR/hippocampus.enc.yaml"
+export SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
+export CURRENT_PROJECT_DIR="$CWD"
+
+HIPPOCAMPUS_HOME="${HARNESS_HIPPOCAMPUS_HOME:-$HOME/projects/hippocampus-mcp}"
+CREDS_DIR="${HARNESS_HIPPOCAMPUS_CREDS_DIR:-${CREDS_DIR:-$HIPPOCAMPUS_HOME/secrets}}"
+SECRETS="${HARNESS_HIPPOCAMPUS_SECRETS:-$CREDS_DIR/hippocampus.enc.yaml}"
 LOG="$HOME/.local/log/recent_topics_inject.log"
-SCRIPT="$HOME/projects/hippocampus-mcp/scripts/recent_topics_inject.py"
-PYTHON="$HOME/projects/hippocampus-mcp/.venv/bin/python3"
+SCRIPT="${HARNESS_RECENT_TOPICS_SCRIPT:-$HIPPOCAMPUS_HOME/scripts/recent_topics_inject.py}"
+PYTHON="${HARNESS_HIPPOCAMPUS_PYTHON:-$HIPPOCAMPUS_HOME/.venv/bin/python3}"
+
+[ "${HARNESS_HIPPOCAMPUS_INJECT_DISABLE:-0}" = "1" ] && exit 0
+[ "${HIPPOCAMPUS_PERSONAL_INJECT_DISABLE:-0}" = "1" ] && exit 0
+[ -x "$PYTHON" ] || exit 0
+[ -f "$SCRIPT" ] || exit 0
+[ -f "$SECRETS" ] || exit 0
+[ -f "$SOPS_AGE_KEY_FILE" ] || exit 0
 
 mkdir -p "$(dirname "$LOG")"
-
-# Capture Claude Code's hook JSON stdin (= session_id + cwd + hook_event_name +
-# source + transcript_path) to forward to the python script.
-# Fallback to empty if not a hook context (= manual smoke).
-HOOK_INPUT=$(cat 2>/dev/null || true)
 
 # 5s budget; empty context on any failure.
 ctx=$(echo -n "$HOOK_INPUT" | timeout 5s \

@@ -74,12 +74,17 @@ if [ -f "$ACK_FILE" ]; then
 fi
 
 # --- check 4-layer artifacts ---
-# Search docs/reviews/<phase_root>/ relative to a few likely roots.
+# Search docs/reviews/<phase_root>/ relative to cwd plus optional operator roots.
 REVIEW_DIRS=(
-    "/home/hrmtz/projects/PRS-LLM-dev/docs/reviews/${PHASE_ROOT}"
     "$(pwd)/docs/reviews/${PHASE_ROOT}"
     "./docs/reviews/${PHASE_ROOT}"
 )
+if [ -n "${HARNESS_PHASE_REVIEW_ROOTS:-}" ]; then
+    IFS=':' read -r -a EXTRA_ROOTS <<< "$HARNESS_PHASE_REVIEW_ROOTS"
+    for root in "${EXTRA_ROOTS[@]}"; do
+        [ -n "$root" ] && REVIEW_DIRS+=("$root/docs/reviews/${PHASE_ROOT}")
+    done
+fi
 
 REVIEW_DIR=""
 for d in "${REVIEW_DIRS[@]}"; do

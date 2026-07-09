@@ -89,7 +89,7 @@ While the operation runs, write a heartbeat:
 
 ```bash
 safety-rails-beat write \
-    --project PRS-LLM \
+    --project example-project \
     --job hnsw_build \
     --eta-hours 4 \
     --metric tuples_done=$(psql -tAc "SELECT tuples_done FROM pg_stat_progress_create_index")
@@ -148,7 +148,7 @@ Out of scope:
 
 ## Related
 
-- Incident issue: [hrmtz/PRS-LLM#59](https://github.com/hrmtz/PRS-LLM/issues/59)
+- Incident issue: original private project tracker issue `#59`
 - Related memory: `feedback_long_run_op_anomaly_rail`,
   `feedback_early_detect_bleeding`, `feedback_harness_structural_primary`,
   `feedback_recurring_incident_to_issue`

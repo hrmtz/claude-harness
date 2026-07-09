@@ -141,7 +141,7 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     # human-ack which killed autonomous response). The self-DoS root is not "auto"
     # but the TRIGGER SOURCE: a DSN-shaped string in attacker-controllable output
     # (curl/WebFetch/MCP response, peer mailbox body, transcript) must never auto-
-    # rotate canonical mars. We classify the PRODUCING COMMAND's trust here and pass
+    # rotate the configured backend. We classify the PRODUCING COMMAND's trust here and pass
     # it to autorotate, which hard-blocks untrusted sources, auto-rotates trusted
     # ones, and falls back to a human-ack only for ambiguous sources.
     # Source-trust classification (gh #41, shared lib fn). AUTO requires a
@@ -161,9 +161,21 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
 
     # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
     # so Claude should keep going rather than stop to do manual cleanup.
-    LAST_ISSUE=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
-    ISSUE_REF=""
-    [ -n "$LAST_ISSUE" ] && ISSUE_REF=" (tracked in claude-harness#${LAST_ISSUE})"
-    MSG="⚠️  credential leak detected: transcript sanitized in-place + incident logged to the claude-harness \`credential-leak\` issue${ISSUE_REF}. Transcript is safe to continue. NOTE (gh #41): rotation is SOURCE-TRUST gated — a trusted-source leak auto-rotates, an untrusted-source one (external fetch / mailbox / transcript) is REFUSED, an ambiguous one awaits a human ack. See the incident issue for status."
+    if [ "${HARNESS_CREDENTIAL_LEAK_ISSUES:-0}" = "1" ] && [ -n "${CREDENTIAL_LEAK_ISSUE_REPO:-}" ]; then
+        LAST_ISSUE_REF=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
+        ISSUE_REF=""
+        case "$LAST_ISSUE_REF" in
+            "${CREDENTIAL_LEAK_ISSUE_REPO}#"*) ISSUE_REF=" (tracked in ${LAST_ISSUE_REF})" ;;
+        esac
+        INCIDENT_STATUS="incident issue filing is enabled${ISSUE_REF}"
+    else
+        INCIDENT_STATUS="incident issue filing is disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable it"
+    fi
+    if [ -n "${HARNESS_AUTOROTATE_SCRIPT:-}" ] && [ -f "${HARNESS_AUTOROTATE_SCRIPT:-}" ]; then
+        ROTATION_STATUS="rotation is SOURCE-TRUST gated — a trusted-source leak auto-rotates, an untrusted-source one (external fetch / mailbox / transcript) is REFUSED, an ambiguous one awaits a human ack"
+    else
+        ROTATION_STATUS="autorotation is disabled; set HARNESS_AUTOROTATE_SCRIPT to an audited runbook to enable SOURCE-TRUST-gated rotation"
+    fi
+    MSG="⚠️  credential leak detected: transcript sanitized in-place; ${INCIDENT_STATUS}. Transcript is safe to continue. NOTE: ${ROTATION_STATUS}."
     emit_context "PostToolUse" "$MSG"
 fi

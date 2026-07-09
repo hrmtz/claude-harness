@@ -41,8 +41,8 @@ Revision rationale (= dual-magi round 1 fixes baked in):
   - Caspar-3 (REJECT): rotation friction.
       FIX: build_all wrapper script (separate file) eliminates 27× manual.
   - Caspar-4 (REJECT): multi-host scope.
-      FIX: DESIGN.md declares chichibu-only. Manifests in ~/.claude/state/ (=
-           per-host); never committed to sops repo.
+      FIX: Manifests are per-host. Manifests in ~/.claude/state/ (= per-host);
+           never committed to a secrets repo.
 
 Property invariants (build-side):
   B1: Plaintext value bytes never written to manifest, stderr, stdout, or log.

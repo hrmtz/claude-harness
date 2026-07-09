@@ -1,6 +1,6 @@
 # harness-rails
 
-**Operational safety rails for long-running operations.** Pre-flight algorithm fitness check, in-flight anomaly detection (heartbeat + cron watcher), Discord + gh issue auto-emit. Human-in-loop only — no auto-kill, no auto-revert.
+**Operational safety rails for long-running operations.** Pre-flight algorithm fitness check, in-flight anomaly detection (heartbeat + cron watcher), Discord notify, and opt-in gh issue emit. Human-in-loop only — no auto-kill, no auto-revert.
 
 Built after a 23h sunk-cost incident: an HNSW build hit the I/O ceiling because `working_set (320 GB) > RAM (125 GB)`, but no rail caught it. The "early bleeding detection" philosophy lived only in CLAUDE.md memory, not in structural rails.
 
@@ -40,7 +40,7 @@ Long-running scripts write a heartbeat file every interval; the watcher reads it
 ```bash
 # inside a long-running loop or before a long DDL
 safety-rails-beat write \
-    --project PRS-LLM \
+    --project my-project \
     --job hnsw_shard_build \
     --eta-hours 4 \
     --metric tuples_done=$(psql -tAc "SELECT tuples_done FROM ...")
@@ -53,7 +53,7 @@ from safety_rails import heartbeat
 def sample():
     return {"tuples_done": pg_query(...)}
 
-with heartbeat.beat("hnsw_shard_build", project="PRS-LLM",
+with heartbeat.beat("hnsw_shard_build", project="my-project",
                     eta_hours=4, sampler=sample):
     run_long_operation()
 ```
@@ -70,7 +70,23 @@ Reads heartbeat files. Detects:
 On detect:
 
 - Discord notify (per-project channel via `discord-bot post <project>`, or fallback `discord-notify`)
-- gh issue create on alert+ (deduped by title)
+- gh issue create on alert+ only when a project-to-repo map is configured (deduped by title)
+
+GitHub issue emit is disabled by default. Configure one of:
+
+```bash
+export HARNESS_RAILS_PROJECT_REPOS='{"my-project":"owner/repo"}'
+```
+
+or:
+
+```json
+{
+  "my-project": "owner/repo"
+}
+```
+
+at `~/.config/safety-rails/project_repos.json`.
 
 **Does NOT auto-kill or auto-revert.** All repair is human-in-loop. (See "design philosophy" below.)
 
@@ -171,7 +187,7 @@ A 1% subset or 1M-row test DB will not detect memory ceiling issues — the work
 
 ## Motivation: the 23h incident
 
-See [hrmtz/PRS-LLM #59](https://github.com/hrmtz/PRS-LLM/issues/59) for the full retrospective.
+See the incident write-up in this repository for the full retrospective.
 
 Summary: 165M chunks × 1024d halfvec HNSW build started with `working_set (320 GB) > RAM (125 GB)`. The build progressed at 1/4 the projected rate, hit 23h41min elapsed at 44% progress, and was killed for a shard ×8 alternative.
 

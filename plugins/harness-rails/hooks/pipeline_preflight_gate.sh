@@ -82,7 +82,7 @@ if echo "$CMD" | grep -qE '\bpg_dump\b[^|]*\|[[:space:]]*(psql|ssh)\b' || \
    echo "$CMD" | grep -qE '(^|[[:space:]&|;])ssh[[:space:]]+[^|;&]*\bpg_dump\b[^|;&]*\|' || \
    echo "$CMD" | grep -qE '\bCOPY[[:space:]]+.*\bFROM[[:space:]]+STDIN[[:space:]]+WITH[[:space:]]+\(FORMAT[[:space:]]+BINARY\)'; then
   trigger="cross-host-pg-stream"
-  why="cross-host PG stream subject to network bandwidth ceiling + TCP single-stream limit. Measure mars→target raw bandwidth before designing parallelism."
+  why="cross-host PG stream subject to network bandwidth ceiling + TCP single-stream limit. Measure source→target raw bandwidth before designing parallelism."
   shuzo="bandwidth 計測 → 設計、慎重に進めば速い。1 file dd で raw measure、それから本番だ。"
 fi
 

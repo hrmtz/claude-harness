@@ -16,7 +16,7 @@ Usage:
         dim=1024,
         bytes_per_dim=2,           # halfvec
         m=16,                      # hnsw graph degree
-        ram_bytes=125 * 1024**3,   # mars 125 GB
+        ram_bytes=125 * 1024**3,   # target host RAM
     )
     if result.rejected:
         print(result.reason)

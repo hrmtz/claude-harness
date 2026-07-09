@@ -2,12 +2,12 @@
 # safety-rails-beat — bash shim for heartbeat write (no Python knowledge required)
 #
 # Usage:
-#   safety-rails-beat write --project PRS-LLM --job hnsw_shard_build \
+#   safety-rails-beat write --project my-project --job hnsw_shard_build \
 #                           --eta-hours 4 [--metric-key foo --metric-val bar]
 #
 # Typically called inside long-running shell loops:
 #   while ...; do
-#     safety-rails-beat write --project PRS-LLM --job foo --eta-hours 8
+#     safety-rails-beat write --project my-project --job foo --eta-hours 8
 #     do_unit_of_work
 #     sleep 30
 #   done

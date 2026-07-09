@@ -218,7 +218,7 @@ classify_leak_trust() {
     # attacker endpoint, so they are NOT inert and are excluded).
     local INERT='^(PGPASSWORD|PGAPPNAME|PGCLIENTENCODING|PGCONNECT_TIMEOUT)$'
     # (1) UNTRUSTED denylist — ADVISORY only (incomplete by nature, NOT load-bearing).
-    if printf '%s' "$cmd" | grep -qiE '(^|[^a-z])(curl|wget|ncat|nc|ssh|scp|sftp|rsync|telnet|ftp|aria2c|httpie|http|fetch)([^a-z]|$)|openssl[[:space:]]+s_client|https?://|ftp://|gh[[:space:]]+api[[:space:]]|/mailbox/|[^a-z]\.jsonl([^a-z]|$)|njslyr7/mailbox|/\.claude/projects/'; then
+    if printf '%s' "$cmd" | grep -qiE '(^|[^a-z])(curl|wget|ncat|nc|ssh|scp|sftp|rsync|telnet|ftp|aria2c|httpie|http|fetch)([^a-z]|$)|openssl[[:space:]]+s_client|https?://|ftp://|gh[[:space:]]+api[[:space:]]|/mailbox/|[^a-z]\.jsonl([^a-z]|$)|/\.claude/projects/'; then
         echo untrusted; return
     fi
     # (2) Any chaining / command-substitution / PROCESS SUBSTITUTION / backtick makes

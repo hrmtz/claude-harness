@@ -12,9 +12,9 @@
 #   - または `git push ... main` で main 居座り中 (= main が dev より ahead)
 #
 # Bypass:
-#   - HRMTZ_ACK_MAIN_COMMIT=1 prefix (= hot fix / merge commit 等の意識的 main 直)
+#   - HARNESS_ACK_MAIN_COMMIT=1 prefix (= hot fix / merge commit 等の意識的 main 直)
 #   - git commit --no-verify (= 既存 local hook bypass と同 semantic)
-#   - HRMTZ_ACK_MAIN_PUSH=1 prefix (= push 用 bypass)
+#   - HARNESS_ACK_MAIN_PUSH=1 prefix (= push 用 bypass)
 
 source "$(dirname "$0")/lib.sh"
 
@@ -40,7 +40,7 @@ extract_cwd() {
 }
 
 # ── git commit on main ──
-if echo "$CMD" | grep -qE 'HRMTZ_ACK_MAIN_COMMIT=1'; then
+if echo "$CMD" | grep -qE 'HARNESS_ACK_MAIN_COMMIT=1'; then
     : # ack bypass
 elif echo "$CMD" | grep -qE '(^|[^a-zA-Z_/])git[[:space:]]+(-[^[:space:]]+[[:space:]]+)*commit([[:space:]]|$)'; then
     if ! echo "$CMD" | grep -qE '(--no-verify|[[:space:]]-n([[:space:]]|$))'; then
@@ -48,13 +48,13 @@ elif echo "$CMD" | grep -qE '(^|[^a-zA-Z_/])git[[:space:]]+(-[^[:space:]]+[[:spa
         current_branch=$(git -C "$target_dir" symbolic-ref --short HEAD 2>/dev/null)
         if [[ "$current_branch" == "main" ]]; then
             hook_log "branch_policy_guard" "blocked commit on main in $target_dir"
-            emit_deny "git checkout dev && git commit ... で dev に切替えてから。 hot fix 等の意識的 main 直は HRMTZ_ACK_MAIN_COMMIT=1 prefix で bypass"
+            emit_deny "git checkout dev && git commit ... で dev に切替えてから。 hot fix 等の意識的 main 直は HARNESS_ACK_MAIN_COMMIT=1 prefix で bypass"
         fi
     fi
 fi
 
 # ── git push on main (= 居座り 徴候 ahead check) ──
-if echo "$CMD" | grep -qE 'HRMTZ_ACK_MAIN_PUSH=1'; then
+if echo "$CMD" | grep -qE 'HARNESS_ACK_MAIN_PUSH=1'; then
     : # ack bypass
 elif echo "$CMD" | grep -qE 'git[[:space:]]+push.*([[:space:]]|:)main([[:space:]]|$|:)'; then
     target_dir=$(extract_cwd "$CMD")
@@ -63,7 +63,7 @@ elif echo "$CMD" | grep -qE 'git[[:space:]]+push.*([[:space:]]|:)main([[:space:]
         ahead=$(git -C "$target_dir" rev-list --count dev..main 2>/dev/null || echo "0")
         if [[ "$ahead" -gt 0 ]]; then
             hook_log "branch_policy_guard" "blocked push: main ahead of dev by $ahead in $target_dir"
-            emit_deny "main が dev より $ahead commit 先行 (= 居座り中の徴候)。 git checkout dev && git merge --ff-only main で dev 追従させてから push。 意識的 bypass は HRMTZ_ACK_MAIN_PUSH=1"
+            emit_deny "main が dev より $ahead commit 先行 (= 居座り中の徴候)。 git checkout dev && git merge --ff-only main で dev 追従させてから push。 意識的 bypass は HARNESS_ACK_MAIN_PUSH=1"
         fi
     fi
 fi

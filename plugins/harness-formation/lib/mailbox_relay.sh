@@ -28,9 +28,18 @@ source "$SCRIPT_DIR/wake.sh"
 
 AGENT="${1:?agent name required (msg 'to' field value)}"
 PANE="${2:?tmux session/pane target}"
-NJSLYR_HOME="${NJSLYR_HOME:-$HOME/.njslyr7}"
-MAILBOX="${MAILBOX:-$NJSLYR_HOME/mailbox/log.jsonl}"
-LOG_PREFIX="[njslyr7-relay:$AGENT→$PANE]"
+if [[ -z "${FORMATION_HOME:-}" ]]; then
+  if [[ -n "${NJSLYR_HOME:-}" ]]; then
+    FORMATION_HOME="$NJSLYR_HOME"
+  elif [[ ! -e "$HOME/.formation" && -e "$HOME/.njslyr7" ]]; then
+    FORMATION_HOME="$HOME/.njslyr7"
+  else
+    FORMATION_HOME="$HOME/.formation"
+  fi
+fi
+NJSLYR_HOME="$FORMATION_HOME"  # legacy alias for callers that still inspect it.
+MAILBOX="${MAILBOX:-$FORMATION_HOME/mailbox/log.jsonl}"
+LOG_PREFIX="[formation-relay:$AGENT→$PANE]"
 
 # track last line processed
 if [[ ! -f "$MAILBOX" ]]; then
@@ -54,7 +63,7 @@ process_new_lines() {
     subj=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('subject',''))" 2>/dev/null)
     from=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('from',''))" 2>/dev/null)
     echo "$LOG_PREFIX new msg from=$from subj=$(echo "$subj" | head -c 60), injecting into $PANE"
-    tmux_send_submit "$PANE" "mailbox: 新着 from $from — '$subj' (tail -1 ~/.njslyr7/mailbox/log.jsonl で内容確認して reply)"
+    tmux_send_submit "$PANE" "mailbox: 新着 from $from — '$subj' (tail -1 ~/.formation/mailbox/log.jsonl で内容確認して reply)"
     sleep 1  # debounce、連続 msg で burst 防ぐ
   done
   LAST=$current

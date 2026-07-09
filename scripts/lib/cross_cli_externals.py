@@ -5,6 +5,7 @@ reference portable tokens the installer expands at wire time:
 
   ${HARNESS_DIR}  -> the cloned claude-harness repo root (wherever it lives)
   ${HOME}         -> the installing user's home directory
+  ${HIPPOCAMPUS_HOME} -> companion repo root, default $HOME/projects/hippocampus-mcp
 
 An entry marked "optional": true is skipped when its target script is absent.
 That is for cross-repo hooks (e.g. the companion hippocampus-mcp ghost-context
@@ -28,8 +29,11 @@ import sys
 
 def _expand(cmd: str, harness_dir: str) -> str:
     home = os.environ.get("HOME", os.path.expanduser("~"))
+    hippocampus_home = os.environ.get("HIPPOCAMPUS_HOME", f"{home}/projects/hippocampus-mcp")
     return (cmd.replace("${HARNESS_DIR}", harness_dir)
                .replace("$HARNESS_DIR", harness_dir)
+               .replace("${HIPPOCAMPUS_HOME}", hippocampus_home)
+               .replace("$HIPPOCAMPUS_HOME", hippocampus_home)
                .replace("${HOME}", home)
                .replace("$HOME", home))
 
