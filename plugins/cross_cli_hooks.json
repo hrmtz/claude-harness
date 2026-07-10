@@ -37,6 +37,13 @@
         "command": "bash ${HARNESS_DIR}/plugins/harness-core/hooks/codex_tmux_self_name.sh",
         "timeout": 5,
         "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead. ${HARNESS_DIR} is expanded to the cloned repo root at install time, so this works wherever the repo lives."
+      },
+      {
+        "event": "PostToolUse",
+        "matcher": "Bash",
+        "command": "python3 ${HARNESS_DIR}/plugins/harness-rails/hooks/versioning_autorun.py",
+        "timeout": 30,
+        "note": "codex-only release automation: after a Bash git push on main, auto-detect semver bump, tag, and create a GitHub Release. Docs-only pushes no-op. Keep the manual versioning skill confirm-gated; this hook is the automation layer."
       }
     ]
   },

@@ -14,6 +14,9 @@ description: |
 
   Cardinal rule: NEVER auto-push a tag the user hasn't confirmed. Propose the
   bump + the reasoning, wait for `OK` / `go` / explicit version override.
+  In this repo, Codex may also wire a separate PostToolUse automation hook
+  that runs after `git push origin main`; that hook is the automation layer,
+  while this manual skill stays confirm-gated.
 allowed-tools:
   - Bash
   - Read

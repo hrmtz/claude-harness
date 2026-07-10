@@ -181,6 +181,7 @@ compatible. Notable Codex-specific points:
 | `credential_value_scrub.sh` | PostToolUse / Bash | Uses `transcript_path` from hook JSON to locate the Codex session file under `~/.codex/sessions/`. |
 | `credential_scrub.sh` | PostToolUse / Bash and compatible tool events | Sources repo-local `lib.sh`, then uses `transcript_path` rather than Claude project scanning when available. |
 | `formation_suggest.sh` | UserPromptSubmit | Emits JSON `additionalContext` so Codex honors the hint when `FORMATION_SUGGEST_MODE=active`. |
+| `versioning_autorun.py` | PostToolUse / Bash | After a main-branch `git push`, auto-detects semver bump, tags, and creates a GitHub Release. Docs-only pushes no-op. |
 | `sr_depth_gate.py` | Stop | Claude also wires this on `SubagentStop`; Codex overlay uses the Stop hook. |
 | `check_zsh_reserved_vars.sh` | PreToolUse / `apply_patch` | Blocks only when the patch itself shows zsh context (`.zsh` path or zsh shebang), avoiding false positives on bash `.sh` hunks. |
 | `check_early_check_timer.sh`, `ssh_fanout_canonical_check.sh` | PreToolUse / `apply_patch` | Extract added lines from the patch body and run the existing warning checks against those lines. |
