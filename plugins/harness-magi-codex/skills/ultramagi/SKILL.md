@@ -14,22 +14,83 @@ literal verification — and the cheapest place to catch that is before the irre
 This is the Codex-orchestrated mirror of `plugins/harness-magi/skills/ultramagi`. The loop is
 family-agnostic; only the adapters differ.
 
+## Default family routing
+
+For hard design→implementation work, prefer this routing unless the user explicitly overrides it:
+
+```
+Claude: planning / design plateau
+Codex: implementation
+Claude: adversarial design-intent review
+Codex: final fixes + tests
+```
+
+Rationale:
+
+- Claude is the default owner for planning/design synthesis, long-context contradiction hunting,
+  operational runbooks, privacy/permission boundaries, and "what not to build" decisions.
+- Codex is the default owner for repo-local implementation, migration/test mechanics, small
+  scoped diffs, and final executable verification.
+- Claude is the default cross-family reviewer for implementation intent: does the code still
+  satisfy the plateau'd design, and did implementation introduce policy/security/ops gaps?
+
+Codex-orchestrated ultramagi must therefore not assume "Codex writes the design because Codex is
+the current chassis." If the task is still in design/planning and a Claude worker is available,
+handoff or spawn Claude for the design plateau, then resume here for coding. If the user asks for
+"subagent Codex coding after design", enforce that no coding starts until the design gate has a
+mechanical plateau marker.
+
+### Fallback when a family is unavailable
+
+"Unavailable" includes missing CLI, no active contract/subscription, model capacity, rate limit,
+or a worker that cannot be spawned. Fallback is allowed, but it must be explicit in the design or
+handoff notes and it must not erase the cross-family gate.
+
+Fallback order:
+
+1. **Claude unavailable during planning**: Codex may draft and revise the design locally, but must
+   mark the run as "Codex-drafted design, Claude review pending". Do not proceed to irreversible
+   implementation until either Claude cross-family review runs or the user explicitly accepts the
+   degraded path for a reversible spike.
+2. **Codex unavailable during coding**: Claude may implement only small, reversible scaffolding or
+   tests. For migration/data-loss/security changes, stop before the irreversible step and queue a
+   Codex implementation/review pass when available.
+3. **Claude unavailable during implementation review**: Codex may run self-review and tests, but
+   the result is "not final-reviewed". Do not deploy, migrate canonical data, or tag a production
+   release until Claude or another non-Codex family reviews the final diff, unless the user
+   explicitly accepts the degraded release path.
+4. **Both families cannot cross-review**: narrow the task to documentation, reversible spike, or
+   local-only proof. The plateau gate must not be claimed.
+
+When fallback is used, write a short `FAMILY_ROUTING` note in the design state directory or
+implementation handoff:
+
+```text
+preferred: Claude design -> Codex code -> Claude review -> Codex fixes
+actual: <what ran>
+missing: <family/phase/reason>
+degraded_until: <what must run before ship>
+```
+
 ## The loop (one pass per task)
 
 ```
 [0] SCOPE      one task. State the invariant that must not break.
-[1] PLAN       design doc, written LOCALLY into docs/designs/<NAME>.md.
+[1] PLAN       design doc, preferably Claude-led for hard planning, written LOCALLY into
+               docs/designs/<NAME>.md.
 [2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU.
    ↻           each round: revise with findings, re-review. The cross-family (Claude)
                round is MANDATORY before any plateau claim, and the gate script — not
                you — decides whether plateau was reached.
-[3] CODE       implement the plateau'd design. Repo-baked, idempotent, reversible
+[3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Repo-baked,
+               idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   adversarial review of the IMPLEMENTATION, not the design:
                  scripts/magi_fanout_codex.sh <target> <round> <dir> --persona-set bug-hunt
                Reviewers RUN read-only verification against real data and try to break it.
                Fix findings; re-run until clean. This is the gate before an irreversible run.
-[5] CODE-REVIEW on the final diff. Commit.
+[5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
+               then Codex for final fixes/tests. Commit only when requested or policy allows.
 [6] NEXT       update the epic; pick the next task; back to [0].
 ```
 

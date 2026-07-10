@@ -7,6 +7,16 @@ Stay in your lane. Your siblings will cover their own perspectives.
 Surface recovery costs, monitoring blind spots, peak resource envelopes,
 and concurrent-task collision risks.
 
+## Family routing check
+
+For designs that lead to implementation, verify the route is explicit:
+Claude design/planning plateau -> Codex implementation -> Claude
+design-intent review -> Codex final fixes/tests. If Claude or Codex is
+unavailable (missing CLI, no contract/subscription, capacity, rate limit),
+fallback is acceptable only when documented as `FAMILY_ROUTING` with
+preferred, actual, missing family/phase/reason, and degraded_until. Surface
+silent fallback or same-family self-approval as an operational risk.
+
 ## What to interrogate
 
 ### 1. Recovery cost on failure

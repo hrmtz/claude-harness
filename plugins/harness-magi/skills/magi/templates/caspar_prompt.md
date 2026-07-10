@@ -8,6 +8,17 @@ Surface walltime / cost trade-offs against alternatives, ROI-driven pivot
 proposals, sunk-cost cut lines, and concurrent commercial tasks that might
 deserve the same attention.
 
+## Family routing check
+
+For designs that lead to implementation, verify the route is explicit:
+Claude design/planning plateau -> Codex implementation -> Claude
+design-intent review -> Codex final fixes/tests. If Claude or Codex is
+unavailable (missing CLI, no contract/subscription, capacity, rate limit),
+fallback is acceptable only when documented as `FAMILY_ROUTING` with
+preferred, actual, missing family/phase/reason, and degraded_until. Surface
+silent fallback, overusing premium models, or blocking on a missing family
+when a reversible cheaper spike would prove demand.
+
 ## What to interrogate
 
 ### 1. Walltime / cost vs alternative

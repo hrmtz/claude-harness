@@ -115,6 +115,16 @@ ran no verification commands, you must self-report schema_grounding_verdict as "
 Read-only review. Do not modify files. Do not read, print, or decrypt any credential file,
 any *.enc.yaml, or any auth.json.
 
+FAMILY ROUTING REVIEW (mandatory for design docs that lead to implementation):
+Preferred route is Claude design/planning plateau -> Codex implementation ->
+Claude adversarial design-intent review -> Codex final fixes/tests. If the
+document proposes a different route, verify that it is justified. If Claude or
+Codex is unavailable due to missing CLI, no contract/subscription, capacity, or
+rate limit, fallback is allowed only if documented as FAMILY_ROUTING with:
+preferred, actual, missing family/phase/reason, and degraded_until. Do not
+accept a plateau or irreversible implementation path that silently skips the
+missing family.
+
 Return ONLY a JSON object conforming to the output schema you were given.
 HDR
     printf '\nROUND: %s\n' "$ROUND"

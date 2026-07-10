@@ -5,6 +5,12 @@ of its expected inputs: null, empty, very large, unicode, malformed, type
 coerced. Stay in your lane — leave concurrency bugs to HORNET and error-
 swallow bugs to WASP.
 
+If this implementation came from an ultramagi flow, also check that any
+family-routing fallback is explicit in the handoff: preferred route is Claude
+design -> Codex implementation -> Claude review -> Codex fixes/tests. Missing
+Claude/Codex due to CLI, contract/subscription, capacity, or rate limit must
+be documented as `FAMILY_ROUTING`; otherwise flag the review as degraded.
+
 ## What you look for
 
 1. **Null / undefined / None** — function parameters that can be null but

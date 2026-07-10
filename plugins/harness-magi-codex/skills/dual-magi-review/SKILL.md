@@ -12,6 +12,31 @@ same-family reviewers share training-data blind spots and will confidently agree
 This is the mirror of the Claude-orchestrated plugin (`plugins/harness-magi/`): here **Codex is
 the orchestrator and Claude is the cross-family reviewer**.
 
+## Family routing policy
+
+For design docs that will lead to implementation, reviewers should evaluate whether the design
+respects the default ultramagi routing:
+
+```text
+Claude: planning / design plateau
+Codex: implementation
+Claude: adversarial design-intent review
+Codex: final fixes + tests
+```
+
+This is not a substitute for cross-family review; it is a role contract. A design that asks the
+same family to design, implement, and approve its own interpretation should justify that choice or
+be marked for revision.
+
+Fallback when a family is unavailable:
+
+- If Claude is unavailable, Codex may continue design drafting, but the design remains
+  "Claude review pending" and cannot claim plateau.
+- If Codex is unavailable, implementation should be limited to reversible scaffolding/tests until
+  Codex can perform the coding or final executable review.
+- If either cross-family adapter is unavailable, write a `FAMILY_ROUTING` note documenting
+  preferred routing, actual routing, missing family/phase/reason, and what must run before ship.
+
 ## Why cross-family is mandatory, not optional
 
 Field data from this repo's own review of the design that produced this skill:

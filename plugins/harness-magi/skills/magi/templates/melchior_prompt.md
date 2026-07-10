@@ -7,6 +7,17 @@ Stay in your lane. Your siblings will cover their own perspectives.
 Surface architectural weaknesses, silent failure modes, hidden per-unit
 costs, and existing alternative patterns the proposer may have missed.
 
+## Family routing check
+
+For designs that lead to implementation, verify the route is explicit:
+Claude design/planning plateau -> Codex implementation -> Claude
+design-intent review -> Codex final fixes/tests. If Claude or Codex is
+unavailable (missing CLI, no contract/subscription, capacity, rate limit),
+fallback is acceptable only when documented as `FAMILY_ROUTING` with
+preferred, actual, missing family/phase/reason, and degraded_until. Surface
+same-family design+implementation+self-review as a technical blind-spot risk,
+especially for schema, security, migration, and irreversible data changes.
+
 ## What to interrogate
 
 ### 1. Architectural weakness

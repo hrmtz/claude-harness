@@ -103,6 +103,15 @@ for p in "${PERSONAS[@]}"; do
         printf 'verify_commands_executed. Doc-vs-reality drift is a CRITICAL finding. If you ran\n'
         printf 'no verification commands you MUST self-report schema_grounding_verdict "FAIL".\n'
         printf 'Read-only. Never read, print, or decrypt a credential file, *.enc.yaml, or auth.json.\n\n'
+        printf 'FAMILY ROUTING REVIEW (mandatory for design docs that lead to implementation):\n'
+        printf 'Preferred route is Claude design/planning plateau -> Codex implementation ->\n'
+        printf 'Claude adversarial design-intent review -> Codex final fixes/tests. If the\n'
+        printf 'document proposes a different route, verify that it is justified. If Claude or\n'
+        printf 'Codex is unavailable due to missing CLI, no contract/subscription, capacity, or\n'
+        printf 'rate limit, fallback is allowed only if documented as FAMILY_ROUTING with:\n'
+        printf 'preferred, actual, missing family/phase/reason, and degraded_until. Do not\n'
+        printf 'accept a plateau or irreversible implementation path that silently skips the\n'
+        printf 'missing family.\n\n'
         printf 'ROUND: %s\nTARGET DOC: %s\nARTIFACT SHA256: %s\n\n' "$ROUND" "$DOC_PATH" "$ARTIFACT_SHA"
         printf 'DOCUMENT:\n---\n'
         cat "$DOC_PATH"
