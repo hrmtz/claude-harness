@@ -21,6 +21,12 @@
 |---|---|
 | [`INCIDENT_23H_HNSW.md`](INCIDENT_23H_HNSW.md) | 23-hour sunk-cost loss on a 165M-row HNSW build that motivated `harness-rails` |
 
+## Release notes
+
+| Doc | Topic |
+|---|---|
+| [`releases/v1.0.0.md`](releases/v1.0.0.md) | Public-safe hardening release: opt-in incident automation, genericized paths, legacy-state compatibility |
+
 ## Quick reference: which plugin for which situation
 
 - Credential leaks, dangerous bash patterns: **harness-core**
