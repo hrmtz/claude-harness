@@ -68,7 +68,7 @@ briefing file. Otherwise use `AskUserQuestion` to fill gaps. Prefer writing
 the briefing under the current project at `./formation/briefings/<id>.md` so
 it's version-controlled with the work.
 
-Template: `~/.claude/skills/formation/templates/briefing.md`.
+Template: `templates/briefing.md`, resolved relative to this `SKILL.md`.
 
 ### 2. Spawn
 

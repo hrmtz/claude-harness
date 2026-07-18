@@ -38,5 +38,6 @@
 ## External
 
 - Repository: <https://github.com/hrmtz/claude-harness>
+- Codex native plugin install and migration: [`codex_plugins.md`](codex_plugins.md)
 - Peer workers: `harness-formation` plugin (`formation` skill + CLI)
 - Issue tracker: <https://github.com/hrmtz/claude-harness/issues>

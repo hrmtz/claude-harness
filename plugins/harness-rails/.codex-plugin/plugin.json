@@ -1,0 +1,22 @@
+{
+  "name": "harness-rails",
+  "version": "0.1.0",
+  "description": "Operational safety rails and versioning workflow for Codex.",
+  "author": {
+    "name": "hrmtz",
+    "url": "https://github.com/hrmtz"
+  },
+  "homepage": "https://github.com/hrmtz/claude-harness/tree/dev/plugins/harness-rails",
+  "repository": "https://github.com/hrmtz/claude-harness",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Harness Rails",
+    "shortDescription": "Long-task and release safety rails.",
+    "longDescription": "Preflight and in-flight checks for long operations plus a confirm-gated semantic versioning skill.",
+    "developerName": "hrmtz",
+    "category": "Productivity",
+    "capabilities": ["Hooks", "Skills"],
+    "defaultPrompt": "Check this long-running operation before launch."
+  }
+}

@@ -45,12 +45,10 @@ Persona templates are **not** copied — they are read from the canonical `harne
 
 ## Install
 
-```bash
-bash plugins/harness-magi-codex/install-codex-skills.sh    # symlinks into ~/.codex/skills/
-bash plugins/harness-magi-codex/uninstall-codex-skills.sh
-```
-
-Not in `.claude-plugin/marketplace.json`: this installs into `~/.codex`, like `harness-kimi`.
+Preferred: install the native `harness-magi-codex` plugin from the repository
+Codex marketplace; see [`docs/codex_plugins.md`](../../docs/codex_plugins.md).
+The legacy `install-codex-skills.sh` symlink flow remains only for migration and
+is removed with `uninstall-codex-skills.sh` after native plugin installation.
 
 Requires `codex`, `claude`, `flock`. Without `claude`, the cross-family round fails closed
 (exit `2`) and **no plateau can be granted** — by design.

@@ -107,6 +107,21 @@ command = "bash /third-party/hook.sh"
         with self.assertRaises(ValueError):
             MODULE.managed_block(content)
 
+    def test_plugin_migration_removes_only_managed_block(self):
+        content = f'''[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "bash /third-party/hook.sh"
+[hooks.state]
+trusted = "keep"
+{MODULE.BEGIN}
+{MANAGED}{MODULE.END}
+'''
+        result, removed = MODULE.remove_managed_block(content)
+        self.assertTrue(removed)
+        self.assertNotIn(MODULE.BEGIN, result)
+        self.assertIn("/third-party/hook.sh", result)
+        self.assertIn('trusted = "keep"', result)
+
 
 if __name__ == "__main__":
     unittest.main()

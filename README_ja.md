@@ -27,6 +27,10 @@
 
 install 後は `${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json` で hook が auto-wire される。`~/.claude/settings.json` の手動編集不要。
 
+Codex は `.agents/plugins/` のnative repository marketplaceを使う。install・
+trust・旧global hook移行・update・enable/disable・uninstallは
+[`docs/codex_plugins.md`](./docs/codex_plugins.md) を参照。
+
 > ⚠️ 既に `~/.claude/settings.json` に同名 hook を手動配線している場合、plugin install 前に削除すること (二重発火回避)。
 
 ### 動作確認
