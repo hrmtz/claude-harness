@@ -9,8 +9,8 @@ the bin (a flag default, a placement default). A verb the code dispatches but no
 doc names is a contradiction a machine can catch.
 
 Discipline (from the dual-magi review that produced this):
-- Parse the dispatch as `<verb>) cmd_<verb>` with a BACKREFERENCE, so a mismatched
-  `spawn) cmd_wrong` is not silently accepted as a documented verb.
+- Parse the dispatch as `<verb>) cmd_<normalized_verb>`, so a mismatched
+  `spawn) cmd_wrong` is not silently accepted. Hyphens normalize to underscores.
 - If the dispatch cannot be parsed at all (a bin refactor to another shape), RAISE
   — that is checker-blindness, and must NOT be reported as doc-drift.
 - "Documented" = the verb appears in SKILL.md as `formation <verb>` (word-boundary)
@@ -30,11 +30,17 @@ SKILL = os.path.join(HERE, "..", "skills", "formation", "SKILL.md")
 
 
 def dispatched_verbs(bin_text: str) -> set[str]:
-    """Verbs from the dispatch table: `spawn) cmd_spawn ;;`. The backreference
-    (\\w+)\\)\\s+cmd_\\1 requires the handler name to match the case label, so a
-    typo'd handler is not counted as a real verb."""
-    verbs = set(re.findall(r"^\s*([a-z][a-z0-9_-]*)\)\s+cmd_\1\b", bin_text, re.M))
-    return verbs
+    """Verbs from the dispatch table, validating their normalized handler."""
+    pairs = re.findall(
+        r"^\s*([a-z][a-z0-9_-]*)\)\s+cmd_([a-z][a-z0-9_]*)\b",
+        bin_text,
+        re.M,
+    )
+    mismatched = [(verb, handler) for verb, handler in pairs
+                  if handler != verb.replace("-", "_")]
+    if mismatched:
+        raise RuntimeError(f"dispatch verb/handler mismatch: {mismatched}")
+    return {verb for verb, _ in pairs}
 
 
 def is_documented(verb: str, skill_text: str) -> bool:
@@ -57,7 +63,7 @@ def main() -> int:
         # Checker-blindness, not doc-drift: the dispatch shape changed. Fail loudly
         # so someone fixes the parser rather than silently passing or false-flagging.
         raise RuntimeError(
-            "no `<verb>) cmd_<verb>` dispatch found in bin/formation — the parser "
+            "no `<verb>) cmd_<normalized_verb>` dispatch found in bin/formation — the parser "
             "can no longer see the dispatch table. Fix this test's regex; do NOT "
             "treat this as documentation drift."
         )
