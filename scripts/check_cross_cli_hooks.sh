@@ -27,7 +27,7 @@ err() { echo "DRIFT: $*" >&2; fail=1; }
 [[ -f "$OVERLAY" ]] || { echo "error: $OVERLAY missing" >&2; exit 1; }
 
 # All hook paths referenced anywhere in the overlay.
-mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .grok.hooks[], .kimi.insurance[], .kimi.gates[], .kimi.hints[]] | unique | .[]' "$OVERLAY")
+mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .grok.hooks[], .kimi.insurance[], .kimi.gates[], .kimi.hints[]] | map(if type == "object" then .path else . end) | unique | .[]' "$OVERLAY")
 
 for hook in "${ALL_HOOKS[@]}"; do
     plugin="${hook%%/*}"
@@ -58,18 +58,27 @@ import json, sys
 overlay_path, harness_dir = sys.argv[1], sys.argv[2]
 plugins_dir = f"{harness_dir}/plugins"
 overlay = json.load(open(overlay_path))["codex"]
+specs = [({"path": item} if isinstance(item, str) else item)
+         for item in overlay["hooks"]]
 lookup = {}
-for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
+for plugin in sorted({spec["path"].split("/")[0] for spec in specs}):
     hooks_json = json.load(open(f"{plugins_dir}/{plugin}/hooks/hooks.json"))
-    for blocks in hooks_json.get("hooks", {}).values():
+    for event, blocks in hooks_json.get("hooks", {}).items():
         for blk in blocks:
             for h in blk.get("hooks", []):
                 name = h["command"].split("/hooks/")[-1]
-                lookup.setdefault(f"{plugin}/hooks/{name}", h["command"])
-for hook in overlay["hooks"]:
+                lookup.setdefault(f"{plugin}/hooks/{name}", []).append((event, h["command"]))
+for spec in specs:
+    hook = spec["path"]
+    candidates = lookup.get(hook, [])
+    if "event" in spec:
+        candidates = [item for item in candidates if item[0] == spec["event"]]
+    if len(candidates) != 1:
+        print(f"INVALID OVERLAY SELECTION: {hook}", file=sys.stderr)
+        sys.exit(1)
     plugin = hook.split("/", 1)[0]
     plugin_root = f"{plugins_dir}/{plugin}"
-    print(lookup[hook].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
+    print(candidates[0][1].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
 PYEOF
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
         } | sort > "$want"

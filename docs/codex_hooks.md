@@ -63,13 +63,15 @@ plugin_hooks = true         # required
 ```
 
 Supported events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
-`PermissionRequest`, `PreCompact`, `PostCompact`, `SessionStart`, `Stop`.
+`PermissionRequest`, `PreCompact`, `PostCompact`, `SessionStart`,
+`SubagentStart`, `SubagentStop`, `Stop`.
 
 ---
 
 ## Hook stdin payload
 
-Codex passes JSON on stdin, identical in structure to Claude Code:
+Codex passes a Claude-compatible JSON envelope on stdin with Codex extensions.
+Event-specific fields and the rollout JSONL records are not identical:
 
 **PreToolUse / PostToolUse**
 ```json
@@ -86,6 +88,13 @@ Codex passes JSON on stdin, identical in structure to Claude Code:
   "tool_use_id": "call_..."
 }
 ```
+
+`Stop` also includes `last_assistant_message`; use that stable field when only
+the final response is needed. `SubagentStop` includes `agent_id`, `agent_type`,
+and `agent_transcript_path`; its ordinary `transcript_path` points at the parent.
+To request another turn, return `{"decision":"block","reason":"..."}`. Codex
+turns `reason` into the continuation prompt. `continue:false` stops processing;
+it is not the continuation form.
 
 `transcript_path` gives the active session JSONL — use this instead of
 scanning `~/.claude/projects/` when running inside Codex.
@@ -183,7 +192,8 @@ compatible. Notable Codex-specific points:
 | `credential_scrub.sh` | PostToolUse / Bash and compatible tool events | Sources repo-local `lib.sh`, then uses `transcript_path` rather than Claude project scanning when available. |
 | `formation_suggest.sh` | UserPromptSubmit | Emits JSON `additionalContext` so Codex honors the hint when `FORMATION_SUGGEST_MODE=active`. |
 | `versioning_autorun.py` | PostToolUse / Bash | After a main-branch `git push`, auto-detects semver bump, tags, and creates a GitHub Release. Docs-only pushes no-op. |
-| `sr_depth_gate.py` | Stop | Claude also wires this on `SubagentStop`; Codex overlay uses the Stop hook. |
+| `sr_depth_gate.py` | Stop, SubagentStop | Normalizes Claude messages and Codex rollout records; SubagentStop reads `agent_transcript_path`. |
+| `stall_autocontinue.sh` | Stop | Uses Codex's stable `last_assistant_message` field instead of parsing its unstable rollout format. |
 | `check_zsh_reserved_vars.sh` | PreToolUse / `apply_patch` | Blocks only when the patch itself shows zsh context (`.zsh` path or zsh shebang), avoiding false positives on bash `.sh` hunks. |
 | `check_early_check_timer.sh`, `ssh_fanout_canonical_check.sh` | PreToolUse / `apply_patch` | Extract added lines from the patch body and run the existing warning checks against those lines. |
 | `credential_file_read_guard.sh` parity | PreToolUse / Bash | Codex has no standalone Read tool in the observed payloads; the same sensitive-file coverage is enforced through `bash_command_guard.sh` for `exec_command` reads. |

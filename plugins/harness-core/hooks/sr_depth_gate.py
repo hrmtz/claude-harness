@@ -77,12 +77,70 @@ def _text(content) -> str:
         for it in content:
             if not isinstance(it, dict):
                 continue
-            if it.get("type") == "text":
+            if it.get("type") in {"text", "input_text", "output_text"}:
                 out.append(it.get("text", ""))
             elif it.get("type") == "tool_use":
                 out.append(json.dumps(it.get("input", {}), ensure_ascii=False))
         return "\n".join(out)
     return ""
+
+
+def _tool_input(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, ValueError):
+            return {"_raw": value}
+    return {}
+
+
+def _read_paths(name: str, inp: dict) -> list[str]:
+    if name in {"Read", "read_file", "mcp__filesystem__read_file"}:
+        path = inp.get("file_path") or inp.get("path")
+        return [path] if isinstance(path, str) and path else []
+    if name not in {"Bash", "exec_command", "functions.exec"}:
+        return []
+    command = next((inp.get(key) for key in ("command", "cmd", "code", "_raw")
+                    if isinstance(inp.get(key), str)), "")
+    # Codex has no universal Read tool. Accept explicit file-display commands,
+    # then use suffix matching below to decide whether a changed path was read.
+    if not re.search(r'''(?:^|[;&|\s"'])(?:cat|sed|head|tail|bat|less)\s''', command):
+        return []
+    return re.findall(
+        r"(?:/|\./)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+|"
+        r"\b[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+\b",
+        command,
+    )
+
+
+def _record_parts(record: dict) -> tuple[str | None, str, list[tuple[str, dict]]]:
+    """Normalize Claude messages and current Codex rollout records."""
+    typ = record.get("type")
+    if typ in {"user", "assistant"}:
+        msg = record.get("message") if isinstance(record.get("message"), dict) else {}
+        content = msg.get("content")
+        tools = []
+        if isinstance(content, list):
+            tools = [(it.get("name", ""), _tool_input(it.get("input")))
+                     for it in content if isinstance(it, dict) and it.get("type") == "tool_use"]
+        return typ, _text(content), tools
+
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    payload_type = payload.get("type")
+    if typ == "event_msg" and payload_type == "user_message":
+        return "user", str(payload.get("message") or ""), []
+    if typ == "event_msg" and payload_type == "agent_message":
+        return "assistant", str(payload.get("message") or ""), []
+    if typ == "response_item" and payload_type == "message":
+        role = payload.get("role")
+        return role if role in {"user", "assistant"} else None, _text(payload.get("content")), []
+    if typ == "response_item" and payload_type in {"custom_tool_call", "function_call"}:
+        return None, "", [(str(payload.get("name") or ""),
+                            _tool_input(payload.get("input") or payload.get("arguments")))]
+    return None, "", []
 
 
 def _is_read_of(changed: str, read_paths: list[str]) -> bool:
@@ -120,32 +178,19 @@ def parse_session(path: str) -> dict | None:
                 continue
             if not isinstance(o, dict):        # valid JSON but not an object
                 continue
-            msg = o.get("message")
-            if not isinstance(msg, dict):
-                msg = {}
-            typ = o.get("type")
+            typ, text, tools = _record_parts(o)
             if typ == "user":
-                t = _text(msg.get("content"))
-                if not first_prompt and MARKER.search(t):
+                if not first_prompt and MARKER.search(text):
                     is_sr = True
-                    first_prompt = t
+                    first_prompt = text
             elif typ == "assistant":
-                c = msg.get("content")
-                verdict_blob.append(_text(c))
-                if isinstance(c, list):
-                    for it in c:
-                        if not isinstance(it, dict) or it.get("type") != "tool_use":
-                            continue
-                        name = it.get("name")
-                        inp = it.get("input") if isinstance(it.get("input"), dict) else {}
-                        if name == "Read":
-                            fp = inp.get("file_path")
-                            if fp:
-                                read_paths.append(fp)
-                        elif name == "StructuredOutput":
-                            fl = _norm_findings(inp)
-                            if fl is not None:
-                                struct_lists.append(fl)
+                verdict_blob.append(text)
+            for name, inp in tools:
+                read_paths.extend(_read_paths(name, inp))
+                if name == "StructuredOutput":
+                    fl = _norm_findings(inp)
+                    if fl is not None:
+                        struct_lists.append(fl)
     if not is_sr:
         return None
 
@@ -211,7 +256,9 @@ def _hook() -> int:
         # re-entry guard: if we already blocked this stop-cycle, let it through.
         if payload.get("stop_hook_active"):
             return 0
-        tp = payload.get("transcript_path") or ""
+        tp = (payload.get("agent_transcript_path")
+              if payload.get("hook_event_name") == "SubagentStop"
+              else payload.get("transcript_path")) or ""
         if not tp or not os.path.exists(tp):
             return 0
         r = parse_session(tp)
