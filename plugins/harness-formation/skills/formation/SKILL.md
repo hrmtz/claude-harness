@@ -135,7 +135,13 @@ Attaches the remote client to the worker's session. The user can type
 directly at the worker's prompt — no separate injection mechanism.
 
 For a Codex worker, use `formation msg <worker_id> "..."` or attach to its tmux
-pane. Current Codex may expose experimental `codex remote-control` commands for
+pane. **Never hand-roll a raw `tmux send-keys -l "<text>" && tmux send-keys Enter`
+to nudge a peer pane.** A single Enter races the render tick and leaves the text
+visible-but-unsubmitted (the "詰まる"/stuck symptom, especially on Codex TUIs),
+and `send-keys -l` can drop the pane into copy-mode/search. Always route through
+`formation msg` (or `mailbox-send <pane>`), which use the gapped `tmux_send_submit`
+(copy-mode cancel → bracketed paste → Enter, settle ~0.4s, Enter). Current Codex
+may expose experimental `codex remote-control` commands for
 an app-server daemon, but they do not attach to the already-running interactive
 TUI that Formation spawned. Check the installed CLI without starting a daemon:
 
