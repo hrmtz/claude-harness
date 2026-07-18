@@ -2,13 +2,13 @@
 name: formation
 version: 0.2.0
 description: |
-  Spawn a long-running peer Claude Code worker in a new tmux pane when a task
-  justifies hours of wall time and needs live observability, mid-flight
-  redirection, or phone-based human-in-the-loop acks. Use this when the Task
-  tool's ephemeral subagent model is insufficient: specifically for work where
-  the user wants to tail the worker's pane, send follow-up instructions, or
-  approve decisions via mailbox or /remote-control while away from the desk.
-  NOT for quick lookups or single-shot research — use Task for those.
+  Spawn a long-running peer Claude Code or Codex worker in a new tmux pane when
+  a task justifies hours of wall time and needs live observability, mid-flight
+  redirection, or human-in-the-loop acks. Use this when an ephemeral subagent is
+  insufficient: specifically for work where the user wants to tail the worker's
+  pane, send follow-up instructions, or approve decisions through the mailbox.
+  Claude workers can additionally use Claude Code remote control. NOT for quick
+  lookups or single-shot research — use Task for those.
 allowed-tools:
   - Bash
   - Read
@@ -19,9 +19,9 @@ allowed-tools:
 
 # formation — peer pane orchestration
 
-A "worker" is a separate Claude Code CLI running in its own tmux pane, seeded
-with a briefing file. Workers are for tasks that earn the cost of a fresh
-claude process: **minutes-to-hours of wall time, multi-turn, observable**.
+A "worker" is a separate Claude Code or Codex CLI running in its own tmux pane,
+seeded with a briefing file. Workers are for tasks that earn the cost of a fresh
+agent process: **minutes-to-hours of wall time, multi-turn, observable**.
 
 Paradigm comparison:
 
@@ -30,7 +30,7 @@ Paradigm comparison:
 | Lifetime | one-shot, returns | persistent pane |
 | Observability | result only | user tails the pane live |
 | Mid-flight redirect | impossible | `formation msg` |
-| Remote ack | no | `/rc formation-<id>` |
+| Remote ack | no | all: `formation msg`; Claude: `/rc formation-<id>` |
 | Nesting | shallow | worker can spawn its own |
 
 **Do not invoke for:** quick greps, single-file reads, one-shot research.
@@ -120,19 +120,31 @@ Drop these patterns into the briefing so the worker knows its own protocol:
 - Every ~30 min or at logical checkpoints:
   `formation report "<1-line status>"`
 - When a decision exceeds its boundary:
-  `formation ask "<question>"` — writes to the lead's mailbox AND sends a
-  mailbox entry so the lead can reply or attach via `/rc formation-<id>`.
+  `formation ask "<question>"` — writes to the lead's mailbox. The lead can
+  reply with `formation msg`; Claude workers also allow `/rc formation-<id>`.
 - On completion:
   `formation done "<summary>"` — mailbox.
 
 ### 5. Remote intervention path
 
-From phone / web / another machine:
+For a Claude worker, from phone / web / another machine:
 ```
 /remote-control formation-<worker_id>
 ```
 Attaches the remote client to the worker's session. The user can type
 directly at the worker's prompt — no separate injection mechanism.
+
+For a Codex worker, use `formation msg <worker_id> "..."` or attach to its tmux
+pane. Current Codex may expose experimental `codex remote-control` commands for
+an app-server daemon, but they do not attach to the already-running interactive
+TUI that Formation spawned. Check the installed CLI without starting a daemon:
+
+```bash
+formation remote-check
+```
+
+Do not advertise Codex remote pairing as a Formation worker path until Codex
+publishes a supported way to target an existing TUI session.
 
 ## Patterns
 

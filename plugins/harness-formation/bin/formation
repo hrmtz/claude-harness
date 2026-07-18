@@ -4,8 +4,8 @@
 # A "worker" is a separate tmux pane running its own AI CLI (claude or codex),
 # given a briefing file and an addressable id. Worker reports flow back via an
 # append-only jsonl mailbox. The parent pane (lead) polls `formation inbox`
-# when idle. Phones / external clients reach workers via `/remote-control`
-# using the session-name assigned at spawn.
+# when idle. Claude workers can additionally use Claude Code remote control;
+# Codex workers remain reachable through tmux/mailbox (see remote-check).
 #
 # Intended for tasks that justify minutes-to-hours of wall time where Task
 # tool subagents are insufficient (observability, mid-flight redirection,
@@ -117,6 +117,7 @@ Parent (lead) commands:
   formation msg <worker_id> <text>        Send instruction to worker pane
   formation status                        List active workers and last pane line
   formation inbox                         Read unread reports addressed to self
+  formation remote-check                  Detect the installed Codex remote-control capability
   formation reap <worker_id>              Kill worker pane and drop registry row
 
 Worker-side commands (invoked by the worker agent via Bash):
@@ -135,8 +136,29 @@ Credential safety:
 
 Remote access:
   claude workers: connect via /remote-control (alias /rc) using session formation-<id>.
-  codex workers:  attach to tmux pane directly (no remote-control equivalent).
+  codex workers:  use tmux or formation msg. `codex remote-control` may exist,
+                  but currently manages an experimental app-server daemon and
+                  cannot attach to an existing Formation worker TUI.
+  Run `formation remote-check` to inspect the installed Codex CLI capability.
 USAGE
+}
+
+cmd_remote_check() {
+  [[ $# -eq 0 ]] || { echo "usage: formation remote-check" >&2; return 2; }
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "codex remote-control: unavailable (codex is not installed)"
+    return 1
+  fi
+
+  local version help maturity="available"
+  version="$(codex --version 2>/dev/null || echo 'version unknown')"
+  if ! help="$(codex remote-control --help 2>&1)"; then
+    echo "codex remote-control: unavailable ($version)"
+    return 1
+  fi
+  [[ "$help" == *"[experimental]"* ]] && maturity="experimental"
+  echo "codex remote-control: $maturity ($version)"
+  echo "formation attach: unsupported; use tmux or formation msg for existing Codex workers"
 }
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
@@ -429,6 +451,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     msg)    cmd_msg    "$@" ;;
     status) cmd_status "$@" ;;
     inbox)  cmd_inbox  "$@" ;;
+    remote-check) cmd_remote_check "$@" ;;
     reap)   cmd_reap   "$@" ;;
     report) cmd_report "$@" ;;
     done)   cmd_done   "$@" ;;

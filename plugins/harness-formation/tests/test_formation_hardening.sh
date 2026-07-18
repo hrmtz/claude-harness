@@ -71,6 +71,26 @@ if [[ "$CODEX_DEFAULT_FLAGS" != *"dangerously-bypass"* ]]; then ok "codex defaul
 CODEX_BYPASS_FLAGS="$(codex_launch_flags 1)"
 if [[ "$CODEX_BYPASS_FLAGS" == "--dangerously-bypass-approvals-and-sandbox" ]]; then ok "codex explicit bypass remains available"; else bad "codex explicit bypass changed [$CODEX_BYPASS_FLAGS]"; fi
 
+echo "== codex remote-control capability (#73) =="
+codex() {
+  case "$1" in
+    --version) echo "codex-cli test" ;;
+    remote-control)
+      [[ "${2:-}" == "--help" ]] || return 9
+      echo "[experimental] Manage the app-server daemon with remote control enabled"
+      ;;
+    *) return 9 ;;
+  esac
+}
+REMOTE_STATUS="$(cmd_remote_check)"
+REMOTE_RC=$?
+if [[ "$REMOTE_RC" -eq 0 && "$REMOTE_STATUS" == *"experimental"* ]]; then ok "remote-check detects experimental command"; else bad "remote-check missed experimental command [$REMOTE_RC: $REMOTE_STATUS]"; fi
+if [[ "$REMOTE_STATUS" == *"formation attach: unsupported"* ]]; then ok "remote-check does not claim Formation attach"; else bad "remote-check overclaims Formation integration [$REMOTE_STATUS]"; fi
+unset -f codex
+REMOTE_STATUS="$(PATH="$TMPDIR_T/no-codex" cmd_remote_check)"
+REMOTE_RC=$?
+if [[ "$REMOTE_RC" -eq 1 && "$REMOTE_STATUS" == *"unavailable"* ]]; then ok "remote-check handles missing Codex"; else bad "remote-check missing-Codex result [$REMOTE_RC: $REMOTE_STATUS]"; fi
+
 # ----------------------------------------------------------------------------
 # Group 2: inbox envelope strips control chars (MED #37)
 # ----------------------------------------------------------------------------

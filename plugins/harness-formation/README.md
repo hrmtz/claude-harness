@@ -1,6 +1,6 @@
 # harness-formation
 
-Peer-pane Claude Code worker orchestration. Spawn long-running workers in tmux panes, coordinate via append-only jsonl mailbox, support phone-based remote control via `/rc`. Auto-suggests itself when the user's prompt matches natural-language worker-spawn intent ("裏のclaude にやらせる", "並行で", etc).
+Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers in tmux panes and coordinate through an append-only jsonl mailbox. Claude workers also support Claude Code phone/web remote control via `/rc`; Codex workers use tmux or mailbox messages. Auto-suggests itself when the user's prompt matches natural-language worker-spawn intent ("裏のclaude にやらせる", "並行で", etc).
 
 > All `formation` CLI + `mailbox_relay` runtime ships inside this plugin.
 
@@ -75,6 +75,15 @@ Same rules as the standalone `formation` skill (see `skills/formation/SKILL.md`)
 - Never paste plaintext credentials into messages, briefings, or pane prompts
 - `formation msg` / `formation spawn` hard-refuse credential-shaped bodies (exit 3)
 - Reference SOPS-encrypted files by path + decrypt command, not value
+
+## Remote access
+
+Claude workers are named `formation-<id>` and can be selected through Claude
+Code `/remote-control` (`/rc`). For Codex, run `formation remote-check` to
+detect whether the installed CLI exposes its experimental remote-control
+command. That command manages a separate app-server daemon and cannot attach to
+an existing Formation worker TUI, so tmux and `formation msg` remain the
+supported Codex intervention paths.
 
 ## Related
 
