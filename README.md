@@ -29,6 +29,10 @@ More plugins are planned (CLAUDE.md persona templates, repo-init skeleton). See 
 
 After install, Claude Code auto-wires the hooks via `${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json`. No manual `~/.claude/settings.json` edit needed.
 
+Codex uses the native repository marketplace in `.agents/plugins/`. See
+[`docs/codex_plugins.md`](./docs/codex_plugins.md) for install, trust, legacy
+hook migration, update, enable/disable, and uninstall instructions.
+
 ### Verify install
 
 ```bash

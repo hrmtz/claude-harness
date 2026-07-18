@@ -56,6 +56,11 @@ four Claude CONFIRM rounds were overturned by one Codex round.
 
 ## The loop (one invocation = one round)
 
+All `scripts/...` and `schemas/...` references below are relative to the
+installed `harness-magi-codex` plugin root (two directories above this
+`SKILL.md`), never the user's project root. Resolve that absolute plugin root
+before invoking a bundled script.
+
 ```
 1. fan-out    scripts/magi_fanout_codex.sh <doc> <round> <state-dir> [--persona-set magi]
               -> three `codex exec` processes, read-only, schema-constrained output

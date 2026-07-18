@@ -1,0 +1,56 @@
+{
+  "name": "claude-harness",
+  "interface": {
+    "displayName": "Claude Harness"
+  },
+  "plugins": [
+    {
+      "name": "harness-core",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harness-core"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Security"
+    },
+    {
+      "name": "harness-rails",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harness-rails"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "harness-formation",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harness-formation"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "harness-magi-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harness-magi-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

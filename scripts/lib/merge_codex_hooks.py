@@ -67,6 +67,14 @@ def managed_block(content: str) -> str | None:
     return match.group(1)
 
 
+def remove_managed_block(content: str) -> tuple[str, bool]:
+    """Remove only this installer's marker block after validating ownership."""
+    if managed_block(content) is None:
+        return content, False
+    cleaned, removed = _remove_managed_blocks(content)
+    return cleaned.rstrip("\n") + "\n", removed
+
+
 def _migrate_legacy(content: str, owned_commands: set[str]) -> str:
     """Remove only legacy leaf tables whose command is owned by this installer."""
     sections = _sections(content)

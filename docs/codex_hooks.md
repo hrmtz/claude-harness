@@ -134,6 +134,13 @@ reading stdin directly.
 
 ## Setup
 
+For new installations, prefer the native Codex plugins documented in
+[`codex_plugins.md`](codex_plugins.md). They use Codex's marketplace lifecycle
+and bundle the same hook definitions with their owning components. The inline
+installer below remains supported for compatibility; after installing the
+native plugins, run `uninstall-codex-hooks.sh` to remove only the legacy
+marker-bounded block while preserving unrelated config and trust state.
+
 ### Install (one-time)
 
 ```bash

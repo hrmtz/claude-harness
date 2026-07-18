@@ -5,6 +5,10 @@ description: End-to-end rigor loop for a non-trivial, hard-to-reverse change, or
 
 # ultramagi (Codex orchestrator, Claude cross-family)
 
+All `scripts/...` and `schemas/...` references are relative to the installed
+`harness-magi-codex` plugin root (two directories above this `SKILL.md`).
+Resolve that absolute plugin root before invoking a bundled script.
+
 **dual-magi** pairs same-family reviewers with a cross-family reviewer to subtract shared training
 bias. **ultramagi** wraps dual-magi around the *entire* change lifecycle: it gates both the design
 (before you write code) and the implementation (before you ship), with schema-grounded verification
