@@ -5,9 +5,7 @@
 # A test that only checked the refusal side would PASS on a guard that refuses everything --
 # exactly the ordering bug a dual-magi round found in the hand-rolled predecessor.
 #
-# The adapter locks "$STATE_DIR/.xfamily.lock" where STATE_DIR = dirname(out-prefix).
-# A holder must lock that exact path; locking a different file lets the adapter through
-# and it will invoke a real (slow) claude call. (Learned the hard way.)
+# The adapter locks a realpath(doc)-digest under <doc-dir>/.dual-magi, independent of out-prefix.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily_claude.sh"
@@ -72,11 +70,20 @@ out=$(timeout 10 bash -c '
 [ "$out" = "child-refused" ] && ok "descendant with its own fd is refused (recursion guard)" \
                              || bad "descendant acquired the lock: '$out'"
 
-# 5. the adapter exits 3 when its OWN lock path is held, and never reaches the CLI
+# 5. the adapter exits 3 when its OWN document lock path is held, and never reaches the CLI
 STATE="$TMP/state"; mkdir -p "$STATE"
-h=$(hold "$STATE/.xfamily.lock" 10); sleep 0.7
+DOC="$TMP/design.md"; printf '%s\n' 'a design' > "$DOC"
+DOC2="$TMP/design-two.md"; printf '%s\n' 'another design' > "$DOC2"
+doc_lock() {
+    local real lock_id
+    real="$(realpath "$1")"; lock_id="$(printf '%s' "$real" | sha256sum | cut -c1-16)"
+    printf '%s/.dual-magi/.xfamily.%s.lock\n' "$(dirname "$real")" "$lock_id"
+}
+DOC_LOCK="$(doc_lock "$DOC")"
+mkdir -p "$(dirname "$DOC_LOCK")"
+h=$(hold "$DOC_LOCK" 10); sleep 0.7
 log="$TMP/adapter.log"
-MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$HERE/../README.md" 1 - "$STATE/out" \
+MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 1 - "$STATE/out" \
     >"$log" 2>&1 </dev/null
 rc=$?
 release "$h"
@@ -86,19 +93,51 @@ grep -q "lock held" "$log" && ok "adapter reported the lock, did not invoke the 
 [ -e "$STATE/out.json" ] && bad "adapter wrote findings despite the lock" \
                          || ok "no findings written under a held lock"
 
-# 6. adapter proceeds PAST the lock when it is free (it must not self-block on the first call).
+# 6. Same doc + a different out-prefix still shares the document lock.
+h=$(hold "$DOC_LOCK" 10); sleep 0.7
+MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 1 - "$TMP/other-campaign/out" \
+    >/dev/null 2>&1 </dev/null
+[ $? -eq 3 ] && ok "same doc in another campaign is mutually excluded" \
+              || bad "same doc escaped the lock via another out-prefix"
+
+# 7. Different docs may proceed even when they share one output directory.
+rc_other=0
+env -i PATH=/usr/bin:/bin HOME="$HOME" timeout 15 \
+    "$ADAPTER" "$DOC2" 1 - "$STATE/other-doc" >/dev/null 2>&1 </dev/null || rc_other=$?
+release "$h"
+[ "$rc_other" -eq 2 ] && ok "different doc proceeds past its independent lock" \
+                       || bad "different doc collided with lock (rc=$rc_other)"
+
+# 8. adapter proceeds PAST the lock when it is free (it must not self-block on the first call).
 #    The `claude not found` check sits AFTER the lock acquire, so reaching exit 2 with a
 #    stripped PATH proves the lock was taken, not that the guard aborted. (Arg validation
 #    happens BEFORE the lock, so a missing-doc exit 64 would prove nothing.)
 rc2=0
 env -i PATH=/usr/bin:/bin HOME="$HOME" timeout 15 \
-    "$ADAPTER" "$HERE/../README.md" 1 - "$STATE/out2" >/dev/null 2>&1 </dev/null || rc2=$?
+    "$ADAPTER" "$DOC" 1 - "$STATE/out2" >/dev/null 2>&1 </dev/null || rc2=$?
 if [ "$rc2" -eq 2 ]; then
     ok "unlocked adapter acquires the lock and reaches the prereq check (exit 2)"
 elif [ "$rc2" -eq 3 ]; then
     bad "unlocked adapter exited 3: the guard blocks its own first call"
 else
     bad "unlocked adapter exit was $rc2, expected 2"
+fi
+
+# 9. A provider failure after prompt creation must leave TMPDIR empty via the single EXIT trap.
+PROMPT_TMP="$TMP/prompt-tmp"; FAIL_BIN="$TMP/fail-bin"
+mkdir -p "$PROMPT_TMP" "$FAIL_BIN" "$TMP/cleanup-state"
+cat > "$FAIL_BIN/claude" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$FAIL_BIN/claude"
+TMPDIR="$PROMPT_TMP" PATH="$FAIL_BIN:/usr/bin:/bin" MAGI_XFAMILY_TIMEOUT_S=5 \
+    timeout 15 "$ADAPTER" "$DOC" 2 - "$TMP/cleanup-state/out" >/dev/null 2>&1 </dev/null
+cleanup_rc=$?
+if [ "$cleanup_rc" -eq 2 ] && ! find "$PROMPT_TMP" -mindepth 1 -print -quit | grep -q .; then
+    ok "provider failure cleans prompt/raw temp files through EXIT trap"
+else
+    bad "provider failure cleanup failed (rc=$cleanup_rc)"
 fi
 
 echo "test_inv7_lock: $pass passed, $fail failed"

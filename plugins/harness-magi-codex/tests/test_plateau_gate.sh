@@ -7,30 +7,44 @@ GATE="$HERE/../scripts/magi_plateau_gate.sh"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 DOC="$TMP/design.md"; printf 'a design document\n' > "$DOC"
+MARKER_DIR="$TMP/.dual-magi"
 SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-# Controlled transcripts make the suite independent of live Claude state. The
-# positive fixture contains one tool-use record; the second fixture proves that
-# a non-empty command self-report cannot substitute for transcript grounding.
+# A deterministic Claude transcript with one tool use. Depending on whichever real session was
+# most recently active made this test fail when that session happened to contain no tools.
 REAL_SID="11111111-2222-4333-8444-666666666666"
 NO_TOOL_SID="11111111-2222-4333-8444-777777777777"
 export HOME="$TMP/home"
 mkdir -p "$HOME/.claude/projects/test"
+# message.model must match the meta.model_id the positive cases assert (G6 model provenance).
 cat > "$HOME/.claude/projects/test/$REAL_SID.jsonl" <<'JSONL'
-{"message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"x"}}]}}
+{"message":{"model":"claude-fable-5","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"x"}}]}}
 JSONL
 cat > "$HOME/.claude/projects/test/$NO_TOOL_SID.jsonl" <<'JSONL'
-{"message":{"content":[{"type":"text","text":"claimed verification without a tool call"}]}}
+{"message":{"model":"claude-fable-5","content":[{"type":"text","text":"claimed verification without a tool call"}]}}
+JSONL
+# A transcript whose served model is a TRUNCATION of a plausible requested id (downgrade probe).
+TRUNC_SID="11111111-2222-4333-8444-888888888888"
+cat > "$HOME/.claude/projects/test/$TRUNC_SID.jsonl" <<'JSONL'
+{"message":{"model":"claude-opus-4","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"x"}}]}}
+JSONL
+# A transcript whose served model is a SUPERSTRING variant of the requested id (…-lite). See the
+# residual-gap note in design §4.3 G6: a cheaper suffixed variant is string-indistinguishable from a
+# dated/patch snapshot, so substring comparison accepts it. This test pins that DOCUMENTED behavior.
+SUPER_SID="11111111-2222-4333-8444-999999999999"
+cat > "$HOME/.claude/projects/test/$SUPER_SID.jsonl" <<'JSONL'
+{"message":{"model":"claude-opus-4-8-lite","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"x"}}]}}
 JSONL
 
-mkmeta() { # mkmeta <prefix> <model_id> <artifact_sha> <num_turns> <session_id>
-  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+mkmeta() { # mkmeta <prefix> <model_id> <artifact_sha> <num_turns> <session_id> [requested_model]
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-$2}" <<'PY'
 import hashlib, json, sys
-prefix, model, sha, turns, sid = sys.argv[1:6]
-meta = {"session_id": sid, "model_id": model, "model_usage_keys": [model],
+prefix, model, sha, turns, sid, requested = sys.argv[1:7]
+meta = {"session_id": sid, "model_id": model, "requested_model": requested,
+        "model_usage_keys": [model],
         "num_turns": int(turns), "artifact_sha": sha, "permission_denials": [],
         "output_sha": hashlib.sha256(open(prefix + ".json","rb").read()).hexdigest()}
 json.dump(meta, open(prefix + ".meta.json","w"), indent=2)
@@ -85,6 +99,27 @@ denied "G5 num_turns=1 with commands reported" "$P"
 P="$TMP/g6"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "00000000-dead-beef-0000-000000000000"
 denied "G6 session_id with no transcript" "$P"
 
+# G6: meta claims a model the transcript never ran (mislabeled meta, e.g. opus vs fable)
+P="$TMP/g6b"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-opus-4-8" "$SHA" 4 "$REAL_SID"
+denied "G6 meta model_id absent from Claude transcript" "$P"
+
+# G6: honest model_id but the REQUESTED model was silently downgraded (ran fable, asked opus).
+# model_id matches the transcript, so only the requested-vs-run check can catch this.
+P="$TMP/g6c"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID" "claude-opus-4-8"
+denied "G6 requested model absent from transcript (silent downgrade)" "$P"
+
+# G6: a meta with no requested_model at all cannot certify (fresh adapters always record it)
+P="$TMP/g6d"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("requested_model",None); json.dump(m,open(p,"w"))' "$P.meta.json"
+denied "G6 missing requested_model" "$P"
+
+# G6: served id is a TRUNCATION of the requested id (claude-opus-4 for requested claude-opus-4-8).
+# This is the ONE fixture that distinguishes the directional served_satisfies from the old
+# bidirectional comparator: it is GRANTED under bidirectional (bug) and DENIED under directional
+# (fixed). Reverting served_satisfies -> label_consistent fails exactly here. (r15-xfamily-1)
+P="$TMP/g6e"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-opus-4" "$SHA" 4 "$TRUNC_SID" "claude-opus-4-8"
+denied "G6 truncated served model (downgrade via substring) rejected" "$P"
+
 # G7: REJECT is never a plateau
 P="$TMP/g7"; mkfind "$P" "REJECT" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G7 REJECT verdict" "$P"
@@ -97,6 +132,10 @@ denied "G7 REVISE verdict" "$P"
 P="$TMP/g8"; mkfind "$P" "GO-WITH-REVISE" 3 "PASS" "CRITICAL"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G8 GO-WITH-REVISE with a CRITICAL finding" "$P"
 
+# G8: HIGH is also blocking; invariant drift must not pass through severity calibration.
+P="$TMP/g8b"; mkfind "$P" "GO-WITH-REVISE" 3 "PASS" "HIGH"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+denied "G8 GO-WITH-REVISE with a HIGH finding" "$P"
+
 # G9: a reviewer that self-reports ungrounded cannot plateau
 P="$TMP/g9"; mkfind "$P" "GO" 0 "FAIL"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G9 schema_grounding_verdict=FAIL" "$P"
@@ -106,31 +145,50 @@ denied "G9 schema_grounding_verdict=FAIL" "$P"
 P="$TMP/g9b"; mkfind "$P" "GO" 0 "PASS"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G9 grounding=PASS with zero commands" "$P"
 
-# G9: command claims do not replace an actual provider transcript tool use.
+# G9: a non-empty self-report cannot substitute for actual provider transcript tool use.
 P="$TMP/g9c"; mkfind "$P" "GO" 3 "PASS"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$NO_TOOL_SID"
 denied "G9 commands claimed with zero transcript tool use" "$P"
 
 # A denial must REVOKE a marker previously granted for the same doc revision.
-P="$TMP/revoke"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-"$GATE" "$DOC" "$P" >/dev/null 2>&1
-if ls "$TMP"/PLATEAU.* >/dev/null 2>&1; then
-    # now corrupt the round the marker certified, and re-gate
-    mkfind "$P" "REJECT" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-    "$GATE" "$DOC" "$P" >/dev/null 2>&1
-    ls "$TMP"/PLATEAU.* >/dev/null 2>&1 \
-        && bad "denial left a previously granted marker in place" \
-        || ok "denial revokes the previously granted marker"
-else
-    bad "setup: valid round did not produce a marker"
+if [ -n "$REAL_SID" ]; then
+  P="$TMP/revoke"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  if ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1; then
+      # Re-gate a corrupt round from another campaign directory. Marker scope is doc-canonical.
+      Q="$TMP/other-campaign/revoke"; mkdir -p "$(dirname "$Q")"
+      mkfind "$Q" "REJECT" 3; mkmeta "$Q" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+      "$GATE" "$DOC" "$Q" >/dev/null 2>&1
+      ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+          && bad "denial left a previously granted marker in place" \
+          || ok "cross-campaign denial revokes the doc-canonical marker"
+  else
+      bad "setup: valid round did not produce a marker"
+  fi
+  rm -f "$MARKER_DIR"/PLATEAU.*
 fi
-rm -f "$TMP"/PLATEAU.*
 
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
-P="$TMP/g2ok"; mkfind "$P" "GO" 3; mkmeta "$P" "us.anthropic.claude-fable-5" "$SHA" 4 "$REAL_SID"
-if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
-    ok "G2 accepts a managed-deployment claude model id"
-else
-    bad "G2 wrongly refused us.anthropic.claude-fable-5"
+if [ -n "$REAL_SID" ]; then
+  # model_id carries a managed deployment prefix; requested_model is the bare id the operator passed.
+  P="$TMP/g2ok"; mkfind "$P" "GO" 3; mkmeta "$P" "us.anthropic.claude-fable-5" "$SHA" 4 "$REAL_SID" "claude-fable-5"
+  if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
+      ok "G2 accepts a managed-deployment claude model id"
+  else
+      bad "G2 wrongly refused us.anthropic.claude-fable-5"
+  fi
+fi
+
+# G6 residual gap (documented, design §4.3): a superstring VARIANT of the requested id is accepted,
+# because substring comparison cannot separate a cheaper suffixed variant (…-lite) from a dated
+# snapshot (…-20260101). This pins the known behavior so a future tightening updates the doc too.
+if [ -n "$SUPER_SID" ]; then
+  P="$TMP/g6f"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-opus-4-8-lite" "$SHA" 4 "$SUPER_SID" "claude-opus-4-8"
+  if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
+    ok "G6 superstring variant accepted (documented residual T1 gap)"
+  else
+    bad "superstring variant denied — comparator changed; update design §4.3 residual-gap note"
+  fi
+  rm -f "$MARKER_DIR"/PLATEAU.*
 fi
 
 # usage: a dangling option value must be a usage error (64), not an unbound-variable exit 1
@@ -138,12 +196,20 @@ fi
 [ $? -eq 64 ] && ok "dangling --orchestrator-family exits 64" || bad "dangling option did not exit 64"
 
 # POSITIVE: everything valid -> marker written
-P="$TMP/good"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
-  ls "$TMP"/PLATEAU.* >/dev/null 2>&1 && ok "valid round -> plateau granted + marker written" \
-                                      || bad "granted but no marker file"
+if [ -n "$REAL_SID" ]; then
+  P="$TMP/good"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
+    marker_name="$(find "$MARKER_DIR" -maxdepth 1 -type f -name 'PLATEAU.*' -printf '%f\n' -quit)"
+    if [[ "$marker_name" =~ ^PLATEAU\.[0-9a-f]{16}\.[0-9a-f]{16}$ ]]; then
+      ok "valid round -> canonical doc-id + artifact-sha marker written"
+    else
+      bad "granted but marker name is invalid: $marker_name"
+    fi
+  else
+    bad "valid round was denied (gate too strict)"
+  fi
 else
-  bad "valid round was denied (gate too strict)"
+  echo "  skip - positive case (no local transcript to reference)"
 fi
 
 echo "test_plateau_gate: $pass passed, $fail failed"

@@ -1,16 +1,16 @@
 ---
 name: dual-magi-review
-description: Independent multi-perspective peer review of a large design doc, orchestrated from Codex. Runs three same-family reviewers as parallel `codex exec` processes, then a MANDATORY cross-family round via headless Claude to subtract shared training bias. A plateau ("this design is done") cannot be declared by the model — only a gate script may, and only when it can mechanically confirm a cross-family round ran against this exact revision. Use for design docs >= 500 lines, production-critical changes, or anything you wrote yourself and are now reviewing. Not for small diffs or docs under ~200 lines.
+description: Independent multi-perspective peer review of a large design doc, orchestrated from Codex. Runs three same-family reviewers as parallel `codex exec` processes, then a MANDATORY cross-family round via headless Claude or explicit Grok fallback to subtract shared training bias. A plateau ("this design is done") cannot be declared by the model — only a gate script may, and only when it mechanically confirms the selected cross-family provider reviewed this exact revision. Use for design docs of at least 500 lines, production-critical changes, or anything you wrote yourself and are now reviewing. Not for small diffs or docs under roughly 200 lines.
 ---
 
-# dual-magi-review (Codex orchestrator, Claude cross-family)
+# dual-magi-review (Codex orchestrator, Claude/Grok cross-family)
 
 A "Magi" is a panel of independent, perspective-orthogonal reviewers. **dual-magi** pairs
 same-family reviewers with a **cross-family** reviewer — a different model family — because
 same-family reviewers share training-data blind spots and will confidently agree with each other.
 
 This is the mirror of the Claude-orchestrated plugin (`plugins/harness-magi/`): here **Codex is
-the orchestrator and Claude is the cross-family reviewer**.
+the orchestrator; Claude is the preferred cross-family reviewer and Grok is an explicit fallback**.
 
 ## Family routing policy
 
@@ -30,8 +30,10 @@ be marked for revision.
 
 Fallback when a family is unavailable:
 
-- If Claude is unavailable, Codex may continue design drafting, but the design remains
-  "Claude review pending" and cannot claim plateau.
+- If Claude is unavailable because of quota, capacity, auth, or CLI failure, select Grok
+  explicitly. Record preferred/actual routing in an operator `FAMILY_ROUTING` note; the adapter
+  meta mechanically records the actual provider only. A verified Grok round is cross-family
+  relative to Codex and may satisfy the plateau gate.
 - If Codex is unavailable, implementation should be limited to reversible scaffolding/tests until
   Codex can perform the coding or final executable review.
 - If either cross-family adapter is unavailable, write a `FAMILY_ROUTING` note documenting
@@ -66,9 +68,10 @@ before invoking a bundled script.
               -> three `codex exec` processes, read-only, schema-constrained output
 2. synthesize read the three round_<N>_<persona>.json; write round_<N>_codex.json
 3. cross-family (MANDATORY before any plateau claim)
-              scripts/magi_xfamily_claude.sh <doc> <round> <prior.json|-> <state-dir>/round_<N+1>_xfamily
+              scripts/magi_xfamily.sh --reviewer claude|grok <doc> <round> <prior.json|-> <state-dir>/round_<N+1>_xfamily
 4. gate       scripts/magi_plateau_gate.sh <doc> <state-dir>/round_<N+1>_xfamily
-              -> writes .dual-magi/PLATEAU.<sha> ONLY if G1..G7 all pass
+                --reviewer-family claude|grok
+              -> writes .dual-magi/PLATEAU.<doc-id>.<artifact-sha-prefix> ONLY if G1..G9 pass
 5. revise the doc with the findings; re-invoke for the next round
 ```
 
@@ -82,13 +85,13 @@ refuses unless it can confirm all of:
 | assert | what it blocks |
 |---|---|
 | G1 | cross-family round missing, or its verdict is outside the schema enum |
-| G2 | a same-family round masquerading as cross-family |
+| G2 | a same-family round or provider-label mismatch masquerading as cross-family |
 | G3 | a **stale** round — reviewed a different revision of the doc (`artifact_sha` mismatch) |
 | G4 | findings swapped after the adapter wrote them (`output_sha` mismatch) |
-| G5 | a round that took no turns yet claims to have executed commands |
-| G6 | a `session_id` that resolves to no transcript (meta hand-written, adapter never ran) |
+| G5 | `num_turns < 1`, or `num_turns <= 1` while operations are reported |
+| G6 | a `session_id` that resolves to no selected-provider transcript, or transcript/model mismatch |
 | G7 | a `REJECT` or `REVISE` verdict |
-| G8 | any unresolved `REJECT`/`CRITICAL` finding, whatever the headline verdict says |
+| G8 | any unresolved `REJECT`/`CRITICAL`/`HIGH` finding, whatever the headline verdict says |
 | G9 | ungrounded rounds: `schema_grounding_verdict: FAIL`, an **empty** `verify_commands_executed`, or commands claimed while the transcript shows no tool use |
 
 If the gate exits non-zero, the design is **not** at plateau. Do not say it is. Do not proceed to
@@ -97,12 +100,12 @@ forgetting a behavioral one.
 
 ## Plateau definition
 
-All of: no `REJECT` in the latest round; new-vs-prior findings ratio under ~20% (the round is
-re-confirming, not discovering); a cross-family round ran **against the current revision** with a
-non-blocking verdict; every load-bearing claim is schema-grounded. Same-family agreement is
-**never** plateau.
+The marker means only that G1-G9 passed: the selected cross-family provider reviewed the current
+revision, returned a non-blocking verdict without unresolved HIGH-or-worse findings, and met the gate's minimal
+grounding checks. A new-vs-prior findings ratio under roughly 20% remains useful operator judgment,
+but the gate does not enforce it. Same-family agreement is **never** plateau.
 
-A round that surfaces new criticals — even at `GO-WITH-REVISE` — is not plateau. Keep going.
+A round that surfaces new HIGH-or-worse findings — even at `GO-WITH-REVISE` — is not plateau. Keep going.
 Conversely, refusing to ever converge is its own failure mode: when discovery has stopped and the
 doc is honest about its limits, ship it.
 
@@ -114,9 +117,9 @@ finding. A round whose reviewers only read prose is **degraded** regardless of i
 
 Note the limit, and state it honestly: schema conformance guarantees nothing about content truth.
 Both CLIs use constrained decoding and will **fabricate** a required field to satisfy a schema
-(measured). The adapter derives executed commands from the transcript rather than trusting the
-reviewer's self-report, which detects **omission and inconsistency — not semantic truth**. A
-reviewer that runs one `rg` and invents its findings will pass. That residual risk is real.
+(measured). G9 checks only that the reported operation list is non-empty and that the provider
+transcript contains some tool use; it does not prove those lists correspond. A reviewer that runs
+one read tool and invents its findings will pass. That residual risk is real.
 
 ## Threat model — read before trusting the gate
 
@@ -135,7 +138,9 @@ dual-magi-review <doc-path> [--rounds N] [--persona-set magi|bug-hunt]
 `--no-cross-family` is an audited, explicit opt-out — not a silent skip. The gate still refuses to
 write a marker, so an opted-out review **cannot claim plateau**.
 
-Env: `MAGI_XFAMILY_MODEL` (default `claude-fable-5`), `MAGI_XFAMILY_TIMEOUT_S` (default `900`).
+Env: `MAGI_XFAMILY_CLAUDE_MODEL` (legacy fallback `MAGI_XFAMILY_MODEL`, default
+`claude-fable-5`), `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`), and
+`MAGI_XFAMILY_TIMEOUT_S` (default `900`).
 
 Adapter exit codes: `0` = round complete · `2` = fail-closed, no usable result · `3` = lock held
 (recursion, or a concurrent review of the same doc).

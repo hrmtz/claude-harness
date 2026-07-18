@@ -121,13 +121,34 @@ for p in "${PERSONAS[@]}"; do
     # All three launch before any output is read (INV-3).
     # `|| s=$?` so a codex failure does not abort the subshell under the inherited `set -e`
     # (which would skip the rm), while still propagating the real status to `wait`.
-    ( s=0
+    ( s=0; scrub_rc=0
+      raw_fifo="$OUT_DIR/.round_${ROUND}_${p}.raw.fifo"
+      log_fifo="$OUT_DIR/.round_${ROUND}_${p}.log.fifo"
+      safe_out="$(mktemp "$OUT_DIR/.round_${ROUND}_${p}.safe.XXXXXX")"
+      safe_log="$(mktemp "$OUT_DIR/.round_${ROUND}_${p}.log.safe.XXXXXX")"
+      rm -f "$raw_fifo" "$log_fifo"
+      mkfifo "$raw_fifo" "$log_fifo"
+      # Keep a writer open until codex returns so either scrubber receives EOF even when codex
+      # fails before opening its sink. Bytes travel through FIFOs; only scrubbed bytes hit disk.
+      exec 7<>"$raw_fifo" 8<>"$log_fifo"
+      ( exec 7>&- 8>&-; python3 "$SCRUB" < "$raw_fifo" > "$safe_out" ) & raw_scrub_pid=$!
+      ( exec 7>&- 8>&-; python3 "$SCRUB" --text < "$log_fifo" > "$safe_log" ) & log_scrub_pid=$!
       codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
         --output-schema "$SCHEMA_FILE" \
-        -o "$OUT_DIR/round_${ROUND}_${p}.json" \
-        - < "$prompt" > "$OUT_DIR/round_${ROUND}_${p}.log" 2>&1 || s=$?
-      rm -f "$prompt"
+        -o "$raw_fifo" \
+        - < "$prompt" > "$log_fifo" 2>&1 || s=$?
+      exec 7>&- 8>&-
+      wait "$raw_scrub_pid" || scrub_rc=1
+      wait "$log_scrub_pid" || scrub_rc=1
+      rm -f "$prompt" "$raw_fifo" "$log_fifo"
+      if [ "$s" -eq 0 ] && [ "$scrub_rc" -eq 0 ]; then
+          mv "$safe_out" "$OUT_DIR/round_${ROUND}_${p}.json"
+          mv "$safe_log" "$OUT_DIR/round_${ROUND}_${p}.log"
+      else
+          rm -f "$safe_out" "$safe_log"
+          s=1
+      fi
       exit "$s" ) &
     PIDS+=("$!")
 done
@@ -139,20 +160,16 @@ done
 
 for p in "${PERSONAS[@]}"; do
     out="$OUT_DIR/round_${ROUND}_${p}.json"
-    if [ ! -s "$out" ] || ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$out" 2>/dev/null; then
-        echo "fanout: reviewer $p produced no valid output" >&2
+    if [ ! -s "$out" ] || ! python3 - "$SCHEMA_FILE" "$out" <<'PY' 2>/dev/null
+import json, jsonschema, sys
+schema = json.load(open(sys.argv[1]))
+instance = json.load(open(sys.argv[2]))
+jsonschema.validate(instance=instance, schema=schema)
+PY
+    then
+        echo "fanout: reviewer $p produced no schema-valid output" >&2
         rc=1
         continue
-    fi
-    # INV-5: `codex exec -o` wrote this file directly, so it has never seen the scrubber. A
-    # persona following the grounding mandate can land a DSN in verify_commands_executed; the
-    # README promises redaction "before anything hits disk", so redact in place now.
-    if scrubbed="$(python3 "$SCRUB" < "$out")"; then
-        printf '%s\n' "$scrubbed" > "$out"
-    else
-        echo "fanout: scrub failed for $p; removing its output rather than leaving it unredacted" >&2
-        rm -f "$out"
-        rc=1
     fi
 done
 

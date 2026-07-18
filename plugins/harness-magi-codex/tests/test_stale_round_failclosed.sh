@@ -22,9 +22,14 @@ ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
 DOC="$TMP/design.md"; printf 'a design document\n' > "$DOC"
+MARKER_DIR="$TMP/.dual-magi"
 STATE="$TMP/state"; mkdir -p "$STATE"
-REAL_SID="$(basename "$(ls -t ~/.claude/projects/*/*.jsonl 2>/dev/null | head -1)" .jsonl 2>/dev/null || echo "")"
-[ -n "$REAL_SID" ] || { echo "  skip - no local transcript to reference"; exit 0; }
+REAL_SID="11111111-2222-4333-8444-777777777777"
+export HOME="$TMP/home"
+mkdir -p "$HOME/.claude/projects/test"
+cat > "$HOME/.claude/projects/test/$REAL_SID.jsonl" <<'JSONL'
+{"message":{"model":"claude-fable-5","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"foo"}}]}}
+JSONL
 
 # Stub claude: first invocation emits a valid envelope, second emits prose.
 STUB="$TMP/bin"; mkdir -p "$STUB"
@@ -53,7 +58,7 @@ rc1=$?
 
 "$GATE" "$DOC" "$STATE/round_2_xfamily" >/dev/null 2>&1 \
     && ok "gate grants plateau on the valid round" || bad "gate refused a valid round"
-rm -f "$STATE"/PLATEAU.*
+rm -f "$MARKER_DIR"/PLATEAU.*
 
 # --- run 2: same doc, unparseable output ---
 "$ADAPTER" "$DOC" 2 - "$STATE/round_2_xfamily" >/dev/null 2>&1
@@ -76,7 +81,7 @@ else
 fi
 
 # The sentinel alone must never satisfy the gate.
-ls "$STATE"/PLATEAU.* >/dev/null 2>&1 && bad "a plateau marker exists after a failed round" \
+ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 && bad "a plateau marker exists after a failed round" \
                                       || ok "no plateau marker after a failed round"
 
 echo "test_stale_round_failclosed: $pass passed, $fail failed"

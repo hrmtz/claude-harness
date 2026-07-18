@@ -436,7 +436,7 @@ skill 内動作:
 移行段階: **S1 (= 現在)** = 止めない、 但し plateau 不可 → S2 = `--no-cross-family <reason>` 明示時のみ継続 →
 S3 = fail-closed (= exit 非 0)。 「止める」 より先に 「plateau を名乗らせない」。 行動を壊さずに不変条件を回復する。
 
-構造 rail (= 文ではなく script) は `plugins/harness-magi-codex/scripts/magi_plateau_gate.sh` に実装済 (= G1-G7)。
+構造 rail (= 文ではなく script) は `plugins/harness-magi-codex/scripts/magi_plateau_gate.sh` に実装済 (= G1-G9)。
 原典側にも同等の gate を入れるのが S2/S3 の作業 (= 原典は現在 provenance を一切記録していない)。
 Codex 側 provenance は実在する: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` の
 `session_meta` + `turn_context.model` (= 実測、 380 files)。

@@ -3,7 +3,7 @@ name: ultramagi
 description: End-to-end rigor loop for a non-trivial, hard-to-reverse change, orchestrated from Codex - local plan/design, then dual-magi review to PLATEAU, then code, then an adversarial bug-hunt on the implementation, then code review. A superset of dual-magi-review that gates the WHOLE lifecycle rather than a single design round, so that every irreversible step is preceded by adversarial, schema-grounded, cross-family review. TRIGGER, ultramagi, or a canonical migration, scoring algorithm, public launch, or data-loss-capable change. Not for small diffs, and not for a design doc with no implementation, use dual-magi-review for that.
 ---
 
-# ultramagi (Codex orchestrator, Claude cross-family)
+# ultramagi (Codex orchestrator, Claude/Grok cross-family)
 
 All `scripts/...` and `schemas/...` references are relative to the installed
 `harness-magi-codex` plugin root (two directories above this `SKILL.md`).
@@ -52,17 +52,14 @@ handoff notes and it must not erase the cross-family gate.
 
 Fallback order:
 
-1. **Claude unavailable during planning**: Codex may draft and revise the design locally, but must
-   mark the run as "Codex-drafted design, Claude review pending". Do not proceed to irreversible
-   implementation until either Claude cross-family review runs or the user explicitly accepts the
-   degraded path for a reversible spike.
+1. **Claude unavailable during planning**: Codex may draft and revise the design locally, then use
+   the explicit Grok cross-family fallback. Record the routing change. Do not proceed to an
+   irreversible step until the selected provider passes the mechanical gate.
 2. **Codex unavailable during coding**: Claude may implement only small, reversible scaffolding or
    tests. For migration/data-loss/security changes, stop before the irreversible step and queue a
    Codex implementation/review pass when available.
-3. **Claude unavailable during implementation review**: Codex may run self-review and tests, but
-   the result is "not final-reviewed". Do not deploy, migrate canonical data, or tag a production
-   release until Claude or another non-Codex family reviews the final diff, unless the user
-   explicitly accepts the degraded release path.
+3. **Claude unavailable during implementation review**: run the final design-intent review through
+   the explicit Grok fallback. Codex self-review alone remains "not final-reviewed".
 4. **Both families cannot cross-review**: narrow the task to documentation, reversible spike, or
    local-only proof. The plateau gate must not be claimed.
 
@@ -84,7 +81,7 @@ degraded_until: <what must run before ship>
                docs/designs/<NAME>.md.
 [2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU.
    ↻           each round: revise with findings, re-review. The cross-family (Claude)
-               round is MANDATORY before any plateau claim, and the gate script — not
+               round, or explicit Grok fallback, is MANDATORY before any plateau claim; the gate — not
                you — decides whether plateau was reached.
 [3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Repo-baked,
                idempotent, reversible
@@ -114,7 +111,7 @@ Never cross these without the preceding review:
 
 Gate [2] ends when `scripts/magi_plateau_gate.sh` writes a marker, which it does only if it can
 mechanically confirm a cross-family round ran **against the current revision** of the doc (asserts
-G1..G7 — see the `dual-magi-review` skill). Same-family agreement is never plateau: in this repo's
+G1..G9 — see the `dual-magi-review` skill). Same-family agreement is never plateau: in this repo's
 own field data, three Claude reviewers reached consensus on a design that one cross-family round
 then REJECTED with five new criticals, two of which were literally unimplementable as written.
 
@@ -122,10 +119,11 @@ If the gate exits non-zero, you are not at plateau. Do not proceed to [3].
 
 ## Schema-grounding mandate
 
-Every reviewer verifies table/column existence, populate state, and existing-code behavior against
-reality (`psql \d`, `rg migrations/ core/`, real `SELECT count(*)`) and emits the commands it ran.
-A round whose reviewers only read prose is **degraded** regardless of its verdict — re-run it. Any
-doc-vs-reality drift is a CRITICAL finding: the design's SQL, column, or flag premise is imaginary.
+Every reviewer verifies existing-code and file-backed claims with the adapter's read-only tools
+and reports the operations it ran. A round whose reviewers only read prose is **degraded**
+regardless of its verdict — re-run it. Any doc-vs-reality drift is a CRITICAL finding. Direct DB
+and `psql` verification is out of scope until a credential-safe wrapper exists; do not put DSNs or
+query credentials into prompts or findings.
 
 Honest limit: this detects omission and inconsistency, not semantic truth. A reviewer that runs one
 command and invents its conclusions will pass.

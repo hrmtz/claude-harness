@@ -23,10 +23,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.join(HERE, "..")
-ADAPTER = os.path.join(PLUGIN, "scripts", "magi_xfamily_claude.sh")
+ADAPTER = os.path.join(PLUGIN, "scripts", "magi_xfamily.sh")
 GATE = os.path.join(PLUGIN, "scripts", "magi_plateau_gate.sh")
 README = os.path.join(PLUGIN, "README.md")
 DESIGN = os.path.join(PLUGIN, "..", "..", "docs", "designs", "CODEX_MAGI_MIRROR.md")
+DUAL_SKILL = os.path.join(PLUGIN, "skills", "dual-magi-review", "SKILL.md")
+ULTRA_SKILL = os.path.join(PLUGIN, "skills", "ultramagi", "SKILL.md")
 
 
 def read(p: str) -> str:
@@ -61,7 +63,10 @@ def env_vars(src: str) -> set[str]:
 
 def main() -> int:
     adapter, gate = read(ADAPTER), read(GATE)
-    docs = read(README) + read(DESIGN)
+    skill_paths = (DUAL_SKILL, ULTRA_SKILL)
+    if not all(os.path.isfile(path) for path in skill_paths):
+        raise RuntimeError("cannot read every shipped SKILL.md — checker is blind")
+    docs = read(README) + read(DESIGN) + "".join(read(path) for path in skill_paths)
     drift = []
 
     for code in sorted(adapter_exit_codes(adapter)):
@@ -74,7 +79,7 @@ def main() -> int:
             drift.append(f"plateau gate asserts {tag} but no doc mentions it")
 
     # Conversely: a doc promising a G-assert the gate never makes is equally a contradiction.
-    documented = set(re.findall(r"\bG[1-7]\b", docs))
+    documented = set(re.findall(r"\bG[1-9]\b", docs))
     implemented = gate_asserts(gate)
     for tag in sorted(documented - implemented):
         drift.append(f"docs promise assert {tag} but the gate never checks it")

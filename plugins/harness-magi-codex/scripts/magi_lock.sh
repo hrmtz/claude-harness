@@ -10,7 +10,7 @@
 #
 # Usage (source, do not exec):
 #   source magi_lock.sh
-#   magi_lock_acquire "$STATE_DIR/.xfamily.lock" || exit 3
+#   magi_lock_acquire "$DOC_CONTROL_DIR/.xfamily.${DOC_LOCK_ID}.lock" || exit 3
 #
 # Known hole (documented, not fixed here): a child process inherits fd 9 and could
 # flock it. The real rail is that the reviewer's allowlist omits Bash(codex:*) /
