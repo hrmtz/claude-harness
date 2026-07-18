@@ -89,6 +89,24 @@ command = "bash /other/hooks/guard.sh"
         with self.assertRaises(ValueError):
             MODULE.merge(f"{MODULE.BEGIN}\nold", MANAGED)
 
+    def test_managed_block_ignores_third_party_hooks(self):
+        content = f'''[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+command = "bash /third-party/hook.sh"
+
+{MODULE.BEGIN}
+{MANAGED}{MODULE.END}
+'''
+        block = MODULE.managed_block(content)
+        self.assertIsNotNone(block)
+        self.assertIn("/repo/plugins/harness-core/hooks/guard.sh", block)
+        self.assertNotIn("/third-party/hook.sh", block)
+
+    def test_managed_block_rejects_duplicates(self):
+        content = f"{MODULE.BEGIN}\na\n{MODULE.END}\n{MODULE.BEGIN}\nb\n{MODULE.END}\n"
+        with self.assertRaises(ValueError):
+            MODULE.managed_block(content)
+
 
 if __name__ == "__main__":
     unittest.main()

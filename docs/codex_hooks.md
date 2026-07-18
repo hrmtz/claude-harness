@@ -154,6 +154,11 @@ Check sync state anytime with:
 bash ~/projects/claude-harness/scripts/check_cross_cli_hooks.sh --live
 ```
 
+The live check reads only the `BEGIN/END claude-harness managed hooks` block.
+Hooks owned by other installers are ignored; missing and duplicate harness
+commands are reported separately. Re-running the installer is the
+non-destructive repair path and preserves those unrelated hook sources.
+
 ### Trust step (one-time per machine)
 
 Codex requires explicit trust before running any hook script:
