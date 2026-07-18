@@ -38,15 +38,32 @@ def _commands(block: str) -> set[str]:
     return {match.group(1) for match in COMMAND.finditer(block)}
 
 
+def _non_hook_tables(block: str) -> str:
+    """Keep TOML tables that Codex inserted inside our marker range."""
+    kept = []
+    for header, body in _sections(block):
+        if header is None:
+            continue
+        if PARENT.match(header) or CHILD.match(header):
+            continue
+        kept.append(body)
+    return "".join(kept).strip()
+
+
 def _remove_managed_blocks(content: str) -> tuple[str, bool]:
     if BEGIN not in content and END not in content:
         return content, False
     if content.count(BEGIN) != content.count(END):
         raise ValueError("unbalanced claude-harness managed hook markers")
     pattern = re.compile(
-        rf"(?ms)^\s*{re.escape(BEGIN)}\n.*?^\s*{re.escape(END)}\s*\n?"
+        rf"(?ms)^\s*{re.escape(BEGIN)}\n(.*?)^\s*{re.escape(END)}\s*\n?"
     )
-    cleaned, count = pattern.subn("", content)
+
+    def preserve_inserted_tables(match: re.Match[str]) -> str:
+        preserved = _non_hook_tables(match.group(1))
+        return preserved + "\n" if preserved else ""
+
+    cleaned, count = pattern.subn(preserve_inserted_tables, content)
     if count != content.count(BEGIN):
         raise ValueError("invalid claude-harness managed hook marker order")
     return cleaned, True
