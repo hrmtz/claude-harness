@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# mailbox-send — atomic njslyr7 mailbox append + recipient pane nudge.
+#
+# Why this exists: appending a JSONL line to the mailbox alone does NOT notify
+# the recipient pane (it only sees the message if it happens to poll). The nudge
+# (tmux send-keys + double-enter) is what pulls the peer's attention. Doing them
+# as two manual steps means the nudge gets forgotten (recurred 5/9 + 5/28).
+# This script makes "append WITHOUT nudge" structurally impossible.
+#
+# Usage:
+#   mailbox-send <to> <body> [--from NAME] [--session ID] [--no-nudge] [--force]
+#
+#   <to>    recipient pane: "pane-25" | "%25" | "25"
+#   <body>  message text (single arg; quote it)
+#
+# Options:
+#   --from NAME    sender codename (default: window name of $TMUX_PANE minus
+#                  "claude-"/"main-" prefix, or $MAILBOX_FROM)
+#   --session ID   session uuid for the entry (default: $MAILBOX_SESSION|"unknown")
+#   --no-nudge     append only, skip nudge (discouraged; use only for bulk ticks)
+#   --force        bypass the credential-shaped-body guard (use with care)
+#
+# Exit: 0 ok / 2 usage / 3 credential-shaped body refused / 4 pane not found
+set -euo pipefail
+
+MAILBOX="${NJSLYR7_MAILBOX:-$HOME/.njslyr7/mailbox/log.jsonl}"
+LOCK="${MAILBOX}.lock"
+
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
+
+FROM=""; SESSION=""; NUDGE=1; FORCE=0
+posargs=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from)    FROM="${2:-}"; shift 2;;
+    --session) SESSION="${2:-}"; shift 2;;
+    --no-nudge) NUDGE=0; shift;;
+    --force)   FORCE=1; shift;;
+    -h|--help) usage; exit 0;;
+    --) shift; while [[ $# -gt 0 ]]; do posargs+=("$1"); shift; done;;
+    *) posargs+=("$1"); shift;;
+  esac
+done
+[[ ${#posargs[@]} -eq 2 ]] || { usage; exit 2; }
+TO="${posargs[0]}"; BODY="${posargs[1]}"
+
+# --- credential guard (formation rule: exit 3) ---
+if [[ "$FORCE" -ne 1 ]] && printf '%s' "$BODY" | grep -qiE \
+  'sk-[a-z0-9]{20}|AKIA[0-9A-Z]{16}|BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY|postgres(ql)?://[^:@/[:space:]]+:[^@/[:space:]]{6,}@|(PASSWORD|SECRET|TOKEN|API_KEY|PASSWD)[[:space:]]*[=:][[:space:]]*[^[:space:]]{12,}'; then
+  echo "REFUSED (exit 3): body looks credential-shaped. Reference key NAME only, never values. Override with --force if certain." >&2
+  exit 3
+fi
+
+# --- resolve sender codename ---
+[[ -z "$FROM" ]] && FROM="${MAILBOX_FROM:-}"
+if [[ -z "$FROM" && -n "${TMUX_PANE:-}" ]]; then
+  wn="$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)"
+  FROM="${wn#claude-}"; FROM="${FROM#main-}"
+fi
+FROM="${FROM:-unknown}"
+SESSION="${SESSION:-${MAILBOX_SESSION:-unknown}}"
+
+# --- normalize recipient: pane-NN (mailbox label) + %NN (tmux target) ---
+raw="${TO#pane-}"; raw="${raw#%}"
+TO_LABEL="pane-${raw}"
+TMUX_TARGET="%${raw}"
+
+# --- append under flock, return new seq ---
+SEQ="$(
+  exec 9>"$LOCK"; flock 9
+  python3 - "$MAILBOX" "$FROM" "$TO_LABEL" "$SESSION" "$BODY" <<'PY'
+import json, os, sys, datetime
+mbox, frm, to, sess, body = sys.argv[1:6]
+seq = 0
+if os.path.exists(mbox):
+    with open(mbox) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                s = json.loads(line).get("seq", 0)
+                if isinstance(s, int) and s > seq:
+                    seq = s
+            except Exception:
+                pass
+seq += 1
+rec = {
+    "seq": seq,
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "from": frm,
+    "to": to,
+    "body": body,
+    "session_id": sess,
+}
+with open(mbox, "a") as f:
+    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+print(seq)
+PY
+)"
+echo "appended seq=$SEQ from=$FROM to=$TO_LABEL chars=${#BODY}"
+
+# --- nudge recipient pane (the whole point) ---
+if [[ "$NUDGE" -eq 1 ]]; then
+  if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx "$TMUX_TARGET"; then
+    echo "WARN (exit 4): pane $TMUX_TARGET not found — message appended but NOT nudged." >&2
+    exit 4
+  fi
+  notify="[${FROM}->mailbox seq=${SEQ}] ${BODY}"
+  # Leave copy-mode first, or the submit Enter below is eaten by it (it copies
+  # the selection instead of submitting). Mirrors formation wake.sh.
+  if [[ "$(tmux display -p -t "$TMUX_TARGET" '#{pane_in_mode}' 2>/dev/null)" == "1" ]]; then
+    tmux send-keys -X -t "$TMUX_TARGET" cancel 2>/dev/null || true
+    sleep 0.1
+  fi
+  tmux send-keys -t "$TMUX_TARGET" -l "$notify"
+  # Gapped double-enter (copied from wake.sh _submit_enter_twice): the textarea
+  # needs a render tick to commit the typed value before the submit Enter fires;
+  # the second Enter after a delay is belt-and-suspenders for the swallow that
+  # otherwise leaves the text visible-but-unsubmitted (esp. on Codex panes).
+  sleep "${MAILBOX_SUBMIT_SETTLE_S:-0.4}"
+  tmux send-keys -t "$TMUX_TARGET" Enter
+  sleep "${MAILBOX_SUBMIT_RETRY_S:-0.5}"
+  tmux send-keys -t "$TMUX_TARGET" Enter
+  echo "nudged $TMUX_TARGET (gapped double-enter)"
+fi
