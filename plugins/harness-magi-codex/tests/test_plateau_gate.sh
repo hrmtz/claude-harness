@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test_plateau_gate.sh — INV-2: G1..G7 each independently block a plateau.
+# test_plateau_gate.sh — INV-2: G1..G9 independently block a plateau.
 # Design §4.3. Every assert gets its own negative case, plus one positive case that must pass.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,8 +12,19 @@ pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-# A real session_id so G6 can pass in the positive case; fabricated ones must fail.
-REAL_SID="$(basename "$(ls -t ~/.claude/projects/*/*.jsonl 2>/dev/null | head -1)" .jsonl 2>/dev/null || echo "")"
+# Controlled transcripts make the suite independent of live Claude state. The
+# positive fixture contains one tool-use record; the second fixture proves that
+# a non-empty command self-report cannot substitute for transcript grounding.
+REAL_SID="11111111-2222-4333-8444-666666666666"
+NO_TOOL_SID="11111111-2222-4333-8444-777777777777"
+export HOME="$TMP/home"
+mkdir -p "$HOME/.claude/projects/test"
+cat > "$HOME/.claude/projects/test/$REAL_SID.jsonl" <<'JSONL'
+{"message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"x"}}]}}
+JSONL
+cat > "$HOME/.claude/projects/test/$NO_TOOL_SID.jsonl" <<'JSONL'
+{"message":{"content":[{"type":"text","text":"claimed verification without a tool call"}]}}
+JSONL
 
 mkmeta() { # mkmeta <prefix> <model_id> <artifact_sha> <num_turns> <session_id>
   python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
@@ -66,7 +77,7 @@ P="$TMP/g4"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SI
 printf '{"verdict":"GO","verify_commands_executed":[],"findings":[]}' > "$P.json"
 denied "G4 output_sha mismatch (findings swapped)" "$P"
 
-# G5: zero-turn round claiming to have executed commands
+# G5: one-turn round claiming to have executed commands
 P="$TMP/g5"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 1 "$REAL_SID"
 denied "G5 num_turns=1 with commands reported" "$P"
 
@@ -95,31 +106,31 @@ denied "G9 schema_grounding_verdict=FAIL" "$P"
 P="$TMP/g9b"; mkfind "$P" "GO" 0 "PASS"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G9 grounding=PASS with zero commands" "$P"
 
+# G9: command claims do not replace an actual provider transcript tool use.
+P="$TMP/g9c"; mkfind "$P" "GO" 3 "PASS"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$NO_TOOL_SID"
+denied "G9 commands claimed with zero transcript tool use" "$P"
+
 # A denial must REVOKE a marker previously granted for the same doc revision.
-if [ -n "$REAL_SID" ]; then
-  P="$TMP/revoke"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-  "$GATE" "$DOC" "$P" >/dev/null 2>&1
-  if ls "$TMP"/PLATEAU.* >/dev/null 2>&1; then
-      # now corrupt the round the marker certified, and re-gate
-      mkfind "$P" "REJECT" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-      "$GATE" "$DOC" "$P" >/dev/null 2>&1
-      ls "$TMP"/PLATEAU.* >/dev/null 2>&1 \
-          && bad "denial left a previously granted marker in place" \
-          || ok "denial revokes the previously granted marker"
-  else
-      bad "setup: valid round did not produce a marker"
-  fi
-  rm -f "$TMP"/PLATEAU.*
+P="$TMP/revoke"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+"$GATE" "$DOC" "$P" >/dev/null 2>&1
+if ls "$TMP"/PLATEAU.* >/dev/null 2>&1; then
+    # now corrupt the round the marker certified, and re-gate
+    mkfind "$P" "REJECT" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+    "$GATE" "$DOC" "$P" >/dev/null 2>&1
+    ls "$TMP"/PLATEAU.* >/dev/null 2>&1 \
+        && bad "denial left a previously granted marker in place" \
+        || ok "denial revokes the previously granted marker"
+else
+    bad "setup: valid round did not produce a marker"
 fi
+rm -f "$TMP"/PLATEAU.*
 
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
-if [ -n "$REAL_SID" ]; then
-  P="$TMP/g2ok"; mkfind "$P" "GO" 3; mkmeta "$P" "us.anthropic.claude-fable-5" "$SHA" 4 "$REAL_SID"
-  if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
-      ok "G2 accepts a managed-deployment claude model id"
-  else
-      bad "G2 wrongly refused us.anthropic.claude-fable-5"
-  fi
+P="$TMP/g2ok"; mkfind "$P" "GO" 3; mkmeta "$P" "us.anthropic.claude-fable-5" "$SHA" 4 "$REAL_SID"
+if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
+    ok "G2 accepts a managed-deployment claude model id"
+else
+    bad "G2 wrongly refused us.anthropic.claude-fable-5"
 fi
 
 # usage: a dangling option value must be a usage error (64), not an unbound-variable exit 1
@@ -127,16 +138,12 @@ fi
 [ $? -eq 64 ] && ok "dangling --orchestrator-family exits 64" || bad "dangling option did not exit 64"
 
 # POSITIVE: everything valid -> marker written
-if [ -n "$REAL_SID" ]; then
-  P="$TMP/good"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-  if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
-    ls "$TMP"/PLATEAU.* >/dev/null 2>&1 && ok "valid round -> plateau granted + marker written" \
-                                        || bad "granted but no marker file"
-  else
-    bad "valid round was denied (gate too strict)"
-  fi
+P="$TMP/good"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>&1; then
+  ls "$TMP"/PLATEAU.* >/dev/null 2>&1 && ok "valid round -> plateau granted + marker written" \
+                                      || bad "granted but no marker file"
 else
-  echo "  skip - positive case (no local transcript to reference)"
+  bad "valid round was denied (gate too strict)"
 fi
 
 echo "test_plateau_gate: $pass passed, $fail failed"
