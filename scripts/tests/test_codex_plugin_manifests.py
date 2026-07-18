@@ -35,7 +35,10 @@ class CodexPluginManifestTest(unittest.TestCase):
             root = ROOT / "plugins" / name
             manifest = json.loads((root / ".codex-plugin/plugin.json").read_text())
             self.assertEqual(manifest["name"], name)
-            self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
+            self.assertRegex(
+                manifest["version"],
+                r"^\d+\.\d+\.\d+(?:\+codex\.[a-z0-9-]+)?$",
+            )
             self.assertNotIn("[TODO:", json.dumps(manifest))
             if "skills" in manifest:
                 self.assertTrue((root / manifest["skills"]).is_dir())

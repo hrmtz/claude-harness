@@ -325,7 +325,9 @@ worker never promotes on its own.
   **bracketed paste** (`load-buffer` + `paste-buffer -p`, which reaches the app
   tty even from copy-mode and lands atomically), then sleeps before the submit
   Enter. If you hand-roll an injection: cancel copy-mode, use `paste-buffer -p`
-  (not `send-keys -l`), and sleep ~0.4 s before the Enter. Diagnose with
+  (not `send-keys -l`), sleep ~0.4 s, press Enter, wait ~0.5 s, then press Enter
+  again. The delayed double-submit applies to both Claude and Codex textareas.
+  Diagnose with
   `tmux display-message -p -t <pane> '#{pane_in_mode}'` (1 = in copy-mode). If
   your installation pre-dates this fix, update the plugin and refresh the
   `formation` symlink from your plugin install.
