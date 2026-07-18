@@ -36,6 +36,15 @@ got=$(HOOK_INPUT='{"toolInput":{"path":"/x/.env"}}' parse_tool_file_path)
 eq "parse_tool_file_path Grok .path" "$got" "/x/.env"
 got=$(HOOK_INPUT='{"tool_input":{"file_path":"/y/.env"}}' parse_tool_file_path)
 eq "parse_tool_file_path Claude .file_path" "$got" "/y/.env"
+got=$(HOOK_INPUT='{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/m/.env"}}' parse_tool_file_path)
+eq "parse_tool_file_path Codex MCP .path" "$got" "/m/.env"
+got=$(HOOK_INPUT='{"tool_name":"mcp__filesystem__read_file","tool_input":{"uri":"file:///u/.env"}}' parse_tool_file_path)
+eq "parse_tool_file_path Codex MCP .uri" "$got" "file:///u/.env"
+
+got=$(HOOK_INPUT='{"tool_name":"Agent","tool_response":{"output":"agent-result"}}' parse_tool_output)
+printf '%s' "$got" | grep -q 'agent-result' \
+    && ok "parse_tool_output Codex Agent result" \
+    || bad "parse_tool_output Codex Agent result missing"
 
 # --- parse_tool_content: Write .content + Edit/search_replace .new_string ---
 got=$(HOOK_INPUT='{"toolInput":{"content":"body"}}' parse_tool_content)

@@ -81,7 +81,10 @@ parse_tool_name() {
 # Read/Write/Edit target path. Grok's read_file uses `.path`; search_replace and
 # Claude Read/Write use `file_path`. Covers all three (Phase 1.5 Read/Write guards).
 parse_tool_file_path() {
-    _hook_input | jq -r '.tool_input.file_path // .toolInput.file_path // .toolInput.path // .path // empty' 2>/dev/null
+    _hook_input | jq -r '
+        .tool_input.file_path // .tool_input.path // .tool_input.file // .tool_input.uri //
+        .toolInput.file_path // .toolInput.path // .toolInput.file // .toolInput.uri //
+        .path // .file_path // .file // .uri // empty' 2>/dev/null
 }
 
 # Write/Edit content or replacement text: `.content` (Write) or `.new_string`

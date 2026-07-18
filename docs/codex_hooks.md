@@ -205,7 +205,7 @@ compatible. Notable Codex-specific points:
 | `stall_autocontinue.sh` | Stop | Uses Codex's stable `last_assistant_message` field instead of parsing its unstable rollout format. |
 | `check_zsh_reserved_vars.sh` | PreToolUse / `apply_patch` | Blocks only when the patch itself shows zsh context (`.zsh` path or zsh shebang), avoiding false positives on bash `.sh` hunks. |
 | `check_early_check_timer.sh`, `ssh_fanout_canonical_check.sh` | PreToolUse / `apply_patch` | Extract added lines from the patch body and run the existing warning checks against those lines. |
-| `credential_file_read_guard.sh` parity | PreToolUse / Bash | Codex has no standalone Read tool in the observed payloads; the same sensitive-file coverage is enforced through `bash_command_guard.sh` for `exec_command` reads. |
+| `credential_file_read_guard.sh` | PreToolUse / MCP filesystem reads | Matches observable MCP `read_file`/`read_text_file`/`get_file` tools and extracts `file_path`, `path`, `file`, or local `file://` URI inputs. Shell reads remain covered by `bash_command_guard.sh`. |
 
 ---
 
@@ -218,6 +218,10 @@ compatible. Notable Codex-specific points:
 | Trust step | none | review changed definitions in interactive `/hooks` |
 | Session JSONL path | `~/.claude/projects/<hash>/*.jsonl` | `~/.codex/sessions/<date>/rollout-*.jsonl` (in `transcript_path`) |
 | Plugin hook support | GA | stable; default `hooks/hooks.json` or manifest `hooks` entry |
+
+Codex local hooks cannot observe hosted tools such as `WebSearch`. Credential
+scrubbing therefore covers observable Bash, apply_patch, Agent, and MCP tool
+paths only; this repository does not claim hosted-tool parity.
 
 ---
 
