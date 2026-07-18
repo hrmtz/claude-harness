@@ -50,17 +50,19 @@ cache.
 
 ## Update
 
-Pull the repository, refresh the marketplace, and reinstall the affected
-plugin so Codex refreshes its cached copy:
+Pull the repository and reinstall each affected plugin so Codex refreshes its
+cached copy:
 
 ```bash
 git pull --ff-only
-codex plugin marketplace upgrade claude-harness
 codex plugin add harness-core@claude-harness
 ```
 
-Use the same `plugin add` command for each affected component, then start a new
-Codex thread. Re-review hooks whose definition hash changed.
+The install instructions above register a **local** marketplace, which reads
+the checked-out marketplace directly; `codex plugin marketplace upgrade` is
+for Git-backed marketplaces and rejects local sources. Use the same `plugin
+add` command for each affected component, then start a new Codex thread.
+Re-review hooks whose definition hash changed.
 
 ## Disable or uninstall
 

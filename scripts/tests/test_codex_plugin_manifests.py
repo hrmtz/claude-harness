@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).parents[2]
 MARKET = ROOT / ".agents/plugins/marketplace.json"
+GUIDE = ROOT / "docs/codex_plugins.md"
 EXPECTED = ["harness-core", "harness-rails", "harness-formation", "harness-magi-codex"]
 
 
@@ -20,6 +21,14 @@ class CodexPluginManifestTest(unittest.TestCase):
             self.assertIn(entry["policy"]["installation"], {"AVAILABLE", "INSTALLED_BY_DEFAULT"})
             self.assertIn(entry["policy"]["authentication"], {"ON_INSTALL", "ON_USE"})
             self.assertTrue(entry["category"])
+
+    def test_local_marketplace_update_commands(self):
+        guide = GUIDE.read_text()
+        self.assertNotIn("codex plugin marketplace upgrade claude-harness", guide)
+        for name in EXPECTED:
+            if name == "harness-core":
+                continue
+            self.assertIn(f"codex plugin add {name}@claude-harness", guide)
 
     def test_manifests_match_directories_and_components_exist(self):
         for name in EXPECTED:
