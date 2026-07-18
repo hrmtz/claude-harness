@@ -74,6 +74,16 @@
         ]
       },
       {
+        "matcher": "mcp__.*__(read_file|read_text_file|get_file)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|apply_patch",
         "hooks": [
           {
@@ -101,7 +111,7 @@
         ]
       },
       {
-        "matcher": "Bash|Read|Edit|Write|Task|WebFetch|mcp__.*",
+        "matcher": "Bash|Read|Edit|Write|Task|Agent|WebFetch|mcp__.*",
         "hooks": [
           {
             "type": "command",

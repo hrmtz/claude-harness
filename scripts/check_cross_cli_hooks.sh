@@ -68,18 +68,20 @@ for plugin in sorted({spec["path"].split("/")[0] for spec in specs}):
         for blk in blocks:
             for h in blk.get("hooks", []):
                 name = h["command"].split("/hooks/")[-1]
-                lookup.setdefault(f"{plugin}/hooks/{name}", []).append((event, h["command"]))
+                lookup.setdefault(f"{plugin}/hooks/{name}", []).append((event, blk.get("matcher"), h["command"]))
 for spec in specs:
     hook = spec["path"]
     candidates = lookup.get(hook, [])
     if "event" in spec:
         candidates = [item for item in candidates if item[0] == spec["event"]]
+    if "matcher" in spec:
+        candidates = [item for item in candidates if item[1] == spec["matcher"]]
     if len(candidates) != 1:
         print(f"INVALID OVERLAY SELECTION: {hook}", file=sys.stderr)
         sys.exit(1)
     plugin = hook.split("/", 1)[0]
     plugin_root = f"{plugins_dir}/{plugin}"
-    print(candidates[0][1].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
+    print(candidates[0][2].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
 PYEOF
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
         } | sort > "$want"

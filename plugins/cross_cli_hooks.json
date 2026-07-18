@@ -14,6 +14,11 @@
       },
       "harness-core/hooks/sanada_autobackup.sh",
       "harness-core/hooks/bash_command_guard.sh",
+      {
+        "path": "harness-core/hooks/credential_file_read_guard.sh",
+        "event": "PreToolUse",
+        "matcher": "mcp__.*__(read_file|read_text_file|get_file)$"
+      },
       "harness-core/hooks/branch_policy_guard.sh",
       "harness-core/hooks/pg_rotation_propagation_guard.sh",
       "harness-rails/hooks/pipeline_preflight_gate.sh",

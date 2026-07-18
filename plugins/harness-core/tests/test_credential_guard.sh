@@ -165,6 +165,19 @@ expect_read_block '/tmp/proj/.env' 'real .env'
 expect_read_block '/tmp/proj/.env.production' 'real .env.production'
 expect_read_block '/tmp/proj/.env.example.bak' 'template suffix not final segment'
 
+read_guard_payload_blocks() {
+    local payload="$1" tmp_home
+    tmp_home="$(mktemp -d)"
+    printf '%s' "$payload" | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" >/dev/null 2>/dev/null
+    local rc=$?
+    rm -rf "$tmp_home"
+    [ "$rc" -eq 2 ]
+}
+if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/.env"}}'; then ok "MCP .path credential read blocks"; else bad "MCP .path credential read escaped"; fi
+if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":".env"}}'; then ok "MCP relative credential read blocks"; else bad "MCP relative credential read escaped"; fi
+if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}'; then ok "MCP file URI credential read blocks after decode"; else bad "MCP file URI credential read escaped"; fi
+if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}'; then bad "benign MCP read blocked"; else ok "benign MCP read allowed"; fi
+
 # ----------------------------------------------------------------------------
 # Group 3: value_scrub allowlist skips catalog self-match (issue #7 tertiary)
 # ----------------------------------------------------------------------------

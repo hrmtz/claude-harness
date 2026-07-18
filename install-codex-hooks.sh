@@ -102,6 +102,8 @@ for spec in specs:
     candidates = lookup.get(hook, [])
     if "event" in spec:
         candidates = [item for item in candidates if item[0] == spec["event"]]
+    if "matcher" in spec:
+        candidates = [item for item in candidates if item[1] == spec["matcher"]]
     if len(candidates) != 1:
         detail = "not registered" if not candidates else "ambiguous; add an event selector"
         print(f"error: {hook}: {detail} in its plugin hooks.json", file=sys.stderr)

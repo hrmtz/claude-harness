@@ -19,8 +19,25 @@ source "$(dirname "$0")/lib.sh"
 HOOK_INPUT=$(cat)
 export HOOK_INPUT
 
-FILE_PATH=$(printf '%s' "$HOOK_INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+FILE_PATH=$(parse_tool_file_path)
 [ -z "$FILE_PATH" ] && exit 0
+
+# MCP filesystem tools commonly use file:// URIs. Decode only local file URIs;
+# non-file schemes are remote resources and outside this local-file guard.
+case "$FILE_PATH" in
+  file://*)
+    FILE_PATH=$(python3 - "$FILE_PATH" <<'PY' 2>/dev/null || true
+import sys
+from urllib.parse import unquote, urlparse
+u = urlparse(sys.argv[1])
+if u.scheme == "file" and u.netloc in {"", "localhost"}:
+    print(unquote(u.path))
+PY
+    )
+    [ -z "$FILE_PATH" ] && exit 0
+    ;;
+  *://*) exit 0 ;;
+esac
 
 # ----------------------------------------
 # Exempt suffix list (= dummy / template / test fixture、 block しない)
@@ -37,20 +54,20 @@ esac
 BLOCK=0
 case "$FILE_PATH" in
   # plain .env / .env.<host> family
-  */.env)
+  .env | */.env)
     BLOCK=1; REASON=".env (= plain credential SoT)"
     ;;
-  */.env.*)
+  .env.* | */.env.*)
     BLOCK=1; REASON=".env.<suffix> (= environment-specific credentials)"
     ;;
   # rclone / aws / netrc
-  */rclone.conf | *.config/rclone/rclone.conf)
+  rclone.conf | */rclone.conf | *.config/rclone/rclone.conf)
     BLOCK=1; REASON="rclone.conf (= R2/S3 secret access key)"
     ;;
-  */.aws/credentials)
+  .aws/credentials | */.aws/credentials)
     BLOCK=1; REASON="AWS credentials"
     ;;
-  */.netrc)
+  .netrc | */.netrc)
     BLOCK=1; REASON=".netrc (= HTTP basic auth credentials)"
     ;;
   # cloudflared tunnel credentials
