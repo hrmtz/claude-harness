@@ -79,15 +79,16 @@ degraded_until: <what must run before ship>
 [0] SCOPE      one task. State the invariant that must not break.
 [1] PLAN       design doc, preferably Claude-led for hard planning, written LOCALLY into
                docs/designs/<NAME>.md.
-[2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU.
-   ↻           each round: revise with findings, re-review. The cross-family (Claude)
+[2] DUAL-MAGI  run bounded dual-magi-review campaigns on the doc toward PLATEAU.
+   ↻           each round: revise with findings, re-review up to the campaign guard. The cross-family (Claude)
                round, or explicit Grok fallback, is MANDATORY before any plateau claim; the gate — not
                you — decides whether plateau was reached.
 [3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Repo-baked,
                idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   adversarial review of the IMPLEMENTATION, not the design:
-                 scripts/magi_fanout_codex.sh <target> <round> <dir> --persona-set bug-hunt
+                 scripts/magi_fanout_codex.sh <target> <round> <dir> --persona-set bug-hunt \
+                   --prior <prior-synthesis.json|->
                Reviewers RUN read-only verification against real data and try to break it.
                Fix findings; re-run until clean. This is the gate before an irreversible run.
 [5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
@@ -116,6 +117,17 @@ own field data, three Claude reviewers reached consensus on a design that one cr
 then REJECTED with five new criticals, two of which were literally unimplementable as written.
 
 If the gate exits non-zero, you are not at plateau. Do not proceed to [3].
+
+Before gate [0], arm `scripts/magi_autorun.py arm <design-doc>` once. Its Stop hook owns
+acknowledgement-free session continuation across the design loop and ends only at exact-revision
+plateau or a definitive blocked state. Do not pause between phases for user acknowledgement.
+
+If a reviewer script exits `4`, the autonomous campaign budget is exhausted. This is also not
+plateau: autonomously reduce scope, replace the primitive, or record an explicit limitation, then
+restart at round 1. A changed document/protocol rolls over automatically within the fixed global
+allowance of 16 weighted model launches across all revision campaigns, without acknowledgement.
+At global exhaustion, emit a definitive blocked result. Do not keep
+rerolling until a model happens to say GO and do not pause for user acknowledgement.
 
 ## Schema-grounding mandate
 
@@ -155,6 +167,8 @@ not by the three same-family reviewers who read the same text.
 
 ## Cost
 
-Per task: design gate 2–5 dual-magi rounds, build varies, bug-hunt ~1 fan-out, code-review ~5 min.
+Per task: the default design campaign permits at most 16 weighted model launches (four pairs
+without retries),
+build varies, bug-hunt ~1 fan-out, code-review ~5 min.
 A hard canonical task is a multi-hour loop. That is the point — it is cheaper than restoring
 corrupted canonical data. A tiny diff does not need ultramagi.

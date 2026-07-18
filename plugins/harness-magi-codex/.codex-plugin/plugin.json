@@ -1,6 +1,6 @@
 {
   "name": "harness-magi-codex",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260718195300",
   "description": "Cross-family dual-Magi and ultramagi review workflows for Codex.",
   "author": {
     "name": "hrmtz",
@@ -16,7 +16,10 @@
     "longDescription": "Dual-Magi and ultramagi skills with three Codex reviewers, a mandatory Claude cross-family round, and a mechanical plateau gate.",
     "developerName": "hrmtz",
     "category": "Productivity",
-    "capabilities": ["Skills"],
+    "capabilities": [
+      "Skills",
+      "Hooks"
+    ],
     "defaultPrompt": "Run dual-Magi review on this design."
   }
 }

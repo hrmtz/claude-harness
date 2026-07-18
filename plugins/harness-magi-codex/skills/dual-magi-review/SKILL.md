@@ -64,9 +64,14 @@ installed `harness-magi-codex` plugin root (two directories above this
 before invoking a bundled script.
 
 ```
-1. fan-out    scripts/magi_fanout_codex.sh <doc> <round> <state-dir> [--persona-set magi]
+0. arm once   python3 scripts/magi_autorun.py arm <doc>
+              -> binds the campaign to this Codex thread; no user acknowledgement is required
+1. fan-out    scripts/magi_fanout_codex.sh <doc> <round> <state-dir>
+                [--persona-set magi] [--prior <prior-synthesis.json|->]
               -> three `codex exec` processes, read-only, schema-constrained output
-2. synthesize read the three round_<N>_<persona>.json; write round_<N>_codex.json
+2. synthesize read the three round_<N>_<persona>.json; write round_<N>_codex.json with
+              reviewer=SYNTHESIS, exact source_artifacts digests, and one disposition for every
+              source finding
 3. cross-family (MANDATORY before any plateau claim)
               scripts/magi_xfamily.sh --reviewer claude|grok <doc> <round> <prior.json|-> <state-dir>/round_<N+1>_xfamily
 4. gate       scripts/magi_plateau_gate.sh <doc> <state-dir>/round_<N+1>_xfamily
@@ -75,7 +80,25 @@ before invoking a bundled script.
 5. revise the doc with the findings; re-invoke for the next round
 ```
 
+After every phase, including cross-family, create a synthesis envelope before the next round.
+Round 1 uses `--prior -`. Every later fan-out and cross-family round requires the immediately
+preceding synthesis JSON. It must be schema-valid, live in the active state directory, identify the
+same canonical document, and carry `round == current_round - 1`. Do not silently start a fresh
+broad review in the middle of a campaign.
+
+A synthesis may deduplicate or resolve findings, but it must not silently omit them. For every
+`<source-file>#<finding_id>`, add one disposition: `carried`, `duplicate`, `resolved`, or `deferred`.
+Carried/duplicate entries must name a real `synthesis_finding_id`. The validator discovers every
+preceding-round JSON source in the active state directory and verifies exact path/digest coverage.
+
 State lives in `${doc_dir}/.dual-magi/` (already gitignored via `docs/**/.dual-magi/`).
+
+Arming is mandatory for this skill. On its intact path, the plugin Stop hook refuses a mid-campaign stop and injects
+the next-turn continuation automatically. It ends only on an exact-revision plateau marker, fixed
+fuse exhaustion, an explicit terminal command, or two continued turns with no durable progress.
+Never replace this with a user acknowledgement prompt.
+Hook-internal parse or I/O failure is deliberately fail-open to avoid an unrecoverable Stop loop;
+the separate campaign guard remains fail-closed for provider spend.
 
 ## You may not declare plateau
 
@@ -108,6 +131,29 @@ but the gate does not enforce it. Same-family agreement is **never** plateau.
 A round that surfaces new HIGH-or-worse findings — even at `GO-WITH-REVISE` — is not plateau. Keep going.
 Conversely, refusing to ever converge is its own failure mode: when discovery has stopped and the
 doc is honest about its limits, ship it.
+
+## Campaign convergence guard
+
+Plateau safety and autonomous-loop safety are separate. Before launching any reviewer, both
+adapters claim from a canonical document-scoped ledger through `scripts/magi_campaign_guard.py`.
+The default autonomous ceiling is 16 weighted model launches: fan-out costs 3 and cross-family
+costs 1, permitting four pairs without retries. Retries consume
+budget; repeating round 1 or changing state directory cannot reset it. Above it, scripts exit `4` with
+`CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU` before a model starts.
+
+Exit `4` does not waive unresolved findings and does not authorize implementation. Stop document
+mutation for the exhausted campaign, choose an in-scope correction/scope reduction/primitive
+replacement autonomously, then invoke round 1 again. If the document or review-protocol SHA
+changed, the guard automatically rolls over without user acknowledgement. Every revision campaign
+shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
+result; never pause for an acknowledgement and never reset history through a fresh state directory.
+
+For every finding, `dup_flag` is schema-bounded to `new`, `duplicate`, `regression`,
+`readiness-gap`, or `scope-expansion`. After round 2, freeze committed scope. Missing evidence
+explicitly scheduled for later is a readiness gap; an optional stronger guarantee or new subsystem
+is scope expansion. Neither may be HIGH-or-worse. If existing committed behavior is unsafe or
+unimplementable, classify it as `new` or `regression` instead. If readiness gaps and scope
+expansions are the only findings, use `GO-WITH-REVISE`, not `REVISE` or `REJECT`.
 
 ## Schema grounding
 
@@ -143,7 +189,13 @@ Env: `MAGI_XFAMILY_CLAUDE_MODEL` (legacy fallback `MAGI_XFAMILY_MODEL`, default
 `MAGI_XFAMILY_TIMEOUT_S` (default `900`).
 
 Adapter exit codes: `0` = round complete · `2` = fail-closed, no usable result · `3` = lock held
-(recursion, or a concurrent review of the same doc).
+(recursion, or a concurrent review of the same doc) · `4` = autonomous campaign budget exhausted,
+autonomous pivot or definitive blocked result required · `64` = invalid invocation or
+ceiling arguments.
+
+Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 16 but cannot extend it.
+There is no acknowledgement or authorization path that extends the fuse.
+`MAGI_FANOUT_TIMEOUT_S` may tighten the fan-out deadline from its default/maximum of 900 seconds.
 
 ## Fail-closed
 

@@ -1,0 +1,16 @@
+{
+  "description": "harness-magi-codex — acknowledgement-free bounded campaign continuation",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/magi_autorun_hook.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

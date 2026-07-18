@@ -3,9 +3,36 @@
   "properties": {
     "reviewer": {"type": "string"},
     "round": {"type": "integer"},
+    "artifact_id": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
+    "artifact_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "verdict": {"type": "string", "enum": ["GO", "GO-WITH-REVISE", "REVISE", "REJECT"]},
     "schema_grounding_verdict": {"type": "string", "enum": ["PASS", "PARTIAL", "FAIL"]},
     "verify_commands_executed": {"type": "array", "items": {"type": "string"}},
+    "source_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        },
+        "required": ["path", "sha256"],
+        "additionalProperties": false
+      }
+    },
+    "dispositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_ref": {"type": "string"},
+          "disposition": {"type": "string", "enum": ["carried", "duplicate", "resolved", "deferred"]},
+          "synthesis_finding_id": {"type": "string"}
+        },
+        "required": ["source_ref", "disposition", "synthesis_finding_id"],
+        "additionalProperties": false
+      }
+    },
     "findings": {
       "type": "array",
       "items": {
@@ -18,7 +45,10 @@
           "rationale": {"type": "string"},
           "required_fix": {"type": "string"},
           "confidence": {"type": "string", "enum": ["high", "med", "low"]},
-          "dup_flag": {"type": "string"},
+          "dup_flag": {
+            "type": "string",
+            "enum": ["new", "duplicate", "regression", "readiness-gap", "scope-expansion"]
+          },
           "missed_angle": {"type": "string"}
         },
         "required": ["finding_id", "severity", "title", "location", "rationale", "required_fix", "confidence", "dup_flag", "missed_angle"],
@@ -26,6 +56,6 @@
       }
     }
   },
-  "required": ["reviewer", "round", "verdict", "schema_grounding_verdict", "verify_commands_executed", "findings"],
+  "required": ["reviewer", "round", "artifact_id", "artifact_sha", "verdict", "schema_grounding_verdict", "verify_commands_executed", "source_artifacts", "dispositions", "findings"],
   "additionalProperties": false
 }

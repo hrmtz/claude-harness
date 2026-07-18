@@ -10,11 +10,10 @@
 #
 # Usage (source, do not exec):
 #   source magi_lock.sh
-#   magi_lock_acquire "$DOC_CONTROL_DIR/.xfamily.${DOC_LOCK_ID}.lock" || exit 3
+#   magi_lock_acquire "$DOC_CONTROL_DIR/.review.${DOC_LOCK_ID}.lock" || exit 3
 #
-# Known hole (documented, not fixed here): a child process inherits fd 9 and could
-# flock it. The real rail is that the reviewer's allowlist omits Bash(codex:*) /
-# Bash(claude:*). See §4.4 and tests/test_inv7_lock.sh.
+# Callers that spawn provider descendants must explicitly close MAGI_LOCK_FD in those descendants;
+# otherwise a killed parent cannot release the document lock until every descendant exits.
 
 MAGI_LOCK_FD=9
 

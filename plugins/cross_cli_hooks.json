@@ -4,6 +4,7 @@
     "note": "Codex consumes the portable subset. String entries must resolve uniquely in the owning hooks.json; object entries select an explicit event when the same command is registered more than once. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
     "hooks": [
       "harness-core/hooks/stall_autocontinue.sh",
+      "harness-magi-codex/hooks/magi_autorun_hook.sh",
       {
         "path": "harness-core/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
         "event": "Stop"

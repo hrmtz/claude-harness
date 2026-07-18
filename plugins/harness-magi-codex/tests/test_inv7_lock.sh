@@ -7,8 +7,10 @@
 #
 # The adapter locks a realpath(doc)-digest under <doc-dir>/.dual-magi, independent of out-prefix.
 set -uo pipefail
+export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily_claude.sh"
+GUARD="$HERE/../scripts/magi_campaign_guard.py"
 source "$HERE/../scripts/magi_lock.sh"
 
 TMP="$(mktemp -d)"
@@ -74,16 +76,39 @@ out=$(timeout 10 bash -c '
 STATE="$TMP/state"; mkdir -p "$STATE"
 DOC="$TMP/design.md"; printf '%s\n' 'a design' > "$DOC"
 DOC2="$TMP/design-two.md"; printf '%s\n' 'another design' > "$DOC2"
+seed_xfamily() {
+    local doc="$1" state="$2" control id sha prior source source_sha claim_line claim_id
+    mkdir -p "$state"
+    control="$(dirname "$(realpath "$doc")")/.dual-magi"
+    id="$(printf '%s' "$(realpath "$doc")" | sha256sum | cut -c1-16)"
+    if [ -f "$control/CAMPAIGN.$id.json" ]; then
+        python3 "$GUARD" new-campaign "$doc" --operator test --reason 'independent lock fixture' \
+            >/dev/null || return 1
+    fi
+    claim_line="$(python3 "$GUARD" claim "$doc" 1 fanout "$state")" || return 1
+    claim_id="${claim_line##*CLAIM_ID=}"
+    python3 "$GUARD" finish "$doc" "$claim_id" success >/dev/null || return 1
+    sha="$(sha256sum "$doc" | cut -d' ' -f1)"
+    source="$state/round_1_source.json"
+    printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+        "$id" "$sha" > "$source"
+    source_sha="$(sha256sum "$source" | cut -d' ' -f1)"
+    prior="$state/round_1_codex.json"
+    printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+        "$id" "$sha" "$(basename "$source")" "$source_sha" > "$prior"
+    printf '%s\n' "$prior"
+}
 doc_lock() {
     local real lock_id
     real="$(realpath "$1")"; lock_id="$(printf '%s' "$real" | sha256sum | cut -c1-16)"
-    printf '%s/.dual-magi/.xfamily.%s.lock\n' "$(dirname "$real")" "$lock_id"
+    printf '%s/.dual-magi/.review.%s.lock\n' "$(dirname "$real")" "$lock_id"
 }
 DOC_LOCK="$(doc_lock "$DOC")"
 mkdir -p "$(dirname "$DOC_LOCK")"
+PRIOR="$(seed_xfamily "$DOC" "$STATE")" || exit 1
 h=$(hold "$DOC_LOCK" 10); sleep 0.7
 log="$TMP/adapter.log"
-MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 1 - "$STATE/out" \
+MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/out" \
     >"$log" 2>&1 </dev/null
 rc=$?
 release "$h"
@@ -94,16 +119,18 @@ grep -q "lock held" "$log" && ok "adapter reported the lock, did not invoke the 
                          || ok "no findings written under a held lock"
 
 # 6. Same doc + a different out-prefix still shares the document lock.
+OTHER_STATE="$TMP/other-campaign"; PRIOR="$(seed_xfamily "$DOC" "$OTHER_STATE")" || exit 1
 h=$(hold "$DOC_LOCK" 10); sleep 0.7
-MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 1 - "$TMP/other-campaign/out" \
+MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 2 "$PRIOR" "$OTHER_STATE/out" \
     >/dev/null 2>&1 </dev/null
 [ $? -eq 3 ] && ok "same doc in another campaign is mutually excluded" \
               || bad "same doc escaped the lock via another out-prefix"
 
 # 7. Different docs may proceed even when they share one output directory.
+PRIOR2="$(seed_xfamily "$DOC2" "$STATE")" || exit 1
 rc_other=0
 env -i PATH=/usr/bin:/bin HOME="$HOME" timeout 15 \
-    "$ADAPTER" "$DOC2" 1 - "$STATE/other-doc" >/dev/null 2>&1 </dev/null || rc_other=$?
+    "$ADAPTER" "$DOC2" 2 "$PRIOR2" "$STATE/other-doc" >/dev/null 2>&1 </dev/null || rc_other=$?
 release "$h"
 [ "$rc_other" -eq 2 ] && ok "different doc proceeds past its independent lock" \
                        || bad "different doc collided with lock (rc=$rc_other)"
@@ -112,9 +139,10 @@ release "$h"
 #    The `claude not found` check sits AFTER the lock acquire, so reaching exit 2 with a
 #    stripped PATH proves the lock was taken, not that the guard aborted. (Arg validation
 #    happens BEFORE the lock, so a missing-doc exit 64 would prove nothing.)
+PRIOR="$(seed_xfamily "$DOC" "$STATE")" || exit 1
 rc2=0
 env -i PATH=/usr/bin:/bin HOME="$HOME" timeout 15 \
-    "$ADAPTER" "$DOC" 1 - "$STATE/out2" >/dev/null 2>&1 </dev/null || rc2=$?
+    "$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/out2" >/dev/null 2>&1 </dev/null || rc2=$?
 if [ "$rc2" -eq 2 ]; then
     ok "unlocked adapter acquires the lock and reaches the prereq check (exit 2)"
 elif [ "$rc2" -eq 3 ]; then
@@ -126,13 +154,14 @@ fi
 # 9. A provider failure after prompt creation must leave TMPDIR empty via the single EXIT trap.
 PROMPT_TMP="$TMP/prompt-tmp"; FAIL_BIN="$TMP/fail-bin"
 mkdir -p "$PROMPT_TMP" "$FAIL_BIN" "$TMP/cleanup-state"
+PRIOR="$(seed_xfamily "$DOC" "$TMP/cleanup-state")" || exit 1
 cat > "$FAIL_BIN/claude" <<'EOF'
 #!/usr/bin/env bash
 exit 1
 EOF
 chmod +x "$FAIL_BIN/claude"
 TMPDIR="$PROMPT_TMP" PATH="$FAIL_BIN:/usr/bin:/bin" MAGI_XFAMILY_TIMEOUT_S=5 \
-    timeout 15 "$ADAPTER" "$DOC" 2 - "$TMP/cleanup-state/out" >/dev/null 2>&1 </dev/null
+    timeout 15 "$ADAPTER" "$DOC" 2 "$PRIOR" "$TMP/cleanup-state/out" >/dev/null 2>&1 </dev/null
 cleanup_rc=$?
 if [ "$cleanup_rc" -eq 2 ] && ! find "$PROMPT_TMP" -mindepth 1 -print -quit | grep -q .; then
     ok "provider failure cleans prompt/raw temp files through EXIT trap"

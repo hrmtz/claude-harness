@@ -12,9 +12,11 @@
 #
 # Uses a stub `claude` on PATH -- no network, no cost.
 set -uo pipefail
+export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily_claude.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
+GUARD="$HERE/../scripts/magi_campaign_guard.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
@@ -22,8 +24,17 @@ ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
 DOC="$TMP/design.md"; printf 'a design document\n' > "$DOC"
+DOC_SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
+DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -c1-16)"
 MARKER_DIR="$TMP/.dual-magi"
 STATE="$TMP/state"; mkdir -p "$STATE"
+SOURCE="$STATE/round_1_source.json"
+printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" > "$SOURCE"
+SOURCE_SHA="$(sha256sum "$SOURCE" | cut -d' ' -f1)"
+PRIOR="$STATE/round_1_codex.json"
+printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" "$(basename "$SOURCE")" "$SOURCE_SHA" > "$PRIOR"
 REAL_SID="11111111-2222-4333-8444-777777777777"
 export HOME="$TMP/home"
 mkdir -p "$HOME/.claude/projects/test"
@@ -39,8 +50,10 @@ n=\$(cat "$TMP/n" 2>/dev/null || echo 0); echo \$((n+1)) > "$TMP/n"
 if [ "\$n" = "0" ]; then
   python3 -c '
 import json
-print(json.dumps({"structured_output":{"reviewer":"CLAUDE-XFAMILY","round":2,"verdict":"GO",
- "schema_grounding_verdict":"PASS","verify_commands_executed":["rg -n foo"],"findings":[]},
+print(json.dumps({"structured_output":{"reviewer":"CLAUDE-XFAMILY","round":2,
+ "artifact_id":"$DOC_ID","artifact_sha":"$DOC_SHA","verdict":"GO",
+ "schema_grounding_verdict":"PASS","verify_commands_executed":["rg -n foo"],
+ "source_artifacts":[],"dispositions":[],"findings":[]},
  "session_id":"'"$REAL_SID"'","modelUsage":{"claude-fable-5":{}},"num_turns":4,
  "permission_denials":[],"result":"ok"}))'
 else
@@ -49,9 +62,16 @@ fi
 STUBEOF
 chmod +x "$STUB/claude"
 export PATH="$STUB:$PATH"
+seed_campaign() {
+    local claim_line claim_id
+    claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || return 1
+    claim_id="${claim_line##*CLAIM_ID=}"
+    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null
+}
+seed_campaign || exit 1
 
 # --- run 1: succeeds ---
-"$ADAPTER" "$DOC" 2 - "$STATE/round_2_xfamily" >/dev/null 2>&1
+"$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >/dev/null 2>&1
 rc1=$?
 [ $rc1 -eq 0 ] && [ -s "$STATE/round_2_xfamily.json" ] \
     && ok "run 1 succeeded and wrote findings" || bad "run 1 rc=$rc1 (expected 0 with findings)"
@@ -61,7 +81,9 @@ rc1=$?
 rm -f "$MARKER_DIR"/PLATEAU.*
 
 # --- run 2: same doc, unparseable output ---
-"$ADAPTER" "$DOC" 2 - "$STATE/round_2_xfamily" >/dev/null 2>&1
+python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'independent failed-rerun fixture' >/dev/null || exit 1
+seed_campaign || exit 1
+"$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >/dev/null 2>&1
 rc2=$?
 [ $rc2 -eq 2 ] && ok "run 2 fails closed (exit 2)" || bad "run 2 rc=$rc2 (expected 2)"
 

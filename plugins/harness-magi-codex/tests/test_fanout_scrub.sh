@@ -15,9 +15,14 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$out" ] || exit 64
 if [ -n "${STUB_INVALID:-}" ]; then printf '{}\n' > "$out"; exit 0; fi
+if [ -n "${STUB_HANG:-}" ]; then sleep 60; exit 1; fi
+prompt="$(cat)"
+artifact_id="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT ID: //p' | head -n 1)"
+artifact_sha="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT SHA256: //p' | head -n 1)"
 marker="Bearer "
 marker="${marker}AAAAAAAAAAAA"
-printf '{"reviewer":"STUB","round":1,"verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"findings":[]}\n' "$marker" > "$out"
+printf '{"reviewer":"STUB","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$artifact_id" "$artifact_sha" "$marker" > "$out"
 printf '%s\n' "$marker"
 STUB
 chmod +x "$TMP/bin/codex"
@@ -54,12 +59,28 @@ PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
               || bad "existing sibling artifacts did not return exit 5"
 
 mkdir -p "$TMP/invalid"
-STUB_INVALID=1 PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 2 "$TMP/invalid" >/dev/null 2>&1
-if [ $? -ne 0 ] && ! find "$TMP/invalid" -name 'round_2_*.json' -type f | grep -q .; then
+INVALID_DOC="$TMP/invalid-design.md"; printf '%s\n' 'another design' > "$INVALID_DOC"
+STUB_INVALID=1 PATH="$TMP/bin:$PATH" "$FANOUT" "$INVALID_DOC" 1 "$TMP/invalid" >/dev/null 2>&1
+if [ $? -ne 0 ] && ! find "$TMP/invalid" -name 'round_1_*.json' -type f | grep -q .; then
   ok "durable JSON is schema-validated and invalid partials are cleared"
 else
   bad "schema-invalid durable output passed fan-out"
 fi
+
+mkdir -p "$TMP/hang"
+HANG_DOC="$TMP/hang-design.md"; printf '%s\n' 'a hanging design' > "$HANG_DOC"
+started="$(date +%s)"
+STUB_HANG=1 MAGI_FANOUT_TIMEOUT_S=1 PATH="$TMP/bin:$PATH" \
+    "$FANOUT" "$HANG_DOC" 1 "$TMP/hang" >/dev/null 2>&1
+hang_rc=$?; elapsed=$(( $(date +%s) - started ))
+if [ "$hang_rc" -eq 1 ] && [ "$elapsed" -lt 10 ]; then
+  ok "hung providers hit the bounded fan-out deadline"
+else
+  bad "hung fan-out did not terminate promptly (rc=$hang_rc elapsed=${elapsed}s)"
+fi
+PATH="$TMP/bin:$PATH" "$FANOUT" "$HANG_DOC" 1 "$TMP/hang" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "timeout releases the document lock and leaves a retryable failed claim" \
+              || bad "fan-out could not recover after timeout"
 
 # Optional real-CLI interface probe: codex -o must support a FIFO sink. The stub above keeps the
 # regression deterministic; this arm measures the external CLI assumption when explicitly enabled.

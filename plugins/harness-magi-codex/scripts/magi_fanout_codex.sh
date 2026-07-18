@@ -17,6 +17,7 @@
 # Exit codes:
 #   0  all reviewers produced schema-valid output
 #   1  a reviewer failed or produced nothing
+#   4  autonomous campaign round budget exhausted
 #   5  a same-round sibling output already exists (re-run would contaminate)
 #  64  usage
 set -euo pipefail
@@ -26,16 +27,23 @@ PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
+GUARD="$SELF_DIR/magi_campaign_guard.py"
+VALIDATOR="$SELF_DIR/magi_validate_findings.py"
 CANON="$REPO_ROOT/plugins/harness-magi/skills"
 
-usage() { echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt]" >&2; exit 64; }
+usage() {
+    echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt] [--prior <json|->]" >&2
+    exit 64
+}
 [ $# -ge 3 ] || usage
 
 DOC_PATH="$1"; ROUND="$2"; OUT_DIR="$3"; shift 3
 PERSONA_SET="magi"
+PRIOR="-"
 while [ $# -gt 0 ]; do
     case "$1" in
         --persona-set) [ $# -ge 2 ] || usage; PERSONA_SET="$2"; shift 2 ;;
+        --prior) [ $# -ge 2 ] || usage; PRIOR="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -49,14 +57,53 @@ esac
 TEMPLATE_DIR="$CANON/$PERSONA_SET/templates"
 [ -d "$TEMPLATE_DIR" ] || { echo "fanout: canonical templates not found: $TEMPLATE_DIR" >&2; exit 64; }
 [ -f "$DOC_PATH" ] || { echo "fanout: doc not found: $DOC_PATH" >&2; exit 64; }
-command -v codex >/dev/null 2>&1 || { echo "fanout: codex CLI not found" >&2; exit 1; }
+case "$ROUND" in ''|*[!0-9]*) echo "fanout: round must be a positive integer: $ROUND" >&2; exit 64 ;; esac
+[ "$ROUND" -ge 1 ] || { echo "fanout: round must be at least 1" >&2; exit 64; }
+if [ "$ROUND" -gt 1 ] && [ "$PRIOR" = "-" ]; then
+    echo "fanout: round $ROUND requires --prior <prior-synthesis.json>" >&2
+    exit 64
+fi
+if [ "$PRIOR" != "-" ] && [ ! -f "$PRIOR" ]; then
+    echo "fanout: prior findings not found: $PRIOR" >&2
+    exit 64
+fi
 mkdir -p "$OUT_DIR"
+if [ "$PRIOR" != "-" ]; then
+    python3 "$VALIDATOR" "$PRIOR" "$SCHEMA_FILE" --same-doc "$DOC_PATH" \
+        --prior-for-round "$ROUND" --state-dir "$OUT_DIR" || {
+        echo "fanout: prior synthesis failed identity/round/schema validation" >&2
+        exit 64
+    }
+fi
+
+command -v codex >/dev/null 2>&1 || { echo "fanout: codex CLI not found" >&2; exit 1; }
+command -v timeout >/dev/null 2>&1 || { echo "fanout: timeout utility not found" >&2; exit 1; }
+FANOUT_TIMEOUT_S="${MAGI_FANOUT_TIMEOUT_S:-900}"
+case "$FANOUT_TIMEOUT_S" in
+    ''|*[!0-9]*) echo "fanout: MAGI_FANOUT_TIMEOUT_S must be an integer" >&2; exit 64 ;;
+esac
+[ "$FANOUT_TIMEOUT_S" -ge 1 ] && [ "$FANOUT_TIMEOUT_S" -le 900 ] || {
+    echo "fanout: MAGI_FANOUT_TIMEOUT_S must tighten the default into 1..900" >&2; exit 64; }
 
 ARTIFACT_SHA="$(sha256sum "$DOC_PATH" | cut -d' ' -f1)"
+ARTIFACT_ID="$(printf '%s' "$(realpath "$DOC_PATH")" | sha256sum | cut -c1-16)"
+DOC_CONTROL_DIR="$(dirname "$(realpath "$DOC_PATH")")/.dual-magi"
+mkdir -p "$DOC_CONTROL_DIR"
 
 # Prompts hold the FULL document. Track them so no copy is left in TMPDIR on any exit path.
 PROMPTS=()
-_cleanup() { [ ${#PROMPTS[@]} -gt 0 ] && rm -f "${PROMPTS[@]}"; return 0; }
+CLAIM_ID=""
+CLAIM_FINISHED=0
+_cleanup() {
+    local pid
+    for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
+    for pid in "${PIDS[@]:-}"; do wait "$pid" 2>/dev/null || true; done
+    [ ${#PROMPTS[@]} -gt 0 ] && rm -f "${PROMPTS[@]}"
+    if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
+        python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+    fi
+    return 0
+}
 trap _cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -67,7 +114,7 @@ trap 'exit 143' TERM
 # purpose is contamination control. Take the lock first.
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
-magi_lock_acquire "$OUT_DIR/.fanout.round_${ROUND}.lock" || {
+magi_lock_acquire "$DOC_CONTROL_DIR/.review.${ARTIFACT_ID}.lock" || {
     echo "fanout: another fan-out is already running for round $ROUND in $OUT_DIR" >&2
     exit 5
 }
@@ -87,6 +134,13 @@ for p in "${PERSONAS[@]}"; do
     [ -f "$TEMPLATE_DIR/${p}_prompt.md" ] || {
         echo "fanout: template missing: $TEMPLATE_DIR/${p}_prompt.md" >&2; exit 64; }
 done
+
+# Claim only after validation, capability checks, and the execution lock, but before any provider
+# process starts. A crash after this boundary is conservatively charged; preflight refusal is not.
+claim_line="$(python3 "$GUARD" claim "$DOC_PATH" "$ROUND" fanout "$OUT_DIR")" || exit $?
+echo "$claim_line"
+CLAIM_ID="${claim_line##*CLAIM_ID=}"
+[ -n "$CLAIM_ID" ] || { echo "fanout: campaign guard returned no claim id" >&2; exit 1; }
 
 PIDS=()
 for p in "${PERSONAS[@]}"; do
@@ -112,16 +166,42 @@ for p in "${PERSONAS[@]}"; do
         printf 'preferred, actual, missing family/phase/reason, and degraded_until. Do not\n'
         printf 'accept a plateau or irreversible implementation path that silently skips the\n'
         printf 'missing family.\n\n'
-        printf 'ROUND: %s\nTARGET DOC: %s\nARTIFACT SHA256: %s\n\n' "$ROUND" "$DOC_PATH" "$ARTIFACT_SHA"
+        printf 'CONVERGENCE CONTRACT (mandatory): dup_flag must be exactly one of new,\n'
+        printf 'duplicate, regression, readiness-gap, or scope-expansion. After round 2, freeze\n'
+        printf 'the committed scope: prioritize unresolved prior blockers, regressions caused by\n'
+        printf 'their fixes, and newly discovered unsafe or unimplementable behavior inside that\n'
+        printf 'scope. Missing evidence explicitly scheduled for a later phase is readiness-gap.\n'
+        printf 'An optional stronger guarantee or new subsystem is scope-expansion. Neither may\n'
+        printf 'be REJECT, CRITICAL, or HIGH. If committed behavior itself is unsafe, classify it\n'
+        printf 'new or regression instead. Readiness-gap/scope-expansion alone require\n'
+        printf 'GO-WITH-REVISE, not REVISE or REJECT. Do not perpetuate review by demanding\n'
+        printf 'optional scope.\n\n'
+        printf 'ROUND: %s\nTARGET DOC: %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n\n' \
+            "$ROUND" "$DOC_PATH" "$ARTIFACT_ID" "$ARTIFACT_SHA"
+        if [ "$PRIOR" != "-" ]; then
+            printf 'PRIOR SYNTHESIS (check resolution and classify relationships; do not repeat):\n---\n'
+            python3 "$SCRUB" < "$PRIOR"
+            printf '\n---\n\n'
+        fi
         printf 'DOCUMENT:\n---\n'
         cat "$DOC_PATH"
-        printf '\n---\n\nReturn ONLY a JSON object conforming to the output schema. reviewer="%s", round=%s.\n' "${p^^}" "$ROUND"
+        printf '\n---\n\nReturn ONLY a JSON object conforming to the output schema. reviewer="%s", round=%s, artifact_id="%s", artifact_sha="%s".\n' \
+            "${p^^}" "$ROUND" "$ARTIFACT_ID" "$ARTIFACT_SHA"
     } > "$prompt"
 
     # All three launch before any output is read (INV-3).
     # `|| s=$?` so a codex failure does not abort the subshell under the inherited `set -e`
     # (which would skip the rm), while still propagating the real status to `wait`.
-    ( s=0; scrub_rc=0
+    ( s=0; scrub_rc=0; codex_pid=""; raw_scrub_pid=""; log_scrub_pid=""
+      # The parent alone owns the document lock. Provider/scrubber descendants must not keep it
+      # alive if the parent is killed.
+      eval "exec ${MAGI_LOCK_FD}>&-"
+      child_cleanup() {
+          [ -n "$codex_pid" ] && kill -TERM "$codex_pid" 2>/dev/null || true
+          [ -n "$raw_scrub_pid" ] && kill -TERM "$raw_scrub_pid" 2>/dev/null || true
+          [ -n "$log_scrub_pid" ] && kill -TERM "$log_scrub_pid" 2>/dev/null || true
+      }
+      trap child_cleanup INT TERM EXIT
       raw_fifo="$OUT_DIR/.round_${ROUND}_${p}.raw.fifo"
       log_fifo="$OUT_DIR/.round_${ROUND}_${p}.log.fifo"
       safe_out="$(mktemp "$OUT_DIR/.round_${ROUND}_${p}.safe.XXXXXX")"
@@ -133,15 +213,19 @@ for p in "${PERSONAS[@]}"; do
       exec 7<>"$raw_fifo" 8<>"$log_fifo"
       ( exec 7>&- 8>&-; python3 "$SCRUB" < "$raw_fifo" > "$safe_out" ) & raw_scrub_pid=$!
       ( exec 7>&- 8>&-; python3 "$SCRUB" --text < "$log_fifo" > "$safe_log" ) & log_scrub_pid=$!
-      codex exec --skip-git-repo-check -s read-only --ephemeral \
+      timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
+        codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
         --output-schema "$SCHEMA_FILE" \
         -o "$raw_fifo" \
-        - < "$prompt" > "$log_fifo" 2>&1 || s=$?
+        - < "$prompt" > "$log_fifo" 2>&1 & codex_pid=$!
+      wait "$codex_pid" || s=$?
+      codex_pid=""
       exec 7>&- 8>&-
       wait "$raw_scrub_pid" || scrub_rc=1
       wait "$log_scrub_pid" || scrub_rc=1
       rm -f "$prompt" "$raw_fifo" "$log_fifo"
+      trap - INT TERM EXIT
       if [ "$s" -eq 0 ] && [ "$scrub_rc" -eq 0 ]; then
           mv "$safe_out" "$OUT_DIR/round_${ROUND}_${p}.json"
           mv "$safe_log" "$OUT_DIR/round_${ROUND}_${p}.log"
@@ -160,12 +244,7 @@ done
 
 for p in "${PERSONAS[@]}"; do
     out="$OUT_DIR/round_${ROUND}_${p}.json"
-    if [ ! -s "$out" ] || ! python3 - "$SCHEMA_FILE" "$out" <<'PY' 2>/dev/null
-import json, jsonschema, sys
-schema = json.load(open(sys.argv[1]))
-instance = json.load(open(sys.argv[2]))
-jsonschema.validate(instance=instance, schema=schema)
-PY
+    if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" --doc "$DOC_PATH" 2>/dev/null
     then
         echo "fanout: reviewer $p produced no schema-valid output" >&2
         rc=1
@@ -182,4 +261,6 @@ if [ $rc -ne 0 ]; then
     exit $rc
 fi
 
+python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
+CLAIM_FINISHED=1
 echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

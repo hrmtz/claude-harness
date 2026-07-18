@@ -24,7 +24,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.join(HERE, "..")
 ADAPTER = os.path.join(PLUGIN, "scripts", "magi_xfamily.sh")
+FANOUT = os.path.join(PLUGIN, "scripts", "magi_fanout_codex.sh")
 GATE = os.path.join(PLUGIN, "scripts", "magi_plateau_gate.sh")
+GUARD = os.path.join(PLUGIN, "scripts", "magi_campaign_guard.py")
 README = os.path.join(PLUGIN, "README.md")
 DESIGN = os.path.join(PLUGIN, "..", "..", "docs", "designs", "CODEX_MAGI_MIRROR.md")
 DUAL_SKILL = os.path.join(PLUGIN, "skills", "dual-magi-review", "SKILL.md")
@@ -61,8 +63,23 @@ def env_vars(src: str) -> set[str]:
     return names
 
 
+def guard_exit_codes(src: str) -> set[str]:
+    codes = set(re.findall(r"^\s*return (\d+)$", src, re.M))
+    meaningful = {code for code in codes if code != "0"}
+    if not meaningful:
+        raise RuntimeError(f"cannot parse campaign guard exit codes from {GUARD} — checker is blind")
+    return meaningful
+
+
+def guard_env_vars(src: str) -> set[str]:
+    names = set(re.findall(r'os\.environ\.get\(\s*"(MAGI_[A-Z_]+)"', src))
+    if not names:
+        raise RuntimeError(f"cannot parse campaign guard env vars from {GUARD} — checker is blind")
+    return names
+
+
 def main() -> int:
-    adapter, gate = read(ADAPTER), read(GATE)
+    adapter, fanout, gate, guard = read(ADAPTER), read(FANOUT), read(GATE), read(GUARD)
     skill_paths = (DUAL_SKILL, ULTRA_SKILL)
     if not all(os.path.isfile(path) for path in skill_paths):
         raise RuntimeError("cannot read every shipped SKILL.md — checker is blind")
@@ -74,6 +91,10 @@ def main() -> int:
         if not re.search(rf"\b{code}\s*=|\bexit(?:s)? {code}\b|`{code}`", docs):
             drift.append(f"adapter can `exit {code}` but no doc explains it")
 
+    for code in sorted(guard_exit_codes(guard)):
+        if not re.search(rf"\b{code}\s*=|\bexit(?:s)? {code}\b|`{code}`", docs):
+            drift.append(f"campaign guard can exit {code} but no doc explains it")
+
     for tag in sorted(gate_asserts(gate)):
         if tag not in docs:
             drift.append(f"plateau gate asserts {tag} but no doc mentions it")
@@ -84,7 +105,7 @@ def main() -> int:
     for tag in sorted(documented - implemented):
         drift.append(f"docs promise assert {tag} but the gate never checks it")
 
-    for var in sorted(env_vars(adapter)):
+    for var in sorted(env_vars(adapter) | env_vars(fanout) | guard_env_vars(guard)):
         if var not in docs:
             drift.append(f"adapter reads ${var} but no doc mentions it")
 
@@ -95,7 +116,7 @@ def main() -> int:
     if drift:
         print("DRIFT:", *drift, sep="\n  - ", file=sys.stderr)
         return 1
-    print(f"PASS: exit codes, {len(implemented)} G-asserts, and env vars all documented")
+    print(f"PASS: adapter/guard exit codes, {len(implemented)} G-asserts, and env vars documented")
     return 0
 
 

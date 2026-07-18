@@ -32,12 +32,16 @@ same-family reviewers read the same text and found none of them.
 ```
 schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
 scripts/
+  magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
   magi_xfamily.sh             provider-selectable adapter -> headless Claude or Grok
   magi_xfamily_claude.sh      backward-compatible Claude wrapper
+  magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
+  magi_validate_findings.py   validates cross-field convergence rules after constrained output
   magi_plateau_gate.sh        the ONLY thing that may write a plateau marker
   magi_lock.sh                flock(2) helper (recursion + concurrency guard)
   magi_scrub.py               redacts credential-shaped strings before anything hits disk
+hooks/magi_autorun_hook.sh    Stop hook; continues armed campaigns to plateau/blocked
 skills/{dual-magi-review,ultramagi}/SKILL.md
 tests/                        exit codes, G-asserts, lock semantics, read-only rail, doc-drift
 ```
@@ -61,17 +65,61 @@ the caller must explicitly choose Grok so provenance and routing remain auditabl
 ```bash
 D=docs/designs/MY_DESIGN.md; S=docs/designs/.dual-magi; mkdir -p "$S"
 
+python3 scripts/magi_autorun.py arm "$D"                              # once per campaign
 scripts/magi_fanout_codex.sh      "$D" 1 "$S" --persona-set magi     # same-family ×3
-scripts/magi_xfamily.sh --reviewer claude "$D" 2 - "$S/round_2_xfamily"
+# Synthesize the three outputs into $S/round_1_codex.json, then:
+scripts/magi_xfamily.sh --reviewer claude \
+  "$D" 2 "$S/round_1_codex.json" "$S/round_2_xfamily"
 scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family claude
 
 # Explicit fallback when Claude is unavailable:
-scripts/magi_xfamily.sh --reviewer grok "$D" 2 - "$S/round_2_xfamily"
+scripts/magi_xfamily.sh --reviewer grok \
+  "$D" 2 "$S/round_1_codex.json" "$S/round_2_xfamily"
 scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family grok
 ```
 
 Revise the doc with the findings and re-run. `--persona-set bug-hunt` swaps the personas to review
 an *implementation* instead of a design (ultramagi gate [4]).
+
+Every round after round 1 requires a schema-valid prior synthesis artifact from the same state
+directory, canonical document identity, and immediately preceding round. Every output carries
+`artifact_id` and `artifact_sha`. `dup_flag` is constrained to
+`new`, `duplicate`, `regression`, `readiness-gap`, or `scope-expansion`; the last two cannot be
+HIGH-or-worse.
+
+The synthesis must use `reviewer: SYNTHESIS`, list every preceding-round source filename and
+SHA-256 in `source_artifacts`, and disposition every `<source-file>#<finding_id>` as `carried`,
+`duplicate`, `resolved`, or `deferred`. This prevents a single reviewer output or incomplete
+subset from masquerading as the round synthesis.
+
+## Campaign guard
+
+The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3 and
+cross-family costs 1, permitting four pairs without retries.
+Both reviewer adapters append to a canonical document-scoped campaign ledger before launching a
+model. Retries consume budget; a fresh state directory or repeated round 1 cannot reset it. Exit `4`
+means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive
+change, then invoke round 1. A changed document or review-protocol SHA rolls into the next campaign
+automatically, without acknowledgement.
+
+`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the fixed global ceiling of 16; it cannot extend it.
+All revision campaigns share those same 16 weighted model launches. Changing state directory is not a reset. Global exhaustion produces a definitive blocked result,
+not an acknowledgement prompt.
+
+Arming binds the workflow to the current Codex thread. On its intact path, the bundled Stop hook keeps the turn chain
+moving without user acknowledgement until the exact-revision plateau marker exists or the
+controller records a definitive blocked state. Two continued turns with no durable document or
+ledger progress terminate blocked rather than loop. Hook input/registry/ledger parse or I/O errors
+fail open so the session may stop, while the independent campaign guard still bounds spend.
+
+Fan-out and cross-family calls have tightening-only deadlines via `MAGI_FANOUT_TIMEOUT_S` and
+`MAGI_XFAMILY_TIMEOUT_S` (default/max `900`).
+Timeout and signal cleanup release the canonical lock, close the claim as failed, and preserve one
+bounded retry. Exit `4` is reserved for the global fuse; state corruption exits `2`, and illegal
+phase transitions exit `64`.
+
+`new-campaign` is not a production escape hatch. It is disabled unless deterministic fixtures set
+`MAGI_TEST_ALLOW_NEW_CAMPAIGN=1`; even there, the canonical global fuse remains unchanged.
 
 ## The plateau gate
 
@@ -120,17 +168,22 @@ and invents its findings passes. That is the largest residual risk, and it is un
 ## Contract
 
 Adapter exit codes: `0` complete · `2` fail-closed (no usable result; no plateau) · `3` lock held
-(recursion or a concurrent review of the same doc).
+(recursion or a concurrent review of the same doc) · `4` autonomous campaign budget exhausted
+(autonomous pivot or definitive blocked result required; not plateau) · `64` invalid invocation or
+ceiling arguments.
 Fan-out exit `5` = a same-round sibling output already exists (re-running would contaminate).
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
 `claude-fable-5`) · `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`) ·
-`MAGI_XFAMILY_TIMEOUT_S` (default `900`).
+`MAGI_XFAMILY_TIMEOUT_S` (default `900`) · `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` (default `16`, tightening
+only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 
 ## Tests
 
 ```bash
 python3 tests/test_docs_match_scripts.py     # doc-vs-code contract (exit codes, G-asserts, env)
+python3 tests/test_campaign_guard.py          # global fuse, rollover, migration, prior/schema contracts
+python3 tests/test_autorun.py                 # no-ack Stop continuation, plateau, terminal block
 bash    tests/test_fanout_scrub.sh           # FIFO pre-write scrub + three-persona/sibling rail
 bash    tests/test_inv7_lock.sh              # flock: both sides, concurrency, SIGKILL, recursion
 bash    tests/test_plateau_gate.sh           # G1..G9 each block; a valid round passes

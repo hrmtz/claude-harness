@@ -9,9 +9,11 @@
 # It stubs the `claude` CLI, so it never spends tokens. The live counterpart that measures the
 # rail's actual effect (a Write returns "not enabled in this context") is test_inv6_readonly.sh.
 set -uo pipefail
+export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
+GUARD="$HERE/../scripts/magi_campaign_guard.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
@@ -19,8 +21,17 @@ ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
 DOC="$TMP/design.md"; printf 'a grounded design\n' > "$DOC"
+DOC_SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
+DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -c1-16)"
 MARKER_DIR="$TMP/.dual-magi"
 STATE="$TMP/state"; mkdir -p "$STATE" "$TMP/bin" "$TMP/home"
+SOURCE="$STATE/round_1_source.json"
+printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" > "$SOURCE"
+SOURCE_SHA="$(sha256sum "$SOURCE" | cut -d' ' -f1)"
+PRIOR="$STATE/round_1_codex.json"
+printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" "$(basename "$SOURCE")" "$SOURCE_SHA" > "$PRIOR"
 SID="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 cat > "$TMP/bin/claude" <<STUB
@@ -37,9 +48,10 @@ cat > "\$PROJ/$SID.jsonl" <<JSONL
 JSONL
 python3 - <<'PY'
 import json
-finding = {"reviewer":"CLAUDE-XFAMILY","round":8,"verdict":"GO",
+finding = {"reviewer":"CLAUDE-XFAMILY","round":2,"artifact_id":"$DOC_ID",
+ "artifact_sha":"$DOC_SHA","verdict":"GO",
  "schema_grounding_verdict":"PASS","verify_commands_executed":["read_file design.md"],
- "findings":[]}
+ "source_artifacts":[],"dispositions":[],"findings":[]}
 env = {"structured_output":finding,"result":json.dumps(finding),
  "session_id":"$SID","modelUsage":{"claude-fable-5":{"inputTokens":10}},
  "num_turns":2,"permission_denials":[]}
@@ -48,14 +60,25 @@ PY
 STUB
 chmod +x "$TMP/bin/claude"
 
+seed_campaign() {
+    local claim_line claim_id
+    claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || return 1
+    claim_id="${claim_line##*CLAIM_ID=}"
+    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null
+}
+
+seed_campaign || exit 1
+
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" "$ADAPTER" --reviewer claude \
-    "$DOC" 8 - "$STATE/round_8_xfamily" >/dev/null 2>&1
+    "$DOC" 2 "$PRIOR" "$STATE/round_8_xfamily" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "Claude adapter completes" || bad "Claude adapter rc=$rc"
 
 # The default reviewer route must be Claude even with no --reviewer flag.
+python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'independent default-route fixture' >/dev/null || exit 1
+seed_campaign || exit 1
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" "$ADAPTER" \
-    "$DOC" 8 - "$STATE/round_8_default" >/dev/null 2>&1
+    "$DOC" 2 "$PRIOR" "$STATE/round_8_default" >/dev/null 2>&1
 [ $? -eq 0 ] && [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["reviewer_family"])' "$STATE/round_8_default.meta.json" 2>/dev/null)" = claude ] \
     && ok "default (no --reviewer) routes to Claude" || bad "default route is not Claude"
 
@@ -92,10 +115,12 @@ PY
 
 # End-to-end silent-downgrade: request opus, but the CLI (stub) runs fable. The adapter records
 # requested_model=opus while the transcript shows fable; the gate must deny — no hand-edited meta.
-DG="$STATE/round_9_downgrade"
+python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'independent downgrade fixture' >/dev/null || exit 1
+seed_campaign || exit 1
+DG="$STATE/round_8_downgrade"
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" MAGI_XFAMILY_CLAUDE_MODEL=claude-opus-4-8 \
     STUB_TRANSCRIPT_MODEL=claude-fable-5 "$ADAPTER" --reviewer claude \
-    "$DOC" 9 - "$DG" >/dev/null 2>&1
+    "$DOC" 2 "$PRIOR" "$DG" >/dev/null 2>&1
 dg_req="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("requested_model"))' "$DG.meta.json" 2>/dev/null)"
 HOME="$TMP/home" "$GATE" "$DOC" "$DG" --orchestrator-family codex --reviewer-family claude >/dev/null 2>&1
 gate_rc=$?

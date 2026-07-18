@@ -4,6 +4,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
+GUARD="$HERE/../scripts/magi_campaign_guard.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
@@ -11,8 +12,17 @@ ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
 DOC="$TMP/design.md"; printf 'a grounded design\n' > "$DOC"
+DOC_SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
+DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -c1-16)"
 MARKER_DIR="$TMP/.dual-magi"
 STATE="$TMP/state"; mkdir -p "$STATE" "$TMP/bin" "$TMP/home"
+SOURCE="$STATE/round_1_source.json"
+printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" > "$SOURCE"
+SOURCE_SHA="$(sha256sum "$SOURCE" | cut -d' ' -f1)"
+PRIOR="$STATE/round_1_codex.json"
+printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+  "$DOC_ID" "$DOC_SHA" "$(basename "$SOURCE")" "$SOURCE_SHA" > "$PRIOR"
 SID="11111111-2222-4333-8444-555555555555"
 
 cat > "$TMP/bin/grok" <<STUB
@@ -26,17 +36,21 @@ cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
 JSONL
 python3 - <<'PY'
 import json
-finding = {"reviewer":"GROK-XFAMILY","round":2,"verdict":"GO",
+finding = {"reviewer":"GROK-XFAMILY","round":2,"artifact_id":"$DOC_ID",
+ "artifact_sha":"$DOC_SHA","verdict":"GO",
  "schema_grounding_verdict":"PASS","verify_commands_executed":["rg -n invariant design.md"],
- "findings":[]}
+ "source_artifacts":[],"dispositions":[],"findings":[]}
 print(json.dumps({"structuredOutput":finding,"text":json.dumps(finding),
  "stopReason":"EndTurn","sessionId":"$SID"}))
 PY
 STUB
 chmod +x "$TMP/bin/grok"
+claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || exit 1
+claim_id="${claim_line##*CLAIM_ID=}"
+python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || exit 1
 
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" "$ADAPTER" --reviewer grok \
-    "$DOC" 2 - "$STATE/round_2_xfamily" >/dev/null 2>&1
+    "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "Grok adapter completes" || bad "Grok adapter rc=$rc"
 

@@ -7,13 +7,15 @@
 # Usage:
 #   magi_xfamily.sh [--reviewer claude|grok] <doc> <round> <prior-json|-> <out-prefix>
 #
-# Exit: 0 complete · 2 fail-closed · 3 lock held · 64 usage.
+# Exit: 0 complete · 2 fail-closed · 3 lock held · 4 campaign budget exhausted · 64 usage.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
+GUARD="$SELF_DIR/magi_campaign_guard.py"
+VALIDATOR="$SELF_DIR/magi_validate_findings.py"
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
 
@@ -38,18 +40,47 @@ DOC_PATH="$1"; ROUND="$2"; PRIOR="$3"; OUT_PREFIX="$4"
 [ -f "$DOC_PATH" ] || { echo "magi-xfamily: doc not found: $DOC_PATH" >&2; exit 64; }
 [ -f "$SCHEMA_FILE" ] || { echo "magi-xfamily: schema not found: $SCHEMA_FILE" >&2; exit 64; }
 case "$ROUND" in ''|*[!0-9]*) echo "magi-xfamily: round must be an integer: $ROUND" >&2; exit 64 ;; esac
+[ "$ROUND" -ge 1 ] || { echo "magi-xfamily: round must be at least 1" >&2; exit 64; }
+if [ "$ROUND" -gt 1 ] && [ "$PRIOR" = "-" ]; then
+    echo "magi-xfamily: round $ROUND requires a prior synthesis JSON" >&2
+    exit 64
+fi
+if [ "$PRIOR" != "-" ] && [ ! -f "$PRIOR" ]; then
+    echo "magi-xfamily: prior findings not found: $PRIOR" >&2
+    exit 64
+fi
 
 STATE_DIR="$(dirname "$OUT_PREFIX")"
 mkdir -p "$STATE_DIR"
+if [ "$PRIOR" != "-" ]; then
+    python3 "$VALIDATOR" "$PRIOR" "$SCHEMA_FILE" --same-doc "$DOC_PATH" \
+        --prior-for-round "$ROUND" --state-dir "$STATE_DIR" || {
+        echo "magi-xfamily: prior synthesis failed identity/round/schema validation" >&2
+        exit 64
+    }
+fi
+TIMEOUT_S="${MAGI_XFAMILY_TIMEOUT_S:-900}"
+case "$TIMEOUT_S" in
+    ''|*[!0-9]*) echo "magi-xfamily: MAGI_XFAMILY_TIMEOUT_S must be an integer" >&2; exit 64 ;;
+esac
+[ "$TIMEOUT_S" -ge 1 ] && [ "$TIMEOUT_S" -le 900 ] || {
+    echo "magi-xfamily: MAGI_XFAMILY_TIMEOUT_S must tighten the default into 1..900" >&2
+    exit 64
+}
 DOC_REAL="$(realpath "$DOC_PATH")"
 DOC_LOCK_ID="$(printf '%s' "$DOC_REAL" | sha256sum | cut -c1-16)"
 DOC_CONTROL_DIR="$(dirname "$DOC_REAL")/.dual-magi"
 
 PROMPT_FILE=""
 RAW_FILE=""
+CLAIM_ID=""
+CLAIM_FINISHED=0
 _cleanup() {
     [ -n "$PROMPT_FILE" ] && rm -f "$PROMPT_FILE"
     [ -n "$RAW_FILE" ] && rm -f "$RAW_FILE" "${RAW_FILE}.err"
+    if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
+        python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+    fi
     return 0
 }
 trap _cleanup EXIT
@@ -57,7 +88,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 lock_rc=0
-magi_lock_acquire "$DOC_CONTROL_DIR/.xfamily.${DOC_LOCK_ID}.lock" || lock_rc=$?
+magi_lock_acquire "$DOC_CONTROL_DIR/.review.${DOC_LOCK_ID}.lock" || lock_rc=$?
 case "$lock_rc" in
     0) ;;
     1) echo "magi-xfamily: lock held (recursion or concurrent review of this doc)" >&2; exit 3 ;;
@@ -68,8 +99,6 @@ case "$REVIEWER" in
     claude) MODEL="${MAGI_XFAMILY_CLAUDE_MODEL:-${MAGI_XFAMILY_MODEL:-claude-fable-5}}" ;;
     grok) MODEL="${MAGI_XFAMILY_GROK_MODEL:-grok-4.5}" ;;
 esac
-TIMEOUT_S="${MAGI_XFAMILY_TIMEOUT_S:-900}"
-
 FINDINGS_OUT="${OUT_PREFIX}.json"
 META_OUT="${OUT_PREFIX}.meta.json"
 FAILED_OUT="${OUT_PREFIX}.FAILED.json"
@@ -93,6 +122,13 @@ PY
 
 command -v "$REVIEWER" >/dev/null 2>&1 || _fail_closed "$REVIEWER CLI not found"
 
+# The execution lock and provider capability check precede accounting. From this point onward a
+# failed/abandoned provider attempt remains charged, including timeout or process crash.
+claim_line="$(python3 "$GUARD" claim "$DOC_PATH" "$ROUND" xfamily "$STATE_DIR")" || exit $?
+echo "$claim_line"
+CLAIM_ID="${claim_line##*CLAIM_ID=}"
+[ -n "$CLAIM_ID" ] || _fail_closed "campaign guard returned no claim id"
+
 PROMPT_FILE="$(mktemp)"
 {
     cat <<'HDR'
@@ -111,10 +147,21 @@ FAMILY ROUTING REVIEW: Claude is preferred for design intent. Grok is an explici
 Claude is unavailable. The adapter provenance records the actual provider; preferred provider and
 fallback reason remain an operator note. Do not accept silent same-family substitution.
 
+CONVERGENCE CONTRACT (mandatory): dup_flag must be exactly one of new, duplicate, regression,
+readiness-gap, or scope-expansion. After round 2, freeze the committed scope. Prioritize unresolved
+prior blockers, regressions introduced by their fixes, and newly discovered unsafe or
+unimplementable behavior inside the committed scope. Missing evidence explicitly scheduled for a
+later phase is readiness-gap. An optional stronger guarantee or new subsystem is scope-expansion.
+Neither readiness-gap nor scope-expansion may be REJECT, CRITICAL, or HIGH. If the committed
+behavior itself is unsafe, classify it new or regression instead. Do not perpetuate review by
+demanding optional scope. If those are the only findings, verdict must be GO-WITH-REVISE, not
+REVISE or REJECT.
+
 Return ONLY a JSON object conforming to the output schema.
 HDR
     printf '\nREVIEWER FAMILY: %s\nROUND: %s\n' "$REVIEWER" "$ROUND"
-    printf 'TARGET DOC (absolute path): %s\nARTIFACT SHA256: %s\n' "$DOC_PATH" "$ARTIFACT_SHA"
+    printf 'TARGET DOC (absolute path): %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n' \
+        "$DOC_PATH" "$DOC_LOCK_ID" "$ARTIFACT_SHA"
     if [ "$PRIOR" != "-" ] && [ -f "$PRIOR" ]; then
         printf '\nPRIOR FINDINGS (check resolution, do not merely repeat):\n'
         python3 "$SCRUB" < "$PRIOR"
@@ -273,4 +320,11 @@ then
     _fail_closed "unparseable reviewer output"
 fi
 
+if ! python3 "$VALIDATOR" "$FINDINGS_OUT" "$SCHEMA_FILE" --doc "$DOC_PATH"; then
+    rm -f "$FINDINGS_OUT" "$META_OUT"
+    _fail_closed "findings violate schema or convergence contract"
+fi
+
+python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
+CLAIM_FINISHED=1
 echo "magi-xfamily[$REVIEWER]: wrote $FINDINGS_OUT + $META_OUT"
