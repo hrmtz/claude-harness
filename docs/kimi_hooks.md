@@ -3,7 +3,7 @@
 ## Background
 
 Kimi Code CLI has no native hook API (no PreToolUse/PostToolUse, unlike
-Claude Code and Codex `plugin_hooks`). This document records how harness-kimi
+Claude Code and Codex stable `hooks`). This document records how harness-kimi
 achieves PreToolUse-equivalent **preventive** blocking anyway, and the setup.
 
 Resolved in [#52](https://github.com/hrmtz/claude-harness/issues/52)

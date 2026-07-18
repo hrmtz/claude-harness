@@ -7,18 +7,18 @@ and the setup procedure for wiring harness hooks into Codex.
 
 ---
 
-## How Codex hooks work (as of v0.130.0, 2026-05)
+## How current Codex hooks work
 
-### Two-layer architecture
+### Stable lifecycle feature
 
-| Layer | Feature flag | Status | What it controls |
-|---|---|---|---|
-| Hook execution engine | `hooks` | **stable / true** | Runtime that runs scripts, blocks tools, injects context |
-| Config-based hook loading | `plugin_hooks` | **under development / false** | Loading hooks from `config.toml` or plugin `hooks.json` |
+The canonical feature is `hooks`, currently reported as stable. The former
+`plugin_hooks` feature has been removed and must not be enabled or documented
+as a prerequisite. Matching hooks from all active config and plugin sources are
+merged, and matching command hooks for an event run concurrently.
 
-The execution engine is fully implemented. The config-loading layer is gated
-behind `plugin_hooks` which defaults to `false`. Once you enable it, hooks
-work exactly like Claude Code hooks.
+Codex discovers inline hook tables in `config.toml`, adjacent `hooks.json`
+files, and enabled plugins. User hooks load independently of project trust;
+project-local hooks require the project config layer to be trusted.
 
 ### Why this was confusing
 
@@ -31,8 +31,9 @@ code (`"$Command blocked by PreToolUse hook:"`, `HookStartedEvent`,
 
 ## Hook config format
 
-Hooks live in `~/.codex/config.toml`. The TOML format mirrors the plugin
-`hooks.json` format:
+Hooks can live inline in `~/.codex/config.toml`, in an adjacent
+`~/.codex/hooks.json`, or in an enabled plugin. This installer owns a marked
+inline TOML block:
 
 ```toml
 [[hooks.PreToolUse]]
@@ -58,13 +59,16 @@ type    = "command"
 command = "bash /path/to/hook.sh"
 timeout = 5
 
-[features]
-plugin_hooks = true         # required
 ```
 
-Supported events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
+Supported command-hook events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
 `PermissionRequest`, `PreCompact`, `PostCompact`, `SessionStart`,
-`SubagentStart`, `SubagentStop`, `Stop`.
+`SessionEnd`, `SubagentStart`, `SubagentStop`, and `Stop`.
+
+Tool matchers cover shell/unified exec as `Bash`, `apply_patch` (also aliased
+as `Edit` and `Write`), MCP tool names, and most local function tools.
+`spawn_agent` also matches `Agent`. Hosted tools such as `WebSearch` do not
+currently traverse the local tool-hook path.
 
 ---
 
@@ -137,7 +141,8 @@ bash ~/projects/claude-harness/install-codex-hooks.sh
 ```
 
 This:
-1. Runs `codex features enable plugin_hooks`
+1. Verifies the canonical stable `hooks` feature, enabling it only when present
+   but disabled; unsupported older versions fail with an upgrade message.
 2. Replaces only the marker-bounded hook block owned by claude-harness. Hooks
    from other installers and `[hooks.state]` trust records are preserved.
 3. Generates and appends the hook config from `plugins/cross_cli_hooks.json`
@@ -164,10 +169,9 @@ non-destructive repair path and preserves those unrelated hook sources.
 Codex requires explicit trust before running any hook script:
 
 1. Start any Codex session: `codex "hello"`
-2. Press **Tab** → Hooks panel opens
-3. Press **Enter** on a row that shows `Review > 0`
-4. Press **t** to trust the hook
-5. Press **Esc** → repeat for other events with pending review
+2. Run **`/hooks`** to open the hook browser.
+3. Review each new or changed definition and trust it.
+4. Repeat for event rows that still show pending review.
 
 Trust state is stored in `~/.codex/config.toml` under `[hooks.state]` as a
 SHA-256 hash of the hook config. If you re-run `install-codex-hooks.sh`
@@ -210,17 +214,17 @@ compatible. Notable Codex-specific points:
 | Aspect | Claude Code | Codex |
 |---|---|---|
 | Hook config location | `~/.claude/settings.json` | `~/.codex/config.toml` |
-| Feature gate | none (always on) | `plugin_hooks = true` required |
-| Trust step | none | one-time interactive `/hooks` → `t` per machine |
+| Feature gate | none (always on) | canonical `hooks` feature (stable) |
+| Trust step | none | review changed definitions in interactive `/hooks` |
 | Session JSONL path | `~/.claude/projects/<hash>/*.jsonl` | `~/.codex/sessions/<date>/rollout-*.jsonl` (in `transcript_path`) |
-| Plugin hook support | GA | `plugin_hooks` (under development) — config.toml route is the stable path |
+| Plugin hook support | GA | stable; default `hooks/hooks.json` or manifest `hooks` entry |
 
 ---
 
 ## Troubleshooting
 
-**`⚠ 1 hook needs review before it can run`** on startup  
-→ Complete the trust step: Tab → Enter → t
+**`⚠ 1 hook needs review before it can run`** on startup
+→ Open `/hooks`, review the pending definition, and trust it.
 
 **Hook fires but `active_jsonl` returns empty / wrong file**  
 → Ensure `HOOK_INPUT=$(cat); export HOOK_INPUT` is at the top of the hook
@@ -234,8 +238,6 @@ compatible. Notable Codex-specific points:
 → Expected. The trust hashes cover the config content; rewriting the block
   invalidates them. Re-trust via Tab → Enter → t.
 
-**`plugin_hooks` warning on every Codex startup**  
-→ Add to `~/.codex/config.toml`:
-```toml
-suppress_unstable_features_warning = true
-```
+**Installer reports canonical `hooks` as unknown or removed**
+→ Upgrade Codex. The installer fails closed instead of claiming that a removed
+feature was enabled.
