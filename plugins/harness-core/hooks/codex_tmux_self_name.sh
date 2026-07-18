@@ -30,14 +30,15 @@ command -v tmux >/dev/null 2>&1 || exit 0
 # every command with -t is necessary, but not sufficient when the target itself
 # is wrong.
 PANE_FORMATION_ID=$(tmux display-message -p -t "$PANE" '#{@formation_id}' 2>/dev/null || true)
-if [ -n "${FORMATION_SELF:-}" ] && [ -n "$PANE_FORMATION_ID" ] \
-    && [ "$PANE_FORMATION_ID" != "$FORMATION_SELF" ]; then
+if [ -n "${FORMATION_SELF:-}" ] && [ "$PANE_FORMATION_ID" != "$FORMATION_SELF" ]; then
     exit 0
 fi
 
 if ! CURRENT_WINDOW_NAME=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null); then
     exit 0
 fi
+CURRENT_PANE_TITLE=$(tmux display-message -p -t "$PANE" '#{pane_title}' 2>/dev/null || true)
+TARGET_WINDOW_ID=$(tmux display-message -p -t "$PANE" '#{window_id}' 2>/dev/null || true)
 
 # Never overwrite another chassis's established identity.  formation currently
 # creates every new window with a legacy "claude-$FORMATION_SELF" placeholder;
@@ -60,6 +61,10 @@ SENTINEL_DIR="$HOME/.local/state/tmux_self_name"
 mkdir -p "$SENTINEL_DIR"
 SENTINEL="$SENTINEL_DIR/${SESSION_ID}"
 find "$SENTINEL_DIR" -type f -mtime +30 -delete 2>/dev/null || true
+CLAIM_DIR="$SENTINEL_DIR/.claims"
+mkdir -p "$CLAIM_DIR"
+# A process killed between mkdir and sentinel write can leave an empty claim.
+find "$CLAIM_DIR" -mindepth 1 -maxdepth 1 -type d -mmin +5 -delete 2>/dev/null || true
 
 # Codename pool mirrors kimi-wrapper.sh generate_formation_id.
 generate_codename() {
@@ -77,7 +82,35 @@ generate_codename() {
 }
 
 name_in_use() {
-    tmux list-windows -a -F '#{window_name}' 2>/dev/null | grep -qx "$1"
+    local cand="$1" f n
+    tmux list-windows -a -F '#{window_id}|#{window_name}' 2>/dev/null \
+        | awk -F '|' -v target="$TARGET_WINDOW_ID" -v cand="$cand" \
+            '$1 != target && $2 == cand { found=1 } END { exit !found }' \
+        && return 0
+    tmux list-panes -a -F '#{pane_id}|#{pane_title}' 2>/dev/null \
+        | awk -F '|' -v target="$PANE" -v cand="$cand" \
+            '$1 != target && $2 == cand { found=1 } END { exit !found }' \
+        && return 0
+    for f in "$SENTINEL_DIR"/*; do
+        [ -f "$f" ] || continue
+        [ "$f" = "$SENTINEL" ] && continue
+        n=$(head -n1 "$f" 2>/dev/null)
+        [ "$n" = "$cand" ] && return 0
+    done
+    return 1
+}
+
+# Checking tmux/sentinels alone races when two hooks start together. mkdir is
+# the atomic winner election; the winner publishes its sentinel before release.
+CLAIM=""
+try_claim_name() {
+    local cand="$1"
+    name_in_use "$cand" && return 1
+    if mkdir "$CLAIM_DIR/$cand" 2>/dev/null; then
+        CLAIM="$CLAIM_DIR/$cand"
+        return 0
+    fi
+    return 1
 }
 
 RESUMED=0
@@ -90,20 +123,58 @@ if [ -f "$SENTINEL" ]; then
     esac
 fi
 
-# A codex identity already present on the verified target is authoritative when
-# no session sentinel exists.  Do not replace one codex worker's identity with
-# another merely because the hook received a new/missing session_id.
-if [ -z "$NAME" ] && [[ "$CURRENT_WINDOW_NAME" == codex-* ]]; then
-    NAME="$CURRENT_WINDOW_NAME"
-    RESUMED=1
+# Never replace an established codex window with a different sentinel identity.
+# Adopt it only when this pane already carries the same title; otherwise this is
+# likely a new split pane sharing another worker's window.
+if [[ "$CURRENT_WINDOW_NAME" == codex-* ]]; then
+    if [ "$CURRENT_PANE_TITLE" = "$CURRENT_WINDOW_NAME" ]; then
+        NAME="$CURRENT_WINDOW_NAME"
+        RESUMED=1
+    elif [ -z "$NAME" ] || [ "$NAME" != "$CURRENT_WINDOW_NAME" ]; then
+        exit 0
+    fi
+fi
+
+# A resumed sentinel must not reclaim a name that another live window, pane, or
+# session has acquired since this session last ran.
+if [ -n "$NAME" ] && name_in_use "$NAME"; then
+    exit 0
 fi
 
 if [ -z "$NAME" ]; then
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        NAME="codex-$(generate_codename)"
-        name_in_use "$NAME" || break
+    for _ in $(seq 1 40); do
+        CANDIDATE="codex-$(generate_codename)"
+        if try_claim_name "$CANDIDATE"; then
+            NAME="$CANDIDATE"
+            break
+        fi
     done
 fi
+
+# The base pool is finite. Use a numeric suffix rather than accepting the last
+# colliding candidate when it is saturated.
+if [ -z "$NAME" ]; then
+    for _ in $(seq 1 40); do
+        CANDIDATE="codex-$(generate_codename)-$(($(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))"
+        if try_claim_name "$CANDIDATE"; then
+            NAME="$CANDIDATE"
+            break
+        fi
+    done
+fi
+
+# Collision safety wins over naming: never mutate tmux with an unclaimed name.
+if [ -z "$NAME" ]; then
+    exit 0
+fi
+
+# Publish the claim before renaming. Concurrent hooks now see either the atomic
+# claim directory or this sentinel, so they cannot choose the same name.
+if ! printf '%s\n' "$NAME" > "$SENTINEL"; then
+    [ -n "$CLAIM" ] && rmdir "$CLAIM" 2>/dev/null || true
+    exit 0
+fi
+[ -n "$CLAIM" ] && rmdir "$CLAIM" 2>/dev/null || true
 
 # -t is mandatory: without it a detached tmux client's current window gets
 # renamed instead of ours (recurring incident, see tmux_self_name_core.sh).
@@ -116,8 +187,6 @@ if [ -z "$FORMATION_ID" ]; then
     FORMATION_ID="${NAME#codex-}"
     tmux set-option -p -t "$PANE" @formation_id "$FORMATION_ID" >/dev/null 2>&1 || true
 fi
-
-echo "$NAME" > "$SENTINEL"
 
 if [ "$RESUMED" -eq 1 ]; then
     CTX="## Identity anchor (tmux pane $PANE)
