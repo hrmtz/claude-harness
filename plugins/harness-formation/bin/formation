@@ -107,10 +107,9 @@ Parent (lead) commands:
                                           Create new window (default; isolates worker SessionStart
                                           rename-window from parent pane) or split current window (--split)
                                           Launches agent, injects briefing.
-                                          Sandbox default (2026-07-08): bypass for BOTH clis
-                                            (a normal-approval worker stalls at its first
-                                             permission prompt; codex also needs to write
-                                             ~/.formation/mailbox to ack via 'formation report')
+                                          Sandbox default: Claude bypass; Codex workspace-write
+                                            with approvals disabled and only FORMATION_HOME added
+                                            as an extra writable directory.
                                           --bypass-sandbox forces full privilege bypass
                                           (claude bypassPermissions / codex dangerously-bypass).
                                           --sandbox forces normal sandbox/approval mode.
@@ -142,28 +141,37 @@ USAGE
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
 # Input $2 (bypass): "" => pick default, "1"/"0" => explicit override.
-# Default (user directive 2026-07-08): 1 (bypass) for BOTH clis — an autonomous
-# worker that stalls on approval prompts is useless. codex always needed bypass
-# (must write ~/.formation/mailbox to ack via `formation report`); claude now
-# matches so workers run unattended. Opt back into normal approval with --sandbox.
+# Claude retains the unattended bypass default. Codex can stay unattended with
+# `--ask-for-approval never`, while `--add-dir FORMATION_HOME` grants only the
+# extra write scope needed by report/done/ask.
 # Echoes 1 (bypass) or 0 (normal sandbox).
 resolve_bypass_default() {
   local cli="$1" bypass="$2"
   if [[ -n "$bypass" ]]; then echo "$bypass"; return; fi
-  # user directive 2026-07-08: formation workers default to BYPASS for BOTH clis.
+  if [[ "$cli" == "codex" ]]; then echo 0; return; fi
+  # user directive 2026-07-08: Claude formation workers default to BYPASS.
   # A normal-approval claude worker stalls at its first permission prompt and the
   # lead has to babysit it (observed twice this session), defeating the point of
   # an autonomous peer. --sandbox is the explicit opt-out back to normal approval.
   echo 1
 }
 
+codex_launch_flags() {
+  local bypass="$1"
+  if [[ "$bypass" == "1" ]]; then
+    echo "--dangerously-bypass-approvals-and-sandbox"
+  else
+    printf '%s %s %s %s %s %q' \
+      --sandbox workspace-write --ask-for-approval never --add-dir "$FORMATION_HOME"
+  fi
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
   # window 名を巻き込み identity drift。 別 window 化で隔離。 --split で旧挙動)
-  # Sandbox default (user directive 2026-07-08): BYPASS for both clis, so a
-  # spawned worker runs unattended instead of stalling at approval prompts.
-  # Use --sandbox to force normal approval for a specific spawn.
+  # Claude defaults to bypass. Codex defaults to workspace-write + never-ask,
+  # with FORMATION_HOME as its only extra writable directory.
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
@@ -229,18 +237,14 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
 
   if [[ "$cli" == "codex" ]]; then
     # Codex: pass seed as initial prompt argument.
-    # Default (per #38): bypass, because --dangerously-bypass-approvals-and-sandbox
-    # is what lets the worker write to ~/.formation/ mailbox and formation dirs
-    # outside the workspace sandbox — required for `formation report`/ack.
-    # --sandbox forces normal sandbox/approval mode.
     session_name="codex-$name"
     local codex_model_flag="" codex_sandbox_flag=""
     [[ -n "$model" ]] && codex_model_flag="-m $model"
+    codex_sandbox_flag="$(codex_launch_flags "$bypass")"
     if [[ "$bypass" == "1" ]]; then
-      codex_sandbox_flag="--dangerously-bypass-approvals-and-sandbox"
-      echo "formation: spawning codex worker '$name' with sandbox BYPASS (codex default) — needed so the worker can write ~/.formation/mailbox for 'formation report'. Use --sandbox to force normal mode." >&2
+      echo "formation: WARNING: spawning codex worker '$name' with EXPLICIT FULL SANDBOX/APPROVAL BYPASS (--bypass-sandbox). The briefing can drive unrestricted local commands." >&2
     else
-      echo "formation: spawning codex worker '$name' in normal sandbox/approval mode (--sandbox) — mailbox writes outside the workspace may prompt or be blocked, which can stop the worker from acking its briefing." >&2
+      echo "formation: spawning codex worker '$name' with workspace-write, approvals disabled, and scoped mailbox write access at $FORMATION_HOME. Use --bypass-sandbox only inside an external sandbox." >&2
     fi
     tmux send-keys -t "$pane_id" "codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
