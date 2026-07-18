@@ -39,9 +39,27 @@ BK="$HOME/sanada_backup_persistent/codex_hooks_install_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BK"
 cp "$CODEX_CONFIG" "$BK/config.toml"
 
-# ---- enable plugin_hooks feature flag ---------------------------------------
-codex features enable plugin_hooks 2>/dev/null || true
-echo "feature: plugin_hooks enabled"
+# ---- verify canonical hooks feature ----------------------------------------
+FEATURE_LIST="$(codex features list 2>/dev/null)" || {
+    echo "error: unable to query Codex feature support." >&2
+    exit 1
+}
+set +e
+FEATURE_STATE="$(printf '%s\n' "$FEATURE_LIST" | python3 "$HARNESS_DIR/scripts/lib/codex_hooks_feature.py")"
+FEATURE_RC=$?
+set -e
+if [[ $FEATURE_RC -eq 1 ]]; then
+    codex features enable hooks >/dev/null
+    FEATURE_LIST="$(codex features list 2>/dev/null)"
+    FEATURE_STATE="$(printf '%s\n' "$FEATURE_LIST" | python3 "$HARNESS_DIR/scripts/lib/codex_hooks_feature.py")" || {
+        echo "error: Codex accepted 'features enable hooks' but hooks are still unavailable." >&2
+        exit 1
+    }
+elif [[ $FEATURE_RC -ne 0 ]]; then
+    echo "error: this Codex version does not expose the canonical 'hooks' feature (state: $FEATURE_STATE). Upgrade Codex." >&2
+    exit 1
+fi
+echo "feature: hooks $FEATURE_STATE"
 
 # ---- rebuild our config.toml block atomically -------------------------------
 # Order matters for safety (code-review #52): the OLD code stripped the existing
