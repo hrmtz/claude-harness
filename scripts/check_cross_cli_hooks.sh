@@ -7,7 +7,7 @@
 #      (the SSOT that drives Claude via sync_hooks_to_live.py)
 #
 # Live checks (--live):
-#   3. ~/.codex/config.toml contains exactly the overlay's codex hook commands
+#   3. the claude-harness-owned Codex block contains exactly the overlay commands
 #   4. installed kimi guard core (~/.kimi-code/bin/guarded-bash-dir/guard-check.sh)
 #      is identical to the repo version
 #   5. ~/.grok/hooks/harness.json contains exactly the overlay's grok hook commands
@@ -48,7 +48,8 @@ for hook in "${ALL_HOOKS[@]}"; do
 done
 
 if [[ $LIVE -eq 1 ]]; then
-    # 3. codex config.toml carries exactly the overlay set
+    # 3. Compare only the marker-bounded block owned by this installer. Hooks
+    # from other sources are valid and intentionally invisible to this check.
     CODEX_CONFIG="$HOME/.codex/config.toml"
     if [[ -f "$CODEX_CONFIG" ]]; then
         want=$(mktemp); got=$(mktemp)
@@ -82,10 +83,33 @@ for spec in specs:
 PYEOF
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
         } | sort > "$want"
-        grep -E '^command = ' "$CODEX_CONFIG" | sed 's/^command = "//;s/"$//' \
-            | grep -E 'hooks/' | sort > "$got"
-        if ! diff -u "$want" "$got" >&2; then
-            err "codex config.toml hook set differs from overlay (run install-codex-hooks.sh + re-trust)"
+        if ! python3 - "$CODEX_CONFIG" "$HARNESS_DIR/scripts/lib/merge_codex_hooks.py" > "$got" <<'PYEOF'
+import importlib.util, pathlib, re, sys
+config_path, helper_path = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("merge_codex_hooks", helper_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+block = module.managed_block(config_path.read_text())
+if block is None:
+    print("error: no claude-harness managed hook block", file=sys.stderr)
+    sys.exit(1)
+for match in re.finditer(r'^\s*command\s*=\s*"(.*)"\s*$', block, re.MULTILINE):
+    print(match.group(1))
+PYEOF
+        then
+            err "codex managed hook block is absent or malformed (run install-codex-hooks.sh + re-trust)"
+        else
+            sort -o "$got" "$got"
+            missing="$(comm -23 "$want" "$got")"
+            extra="$(comm -13 "$want" "$got")"
+            if [[ -n "$missing" ]]; then
+                printf 'MISSING managed Codex hooks:\n%s\n' "$missing" >&2
+                err "codex managed block is missing overlay hooks"
+            fi
+            if [[ -n "$extra" ]]; then
+                printf 'DUPLICATE/UNEXPECTED managed Codex hooks:\n%s\n' "$extra" >&2
+                err "codex managed block has duplicate or unexpected hooks"
+            fi
         fi
         rm -f "$want" "$got"
     else

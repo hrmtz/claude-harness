@@ -52,6 +52,21 @@ def _remove_managed_blocks(content: str) -> tuple[str, bool]:
     return cleaned, True
 
 
+def managed_block(content: str) -> str | None:
+    """Return this installer's block, or None; reject ambiguous markers."""
+    if BEGIN not in content and END not in content:
+        return None
+    if content.count(BEGIN) != 1 or content.count(END) != 1:
+        raise ValueError("expected exactly one claude-harness managed hook block")
+    match = re.search(
+        rf"(?ms)^\s*{re.escape(BEGIN)}\n(.*?)^\s*{re.escape(END)}\s*$",
+        content,
+    )
+    if not match:
+        raise ValueError("invalid claude-harness managed hook marker order")
+    return match.group(1)
+
+
 def _migrate_legacy(content: str, owned_commands: set[str]) -> str:
     """Remove only legacy leaf tables whose command is owned by this installer."""
     sections = _sections(content)
