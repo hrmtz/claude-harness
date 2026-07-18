@@ -129,7 +129,8 @@ bash ~/projects/claude-harness/install-codex-hooks.sh
 
 This:
 1. Runs `codex features enable plugin_hooks`
-2. Strips any existing hook blocks from `~/.codex/config.toml`
+2. Replaces only the marker-bounded hook block owned by claude-harness. Hooks
+   from other installers and `[hooks.state]` trust records are preserved.
 3. Generates and appends the hook config from `plugins/cross_cli_hooks.json`
    (hook set) + each plugin's `hooks/hooks.json` (event/matcher/timeout SSOT —
    the same files that drive Claude via `sync_hooks_to_live.py`)
