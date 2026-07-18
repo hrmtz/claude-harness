@@ -2,6 +2,7 @@
 
 import importlib.util
 import pathlib
+import tomllib
 import unittest
 
 
@@ -121,6 +122,40 @@ trusted = "keep"
         self.assertNotIn(MODULE.BEGIN, result)
         self.assertIn("/third-party/hook.sh", result)
         self.assertIn('trusted = "keep"', result)
+
+    def test_plugin_migration_preserves_table_inserted_inside_markers(self):
+        content = f'''{MODULE.BEGIN}
+{MANAGED}
+[marketplaces.claude-harness]
+source = "/repo"
+
+[[hooks.PostToolUse]]
+matcher = "Bash"
+[[hooks.PostToolUse.hooks]]
+command = "python3 /repo/plugins/harness-rails/hooks/versioning.py"
+{MODULE.END}
+'''
+        result, removed = MODULE.remove_managed_block(content)
+        self.assertTrue(removed)
+        self.assertNotIn(MODULE.BEGIN, result)
+        self.assertNotIn("guard.sh", result)
+        self.assertNotIn("versioning.py", result)
+        self.assertIn("[marketplaces.claude-harness]", result)
+        self.assertIn('source = "/repo"', result)
+        tomllib.loads(result)
+
+    def test_reinstall_moves_inserted_table_outside_new_markers(self):
+        content = f'''{MODULE.BEGIN}
+{MANAGED}
+[marketplaces.claude-harness]
+source = "/repo"
+{MODULE.END}
+'''
+        result = MODULE.merge(content, MANAGED)
+        self.assertEqual(result.count("[marketplaces.claude-harness]"), 1)
+        self.assertLess(result.index("[marketplaces.claude-harness]"),
+                        result.index(MODULE.BEGIN))
+        tomllib.loads(result)
 
 
 if __name__ == "__main__":
