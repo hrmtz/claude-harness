@@ -77,10 +77,12 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
   [--model <model>] <path/to/briefing.md> [worker_name]
 ```
 
-- **Permission mode defaults to bypass** for both claude and codex workers
-  (a normal-approval worker stalls at its first permission prompt and the lead
-  has to babysit it). Pass `--sandbox` to force normal approval for a specific
-  spawn. Flags go **before** the briefing path.
+- **Claude defaults to permission bypass** so an unattended worker does not
+  stall. **Codex defaults to `workspace-write` with `--ask-for-approval never`**
+  and adds only `FORMATION_HOME` as an extra writable directory, which keeps
+  `formation report/done/ask` autonomous without full filesystem bypass.
+  `--bypass-sandbox` is an explicit high-risk Codex opt-in intended only when
+  the process is already externally sandboxed. Flags go before the briefing.
 - `--model` is omitted by default, so the worker inherits the global default
   model; set it explicitly when a worker needs a different tier than the
   session default.
