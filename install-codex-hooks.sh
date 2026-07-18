@@ -61,27 +61,34 @@ import json, sys, collections
 overlay_path, harness_dir = sys.argv[1], sys.argv[2]
 plugins_dir = f"{harness_dir}/plugins"
 overlay = json.load(open(overlay_path))["codex"]
+specs = [({"path": item} if isinstance(item, str) else item)
+         for item in overlay["hooks"]]
 
 # Look up (event, matcher, timeout, command) for each selected hook from the owning
 # plugin's hooks.json — the same SSOT that drives Claude Code.
 lookup = {}
-for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
+for plugin in sorted({spec["path"].split("/")[0] for spec in specs}):
     hooks_json = json.load(open(f"{plugins_dir}/{plugin}/hooks/hooks.json"))
     for event, blocks in hooks_json.get("hooks", {}).items():
         for blk in blocks:
             matcher = blk.get("matcher")
             for h in blk.get("hooks", []):
                 name = h["command"].split("/hooks/")[-1]
-                lookup.setdefault(f"{plugin}/hooks/{name}", (
+                lookup.setdefault(f"{plugin}/hooks/{name}", []).append((
                     event, matcher, h.get("timeout", 5), h["command"]))
 
 # Group by (event, matcher) preserving overlay order.
 groups = collections.OrderedDict()
-for hook in overlay["hooks"]:
-    if hook not in lookup:
-        print(f"error: {hook} not registered in its plugin hooks.json", file=sys.stderr)
+for spec in specs:
+    hook = spec["path"]
+    candidates = lookup.get(hook, [])
+    if "event" in spec:
+        candidates = [item for item in candidates if item[0] == spec["event"]]
+    if len(candidates) != 1:
+        detail = "not registered" if not candidates else "ambiguous; add an event selector"
+        print(f"error: {hook}: {detail} in its plugin hooks.json", file=sys.stderr)
         sys.exit(1)
-    event, matcher, timeout, command = lookup[hook]
+    event, matcher, timeout, command = candidates[0]
     groups.setdefault((event, matcher), []).append((hook, timeout, command))
 sys.path.insert(0, f"{harness_dir}/scripts/lib")
 from cross_cli_externals import resolve  # noqa: E402

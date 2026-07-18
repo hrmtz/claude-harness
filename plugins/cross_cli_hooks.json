@@ -1,10 +1,17 @@
 {
   "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), install-grok-hooks.sh (grok), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
   "codex": {
-    "note": "Codex consumes the portable subset: Bash-shaped gates/reminders, UserPromptSubmit hints, Stop hooks, and SessionStart context. Claude-specific Read/Write/Edit/SubagentStop hooks remain excluded until a Codex tool-name adapter exists. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
+    "note": "Codex consumes the portable subset. String entries must resolve uniquely in the owning hooks.json; object entries select an explicit event when the same command is registered more than once. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
     "hooks": [
       "harness-core/hooks/stall_autocontinue.sh",
-      "harness-core/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
+      {
+        "path": "harness-core/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
+        "event": "Stop"
+      },
+      {
+        "path": "harness-core/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
+        "event": "SubagentStop"
+      },
       "harness-core/hooks/sanada_autobackup.sh",
       "harness-core/hooks/bash_command_guard.sh",
       "harness-core/hooks/branch_policy_guard.sh",

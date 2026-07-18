@@ -50,21 +50,27 @@ command -v jq >/dev/null 2>&1 || allow
 STOP_ACTIVE=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)
 [ "$STOP_ACTIVE" = "true" ] && allow
 
-TP=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
-[ -n "$TP" ] && [ -f "$TP" ] || allow
 CNT_FILE="$STATE_DIR/$SID"
 
-# Last assistant turn (jsonl is append-order; first hit from the tail = newest).
-LAST=$(tac "$TP" 2>/dev/null | grep -m1 '"type":"assistant"') || allow
-[ -n "$LAST" ] || allow
-
 # --- Signals in that turn -------------------------------------------------
-# Successful tool call?
-HAS_TOOLUSE=$(printf '%s' "$LAST" | jq -r '[.message.content[]?.type] | any(. == "tool_use")' 2>/dev/null)
-# Malformed-call signature in the assistant TEXT (an `<invoke ...>` / `<parameter
-# ...>` literal that never parsed). Never appears in normal prose.
-TXT=$(printf '%s' "$LAST" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
+# Codex provides the stable last_assistant_message field. Its rollout JSONL is
+# explicitly not a stable hook interface, so do not parse it here. Claude does
+# not provide that field and keeps the existing transcript parser.
+if printf '%s' "$INPUT" | jq -e 'has("turn_id") and has("last_assistant_message")' >/dev/null 2>&1; then
+    TXT=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null)
+    HAS_TOOLUSE=false
+else
+    TP=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+    [ -n "$TP" ] && [ -f "$TP" ] || allow
+    LAST=$(tac "$TP" 2>/dev/null | grep -m1 '"type":"assistant"') || allow
+    [ -n "$LAST" ] || allow
+    HAS_TOOLUSE=$(printf '%s' "$LAST" | jq -r '[.message.content[]?.type] | any(. == "tool_use")' 2>/dev/null)
+    TXT=$(printf '%s' "$LAST" | jq -r '.message.content[]?.text // empty' 2>/dev/null)
+fi
+
+# Malformed-call signature in the assistant text (an `<invoke ...>` /
+# `<parameter ...>` literal that never parsed). Never appears in normal prose.
 HAS_MALFORMED=false
 if printf '%s' "$TXT" | grep -qE '<(invoke|parameter|function_calls) name=|<(invoke|parameter|function_calls)>'; then
     HAS_MALFORMED=true

@@ -26,11 +26,14 @@ def _sr_prompt(changed):
             f"Changed files (you may Read these):\n{bullets}\n=== DIFF")
 
 
-def run_hook(lines):
+def run_hook(lines, payload=None):
     tp = _jsonl(lines)
     try:
+        hook_payload = dict(payload or {})
+        key = "agent_transcript_path" if hook_payload.get("hook_event_name") == "SubagentStop" else "transcript_path"
+        hook_payload[key] = tp
         p = subprocess.run(["python3", HOOK, "--hook"],
-                           input=json.dumps({"transcript_path": tp}),
+                           input=json.dumps(hook_payload),
                            capture_output=True, text=True)
         return p
     finally:
@@ -40,9 +43,9 @@ def run_hook(lines):
 ok = True
 
 
-def expect_block(lines, label, want=True):
+def expect_block(lines, label, want=True, payload=None):
     global ok
-    p = run_hook(lines)
+    p = run_hook(lines, payload=payload)
     blocked = bool(p.stdout.strip()) and '"decision"' in p.stdout and '"block"' in p.stdout
     if p.returncode != 0:
         ok = False
@@ -68,9 +71,39 @@ def struct(findings):
     return {"type": "tool_use", "name": "StructuredOutput", "input": {"findings": findings}}
 
 
+def C_event(payload_type, **fields):
+    return {"type": "event_msg", "payload": {"type": payload_type, **fields}}
+
+
+def C_tool(name, inp):
+    return {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": name, "input": json.dumps(inp)}}
+
+
+def C_raw_tool(name, raw):
+    return {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": name, "input": raw}}
+
+
 # --- SHOULD block: clean verdict, a changed file never opened ---
 expect_block([U(_sr_prompt(["a/x.py"])), A_tools(struct([]))],
              "clean, zero reads")
+# Current Codex rollout shape: event_msg prompts/messages plus response_item tools.
+expect_block([C_event("user_message", message=_sr_prompt(["a/x.py"])),
+              C_event("agent_message", message="No security vulnerabilities found.")],
+             "Codex clean verdict with unread file")
+expect_block([C_event("user_message", message=_sr_prompt(["a/x.py"])),
+              C_tool("read_file", {"path": "/repo/a/x.py"}),
+              C_event("agent_message", message="No security vulnerabilities found.")],
+             "Codex clean verdict after read", want=False)
+expect_block([C_event("user_message", message=_sr_prompt(["a/x.py"])),
+              C_raw_tool("functions.exec", 'tools.exec_command({"cmd":"sed -n 1,200p /repo/a/x.py"})'),
+              C_event("agent_message", message="No security vulnerabilities found.")],
+             "Codex functions.exec file display counts as read", want=False)
+expect_block([C_event("user_message", message=_sr_prompt(["a/x.py"])),
+              C_event("agent_message", message="No security vulnerabilities found.")],
+             "Codex SubagentStop uses agent transcript", want=True,
+             payload={"hook_event_name": "SubagentStop"})
 expect_block([U(_sr_prompt(["a/x.py"])), A_tools(read("/repo/b/x.py"), struct([]))],
              "basename collision: read b/x.py, changed a/x.py")
 expect_block([U(_sr_prompt(["a/x.py"])),
