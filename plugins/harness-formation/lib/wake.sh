@@ -17,6 +17,18 @@ _exit_copy_mode() {
   fi
 }
 
+# Textarea submission contract for Claude Code and Codex. Both can consume the
+# first Enter while committing a recent typed/pasted value, leaving the text
+# visible but unsubmitted. Wait for the render tick, press Enter, then retry
+# after a second delay. Keep this separate from shell-command launch Enter.
+_submit_enter_twice() {
+  local pane_id="$1"
+  sleep "${FORMATION_SUBMIT_SETTLE_S:-0.4}"
+  tmux send-keys -t "$pane_id" Enter
+  sleep "${FORMATION_SUBMIT_RETRY_S:-0.5}"
+  tmux send-keys -t "$pane_id" Enter
+}
+
 wake_pane() {
   local pane_id="$1"
   local note="${2:-inbox}"
@@ -30,7 +42,7 @@ wake_pane() {
   fi
   _exit_copy_mode "$pane_id"
   tmux send-keys -l -t "$pane_id" "$note"
-  tmux send-keys -t "$pane_id" Enter
+  _submit_enter_twice "$pane_id"
 }
 
 wake_paste() {
@@ -41,8 +53,7 @@ wake_paste() {
   # -p: bracketed paste so a multi-line note lands atomically (no embedded
   # newline submits the turn early). See tmux_send_submit for the rationale.
   tmux paste-buffer -t "$pane_id" -b "$buf" -p -d
-  sleep 0.4
-  tmux send-keys -t "$pane_id" Enter
+  _submit_enter_twice "$pane_id"
 }
 
 # Send text to a pane and force-submit, robustly.
@@ -68,8 +79,5 @@ tmux_send_submit() {
   _exit_copy_mode "$pane_id"
   printf '%s' "$text" | tmux load-buffer -b "$buf" -
   tmux paste-buffer -t "$pane_id" -b "$buf" -p -d
-  sleep 0.4
-  tmux send-keys -t "$pane_id" Enter
-  sleep 0.5
-  tmux send-keys -t "$pane_id" Enter
+  _submit_enter_twice "$pane_id"
 }

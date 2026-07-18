@@ -1,6 +1,6 @@
 {
   "name": "harness-formation",
-  "version": "0.2.0",
+  "version": "0.2.0+codex.20260718104924",
   "description": "Persistent tmux peer-worker orchestration for Claude and Codex.",
   "author": {
     "name": "hrmtz",
@@ -16,7 +16,10 @@
     "longDescription": "A Formation skill and lifecycle hook for persistent Claude or Codex workers coordinated through tmux and a credential-safe mailbox.",
     "developerName": "hrmtz",
     "category": "Productivity",
-    "capabilities": ["Hooks", "Skills"],
+    "capabilities": [
+      "Hooks",
+      "Skills"
+    ],
     "defaultPrompt": "Spawn a Formation worker for this long-running task."
   }
 }
