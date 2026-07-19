@@ -1,0 +1,8 @@
+{
+  "name": "harness-craft",
+  "description": "Behavioral craft skills distilled from obra/superpowers (MIT): skill-tdd (author skills via RED-GREEN-REFACTOR pressure testing), atomized-briefing (context-free plans for formation workers / subagent dispatch), root-cause-debugging (Iron Law + 3-failed-fixes architecture escalation). The explicitly-behavioral annex to harness-core's structural hooks: superpowers teaches, harness enforces — this plugin imports the teaching half and wires it into the enforcing half.",
+  "author": {
+    "name": "hrmtz",
+    "url": "https://github.com/hrmtz"
+  }
+}

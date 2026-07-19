@@ -34,6 +34,13 @@
       "source": "./plugins/harness-formation",
       "category": "collaboration",
       "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-formation"
+    },
+    {
+      "name": "harness-craft",
+      "description": "Behavioral craft skills distilled from obra/superpowers (MIT): skill-tdd (author skills via RED-GREEN-REFACTOR pressure testing, with a structural-first entry gate), atomized-briefing (context-free 2-5 min task plans for formation workers / subagent dispatch), root-cause-debugging (Iron Law + 3-failed-fixes escalation to dual-magi-review). Superpowers teaches, harness enforces — this plugin is the explicitly-behavioral annex wired into the enforcing half.",
+      "source": "./plugins/harness-craft",
+      "category": "workflow",
+      "homepage": "https://github.com/hrmtz/claude-harness/tree/main/plugins/harness-craft"
     }
   ]
 }
