@@ -1,0 +1,42 @@
+#!/bin/bash
+# formation-statusline - pin the worker's mission goal under the prompt box.
+#
+# Injected per-worker at spawn via `claude --settings '{"statusLine":...}'`
+# (#93), so the user's global settings.json stays untouched. Claude Code runs
+# this on each render with a session JSON on stdin; we ignore that payload and
+# key the lookup off $FORMATION_SELF, which the statusLine subprocess inherits
+# from the pane environment set at `formation spawn`.
+#
+# Silent (exit 0, no output) whenever anything is missing — a worker whose
+# registry row was reaped, or a launch outside formation, must not render a
+# stale or broken goal line.
+
+set -uo pipefail
+
+cat > /dev/null || true   # drain stdin; unused
+
+[[ -n "${FORMATION_SELF:-}" ]] || exit 0
+
+# Same home-resolution chain as bin/formation (keep in sync).
+if [[ -z "${FORMATION_HOME:-}" ]]; then
+  if [[ -n "${NJSLYR_HOME:-}" ]]; then
+    FORMATION_HOME="$NJSLYR_HOME"
+  elif [[ ! -e "$HOME/.formation" && -e "$HOME/.njslyr7" ]]; then
+    FORMATION_HOME="$HOME/.njslyr7"
+  else
+    FORMATION_HOME="$HOME/.formation"
+  fi
+fi
+REGISTRY="$FORMATION_HOME/formation/registry.jsonl"
+[[ -s "$REGISTRY" ]] || exit 0
+
+row="$(jq -c --arg id "$FORMATION_SELF" 'select(.id == $id)' "$REGISTRY" 2>/dev/null | tail -n1)"
+[[ -n "$row" ]] || exit 0
+
+goal="$(echo "$row" | jq -r '.goal // .task // empty')"
+[[ -n "$goal" ]] || exit 0
+
+# Goal originates from the lead's briefing but strip C0 controls anyway (#37
+# discipline): a multi-line or ANSI-bearing value must not corrupt the row.
+goal="$(printf '%s' "$goal" | tr -d '\000-\037\177')"
+printf '\033[38;5;39m🎯 %s\033[0m\n' "$goal"

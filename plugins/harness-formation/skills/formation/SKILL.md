@@ -74,7 +74,7 @@ Template: `templates/briefing.md`, resolved relative to this `SKILL.md`.
 
 ```bash
 formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
-  [--model <model>] <path/to/briefing.md> [worker_name]
+  [--model <model>] [--task <label>] <path/to/briefing.md> [worker_name]
 ```
 
 - **Claude defaults to permission bypass** so an unattended worker does not
@@ -93,6 +93,17 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
 - Registers the worker in `~/.formation/formation/registry.jsonl`.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
+- **Pane visibility (#93)**: the worker window gets a `pane-border-status`
+  strip showing `<id> · <task>` — blue for claude, orange for codex, plus a
+  red `⚠bypass` marker — and `formation report/done` update the strip's
+  status suffix live. The task label is `--task` if given, else the briefing
+  basename. Claude workers additionally pin `🎯 <goal>` in a statusline under
+  the prompt box (goal = first content line under `## Mission` in the
+  briefing) and get the same goal appended to their system prompt, both
+  injected per-launch via `--settings`/`--append-system-prompt` so the user's
+  global `settings.json` is untouched. Bypass claude workers also load the
+  red-accent `formation-bypass` theme (installed idempotently to
+  `~/.claude/themes/`) as a "no guardrails here" light.
 - **Auto-starts a mailbox relay daemon** (`lib/mailbox_relay.sh`) in the
   background that watches `~/.formation/mailbox/log.jsonl` via inotify and
   injects any new entries addressed to this worker into its tmux pane.
@@ -104,7 +115,7 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
 ### 3. Supervise
 
 ```bash
-formation status          # all workers + last pane line
+formation status          # all workers: task, age, last mailbox report (or last pane line)
 formation inbox           # reports addressed to you
 formation msg <id> "<x>"  # send instruction to worker
 formation reap <id>       # stop relay daemon, close pane, drop registry row

@@ -169,6 +169,61 @@ cred_no  'set the timeout=30 in the config'     'non-secret keyword=value'
 cred_no  'MONKEY=banana'                         'word ending in KEY is not a bare-key match'
 
 # ----------------------------------------------------------------------------
+# Group 4: pane visibility layer (#93) — task label + goal extraction
+# ----------------------------------------------------------------------------
+echo "== task label + goal extraction (#93) =="
+
+BRIEF_DIR="$TMPDIR_T/briefings"; mkdir -p "$BRIEF_DIR"
+
+cat > "$BRIEF_DIR/prs-388-binquant.md" <<'BRIEF'
+# Formation Worker Briefing
+
+## Mission
+Ship the binquant embed pipeline to mars
+
+## Scope
+- IN: everything
+BRIEF
+
+got="$(derive_task_label "" "$BRIEF_DIR/prs-388-binquant.md")"
+if [[ "$got" == "prs-388-binquant" ]]; then ok "task label defaults to briefing basename sans .md"; else bad "task label default got [$got]"; fi
+got="$(derive_task_label "custom-label" "$BRIEF_DIR/prs-388-binquant.md")"
+if [[ "$got" == "custom-label" ]]; then ok "--task overrides basename"; else bad "--task override got [$got]"; fi
+got="$(derive_task_label "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd" x.md)"
+if [[ "${#got}" -eq 28 ]]; then ok "task label truncated to 28 chars"; else bad "task label truncation got ${#got} chars"; fi
+
+got="$(extract_goal "$BRIEF_DIR/prs-388-binquant.md")"
+if [[ "$got" == "Ship the binquant embed pipeline to mars" ]]; then ok "goal = first content line under ## Mission"; else bad "mission goal got [$got]"; fi
+
+cat > "$BRIEF_DIR/no-mission.md" <<'BRIEF'
+# Fix the relay daemon race
+
+Some context paragraph.
+BRIEF
+got="$(extract_goal "$BRIEF_DIR/no-mission.md")"
+if [[ "$got" == "Fix the relay daemon race" ]]; then ok "goal falls back to first heading"; else bad "heading fallback got [$got]"; fi
+
+printf 'plain text, no headings at all\n' > "$BRIEF_DIR/bare-notes.md"
+got="$(extract_goal "$BRIEF_DIR/bare-notes.md")"
+if [[ "$got" == "bare-notes" ]]; then ok "goal falls back to basename"; else bad "basename fallback got [$got]"; fi
+
+# C0 control chars in the mission line must not survive into the statusline.
+printf '## Mission\ngoal\twith\x1b[31mansi\x07\n' > "$BRIEF_DIR/ansi.md"
+got="$(extract_goal "$BRIEF_DIR/ansi.md")"
+if [[ "$got" == "goalwith[31mansi" ]]; then ok "C0 controls stripped from goal"; else bad "C0 strip got [$got]"; fi
+
+# statusline script: renders goal for a registered worker, silent otherwise.
+SL_BIN="$HERE/../bin/formation-statusline"
+SL_HOME="$TMPDIR_T/sl_home"; mkdir -p "$SL_HOME/formation"
+printf '%s\n' '{"id":"wk-sl","pane_id":"%1","goal":"reach the goal","task":"t"}' > "$SL_HOME/formation/registry.jsonl"
+got="$(echo '{}' | FORMATION_HOME="$SL_HOME" FORMATION_SELF=wk-sl bash "$SL_BIN")"
+if [[ "$got" == *"🎯 reach the goal"* ]]; then ok "statusline renders 🎯 goal for registered worker"; else bad "statusline render got [$got]"; fi
+got="$(echo '{}' | FORMATION_HOME="$SL_HOME" FORMATION_SELF=ghost bash "$SL_BIN"; echo "rc=$?")"
+if [[ "$got" == "rc=0" ]]; then ok "statusline silent + exit 0 for unknown worker"; else bad "statusline unknown-worker got [$got]"; fi
+got="$(echo '{}' | FORMATION_HOME="$SL_HOME" bash "$SL_BIN"; echo "rc=$?")"
+if [[ "$got" == "rc=0" ]]; then ok "statusline silent + exit 0 without FORMATION_SELF"; else bad "statusline no-self got [$got]"; fi
+
+# ----------------------------------------------------------------------------
 echo
 printf 'RESULT: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -1,0 +1,7 @@
+{
+  "name": "Formation Bypass",
+  "base": "dark",
+  "overrides": {
+    "claude": "#e06c75"
+  }
+}

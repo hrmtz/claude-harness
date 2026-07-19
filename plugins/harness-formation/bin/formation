@@ -75,13 +75,16 @@ self_id() {
 }
 
 registry_add() {
-  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}"
+  local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}" task="${7:-}" goal="${8:-}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
          --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
          --arg sid "$session_id" --arg cli "$cli" \
+         --arg task "$task" --arg goal "$goal" \
     '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
-      session_id: (if $sid == "" then null else $sid end), cli: $cli}' \
+      session_id: (if $sid == "" then null else $sid end), cli: $cli,
+      task: (if $task == "" then null else $task end),
+      goal: (if $goal == "" then null else $goal end)}' \
     >> "$REGISTRY"
 }
 
@@ -97,16 +100,74 @@ registry_remove() {
   mv "$tmp" "$REGISTRY"
 }
 
+# Short task label for the pane border. --task wins; else briefing basename
+# (sans .md), truncated so the border stays one glance wide.
+derive_task_label() {
+  local task="$1" briefing="$2" label
+  if [[ -n "$task" ]]; then label="$task"; else
+    label="$(basename "$briefing")"; label="${label%.md}"
+  fi
+  printf '%s' "${label:0:28}"
+}
+
+# One-line goal for the statusline pin: first content line under '## Mission',
+# else first markdown heading, else the briefing basename. Attacker input is
+# the lead's own briefing here, but strip C0 controls anyway so a crafted line
+# cannot corrupt the statusline row (same discipline as cmd_inbox, #37).
+extract_goal() {
+  local briefing="$1" goal
+  goal="$(awk '/^##[[:space:]]+Mission/{f=1;next} f&&/^#/{exit} f&&NF{print;exit}' "$briefing")"
+  if [[ -z "$goal" ]]; then
+    goal="$(awk '/^#+[[:space:]]/{sub(/^#+[[:space:]]*/,"");print;exit}' "$briefing")"
+  fi
+  [[ -n "$goal" ]] || { goal="$(basename "$briefing")"; goal="${goal%.md}"; }
+  goal="$(printf '%s' "$goal" | tr -d '\000-\037\177')"
+  printf '%s' "${goal:0:160}"
+}
+
+# Pane-border line for formation panes: colored by cli (claude=blue,
+# codex=orange), red ⚠bypass marker, live status suffix from @formation_status.
+# Non-formation panes in the same window fall back to their plain pane_title.
+FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#[fg=colour39]}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},1},#[fg=colour196]⚠bypass #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
+
+# Install the red-accent theme for bypass claude workers into ~/.claude/themes
+# (idempotent copy from the plugin). Returns 1 (skip theme injection) when the
+# plugin copy is missing so a broken install degrades to the default accent
+# instead of a claude launch error.
+install_bypass_theme() {
+  local src="$SCRIPT_DIR/../themes/formation-bypass.json"
+  local dst_dir="$HOME/.claude/themes"
+  [[ -f "$src" ]] || return 1
+  mkdir -p "$dst_dir"
+  [[ -f "$dst_dir/formation-bypass.json" ]] || cp "$src" "$dst_dir/formation-bypass.json"
+}
+
+# Reflect a worker's latest report into its own pane border (@formation_status).
+# Resolves the pane via the registry (NOT $TMUX_PANE, which can be stale /
+# inherited from a sibling — see #59). Best-effort: never fails the caller.
+update_own_status() {
+  local text="$1" row pane
+  row="$(registry_get "$(self_id)")" || true
+  [[ -n "$row" ]] || return 0
+  pane="$(echo "$row" | jq -r '.pane_id')"
+  tmux set-option -p -t "$pane" @formation_status "${text:0:48}" 2>/dev/null || true
+}
+
 usage() {
   cat <<'USAGE'
 formation - long-running peer AI agent panes (claude or codex)
 
 Parent (lead) commands:
-  formation spawn [--cli claude|codex] [--model <model>] [--new-window|--split]
-                  [--bypass-sandbox|--sandbox] <briefing.md> [name]
+  formation spawn [--cli claude|codex] [--model <model>] [--task <label>]
+                  [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart
                                           rename-window from parent pane) or split current window (--split)
                                           Launches agent, injects briefing.
+                                          Visibility (#93): pane border shows '<id> · <task>' colored
+                                          by cli (claude=blue, codex=orange) + red ⚠bypass marker;
+                                          claude workers also pin '🎯 <goal>' in a statusline
+                                          (goal = first line under '## Mission' in the briefing,
+                                          task label = --task or briefing basename).
                                           Sandbox default: Claude bypass; Codex workspace-write
                                             with approvals disabled and only FORMATION_HOME added
                                             as an extra writable directory.
@@ -115,13 +176,14 @@ Parent (lead) commands:
                                           --sandbox forces normal sandbox/approval mode.
                                           A one-line stderr notice states the chosen mode and why.
   formation msg <worker_id> <text>        Send instruction to worker pane
-  formation status                        List active workers and last pane line
+  formation status                        List active workers: task, age, last mailbox report
+                                          (falls back to last pane line if no report yet)
   formation inbox                         Read unread reports addressed to self
   formation remote-check                  Detect the installed Codex remote-control capability
   formation reap <worker_id>              Kill worker pane and drop registry row
 
 Worker-side commands (invoked by the worker agent via Bash):
-  formation report <text>                 Append status to parent mailbox
+  formation report <text>                 Append status to parent mailbox + own pane border
   formation done <summary>                Mark finished (mailbox)
   formation ask <question>                Request ack (mailbox)
 
@@ -197,11 +259,12 @@ cmd_spawn() {
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
-  local cli="claude" model="" placement="new-window" bypass=""
+  local cli="claude" model="" placement="new-window" bypass="" task=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cli)            cli="$2";   shift 2 ;;
       --model)          model="$2"; shift 2 ;;
+      --task)           task="$2";  shift 2 ;;
       --new-window)     placement="new-window"; shift ;;
       --split)          placement="split-window"; shift ;;
       --bypass-sandbox) bypass=1; shift ;;
@@ -210,7 +273,7 @@ cmd_spawn() {
     esac
   done
   [[ "$cli" == "claude" || "$cli" == "codex" ]] || { echo "unknown --cli: $cli (claude|codex)" >&2; exit 2; }
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] [--task <label>] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
 
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
@@ -248,8 +311,20 @@ cmd_spawn() {
                 -e "FORMATION_SESSION_ID=$spawn_id")"
   fi
 
+  local task_label goal
+  task_label="$(derive_task_label "$task" "$briefing")"
+  goal="$(extract_goal "$briefing")"
+
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
-  tmux select-pane -t "$pane_id" -T "$name"
+  tmux set-option -p -t "$pane_id" @formation_task "$task_label" >/dev/null
+  tmux set-option -p -t "$pane_id" @formation_cli "$cli" >/dev/null
+  tmux set-option -p -t "$pane_id" @formation_bypass "$bypass" >/dev/null
+  tmux set-option -p -t "$pane_id" @formation_status "spawned" >/dev/null
+  tmux select-pane -t "$pane_id" -T "$name: $task_label"
+  # Always-on label strip: window-scoped so every pane in the worker's window
+  # self-identifies; non-formation panes render their plain title (#93).
+  tmux set-option -w -t "$pane_id" pane-border-status top >/dev/null
+  tmux set-option -w -t "$pane_id" pane-border-format "$FORMATION_BORDER_FORMAT" >/dev/null
 
   # Seed prompt shared by both CLIs.
   local seed
@@ -283,7 +358,21 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning claude worker '$name' in normal approval mode (claude default — security win). Use --bypass-sandbox to opt into --permission-mode bypassPermissions." >&2
     fi
-    tmux send-keys -t "$pane_id" "claude --name $session_name $claude_perm_flag $claude_model_flag" Enter
+
+    # Goal pin (#93): per-launch --settings keeps the user's settings.json
+    # untouched. statusLine renders '🎯 <goal>' under the prompt box (script
+    # resolves the goal from the registry via inherited $FORMATION_SELF);
+    # bypass workers additionally get the red-accent theme as a "this pane has
+    # no guardrails" light. --append-system-prompt pins the same goal on the
+    # model side — the statusline is human-only.
+    local settings_json goal_prompt
+    settings_json="$(jq -cn --arg cmd "$SCRIPT_DIR/formation-statusline" \
+      '{statusLine:{type:"command",command:$cmd}}')"
+    if [[ "$bypass" == "1" ]] && install_bypass_theme; then
+      settings_json="$(echo "$settings_json" | jq -c '. + {theme:"formation-bypass"}')"
+    fi
+    goal_prompt="Session goal: $goal — if you notice your work drifting from this goal, stop and realign, or surface the conflict via 'formation ask'."
+    tmux send-keys -t "$pane_id" "claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
 
     # Wait for claude prompt. Poll up to 30s.
     local i
@@ -298,7 +387,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     tmux_send_submit "$pane_id" "$seed"
   fi
 
-  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli"
+  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli" "$task_label" "$goal"
 
   # Auto-start mailbox relay daemon: inotifywait on mailbox, inject new msgs
   # addressed to this worker into its tmux pane. Without this, the worker
@@ -344,12 +433,33 @@ cmd_status() {
     echo "(no workers)"; return
   fi
   while IFS= read -r row; do
-    local id pane cli last
+    local id pane cli task spawned age last
     id="$(echo "$row" | jq -r '.id')"
     pane="$(echo "$row" | jq -r '.pane_id')"
     cli="$(echo "$row" | jq -r '.cli // "claude"')"
-    last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1)"
-    printf '%-20s %-8s %-7s  %s\n' "$id" "$pane" "[$cli]" "${last:-(pane closed)}"
+    task="$(echo "$row" | jq -r '.task // "-"')"
+    spawned="$(echo "$row" | jq -r '.spawned // empty')"
+    age="?"
+    if [[ -n "$spawned" ]]; then
+      local then_s now_s
+      then_s="$(date -d "$spawned" +%s 2>/dev/null || echo)"
+      now_s="$(date +%s)"
+      [[ -n "$then_s" ]] && age="$(( (now_s - then_s) / 60 ))m"
+    fi
+    # Prefer the worker's own last mailbox report (signal) over the raw last
+    # pane line (usually a spinner / prompt frame). Mailbox bodies are
+    # attacker-controllable free text — strip C0 controls before printing (#37).
+    # Every pipeline is `|| true`-guarded: the registry keeps rows from dead
+    # panes and prior sessions, and one stale row must not abort the listing
+    # (set -e + pipefail would otherwise kill the loop mid-table).
+    last="$(jq -r --arg id "$id" 'select(.from == $id) | .body' "$MAILBOX_LOG" 2>/dev/null \
+            | tail -n1 | tr -d '\000-\037\177' || true)"
+    last="${last:0:60}"
+    if [[ -z "$last" ]]; then
+      last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1 || true)"
+      last="${last:-(pane closed)}"
+    fi
+    printf '%-16s %-6s %-7s %-28s %-5s %s\n' "$id" "$pane" "[$cli]" "$task" "$age" "$last"
   done < "$REGISTRY"
 }
 
@@ -423,6 +533,7 @@ cmd_report() {
   local from; from="$(self_id)"
   local to="${FORMATION_PARENT:-lead}"
   mailbox_send "$from" "$to" "$*"
+  update_own_status "$*"
 }
 
 cmd_done() {
@@ -431,6 +542,7 @@ cmd_done() {
   local to="${FORMATION_PARENT:-lead}"
   local msg="[DONE] $*"
   mailbox_send "$from" "$to" "$msg"
+  update_own_status "✅ $*"
 }
 
 cmd_ask() {
