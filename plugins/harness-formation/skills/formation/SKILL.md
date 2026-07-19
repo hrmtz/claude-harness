@@ -95,8 +95,9 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
   the worker's pane env; the worker uses those to address the parent.
 - **Pane visibility (#93)**: the worker window gets a `pane-border-status`
   strip showing `<id> · <task>` — blue for claude, orange for codex, plus a
-  red `⚠bypass` marker — and `formation report/done` update the strip's
-  status suffix live. The task label is `--task` if given, else the briefing
+  `🔒sandbox` marker on the rare non-bypass workers (bypass is the de facto
+  universal mode, so marking it would carry no signal) — and
+  `formation report/done` update the strip's status suffix live. The task label is `--task` if given, else the briefing
   basename. Claude workers additionally pin `🎯 <goal>` in a statusline under
   the prompt box (goal = first content line under `## Mission` in the
   briefing) and get the same goal appended to their system prompt, both

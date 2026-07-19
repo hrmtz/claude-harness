@@ -126,9 +126,12 @@ extract_goal() {
 }
 
 # Pane-border line for formation panes: colored by cli (claude=blue,
-# codex=orange), red ⚠bypass marker, live status suffix from @formation_status.
-# Non-formation panes in the same window fall back to their plain pane_title.
-FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#[fg=colour39]}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},1},#[fg=colour196]⚠bypass #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
+# codex=orange), live status suffix from @formation_status. Bypass is the de
+# facto universal mode here (user runs ~100% bypass workers), so marking it
+# would be an always-on no-signal badge — the RARE case gets the marker
+# instead: 🔒sandbox on --sandbox workers. Non-formation panes in the same
+# window fall back to their plain pane_title.
+FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#[fg=colour39]}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},0},#[fg=colour81]🔒sandbox #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
 
 # Install the red-accent theme for bypass claude workers into ~/.claude/themes
 # (idempotent copy from the plugin). Returns 1 (skip theme injection) when the
@@ -164,7 +167,8 @@ Parent (lead) commands:
                                           rename-window from parent pane) or split current window (--split)
                                           Launches agent, injects briefing.
                                           Visibility (#93): pane border shows '<id> · <task>' colored
-                                          by cli (claude=blue, codex=orange) + red ⚠bypass marker;
+                                          by cli (claude=blue, codex=orange) + 🔒sandbox marker on
+                                          the rare non-bypass workers;
                                           claude workers also pin '🎯 <goal>' in a statusline
                                           (goal = first line under '## Mission' in the briefing,
                                           task label = --task or briefing basename).
