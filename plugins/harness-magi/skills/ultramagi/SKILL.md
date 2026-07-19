@@ -95,6 +95,11 @@ degraded_until: <what must run before ship>
 [2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU (see definition). N rounds.
    ↻           each round: revise the doc with findings, re-review. Cross-family (codex) round
                is MANDATORY before any plateau claim.
+[2b] BATTLE    (optional, high-stakes only) red-vs-blue team battle over the plateau'd design:
+               red chains the DEFERRED/low findings into attack paths, blue defends from the
+               design, a cross-family blinded judge scores proven holes. Replaces the plateau
+               漸近 tail with a scored verdict. Patch RED_WINS holes, then continue. Skill:
+               `magi-battle`. Skip for reversible / low-stakes tasks.
 [3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Scripts
                repo-baked, idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
