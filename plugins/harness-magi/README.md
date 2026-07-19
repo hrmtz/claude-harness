@@ -48,6 +48,8 @@ skills/magi/
 
 The persona prompts are kept in `templates/` so you can review and adapt them. Each is ~80 lines, ~600-900 word output target.
 
+**Sibling skills in this plugin:** `dual-magi-review` (per-round design review), `ultramagi` (the full design→review→build→review→ship loop), `bug-hunt` (adversarial review of an implementation diff), and `magi-battle` (red-vs-blue team battle that runs between plateau and ship — replaces the review convergence漸近 tail with a scored verdict on attack chains). See each skill's `SKILL.md`.
+
 ## Output
 
 A single markdown synthesis:
