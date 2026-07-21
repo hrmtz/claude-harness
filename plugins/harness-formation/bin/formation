@@ -1,7 +1,7 @@
 #!/bin/bash
 # formation - spawn and coordinate long-running peer AI agent panes.
 #
-# A "worker" is a separate tmux pane running its own AI CLI (claude or codex),
+# A "worker" is a separate tmux pane running its own AI CLI (claude, codex, or kimi),
 # given a briefing file and an addressable id. Worker reports flow back via an
 # append-only jsonl mailbox. The parent pane (lead) polls `formation inbox`
 # when idle. Claude workers can additionally use Claude Code remote control;
@@ -126,12 +126,12 @@ extract_goal() {
 }
 
 # Pane-border line for formation panes: colored by cli (claude=blue,
-# codex=orange), live status suffix from @formation_status. Bypass is the de
-# facto universal mode here (user runs ~100% bypass workers), so marking it
-# would be an always-on no-signal badge — the RARE case gets the marker
-# instead: 🔒sandbox on --sandbox workers. Non-formation panes in the same
-# window fall back to their plain pane_title.
-FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#[fg=colour39]}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},0},#[fg=colour81]🔒sandbox #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
+# codex=orange, kimi=magenta), live status suffix from @formation_status.
+# Bypass is the de facto universal mode here (user runs ~100% bypass workers),
+# so marking it would be an always-on no-signal badge — the RARE case gets the
+# marker instead: 🔒sandbox on --sandbox workers. Non-formation panes in the
+# same window fall back to their plain pane_title.
+FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#{?#{==:#{@formation_cli},kimi},#[fg=colour135],#[fg=colour39]}}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},0},#[fg=colour81]🔒sandbox #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
 
 # Install the red-accent theme for bypass claude workers into ~/.claude/themes
 # (idempotent copy from the plugin). Returns 1 (skip theme injection) when the
@@ -158,26 +158,29 @@ update_own_status() {
 
 usage() {
   cat <<'USAGE'
-formation - long-running peer AI agent panes (claude or codex)
+formation - long-running peer AI agent panes (claude, codex, or kimi)
 
 Parent (lead) commands:
-  formation spawn [--cli claude|codex] [--model <model>] [--task <label>]
+  formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>]
                   [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart
                                           rename-window from parent pane) or split current window (--split)
                                           Launches agent, injects briefing.
                                           Visibility (#93): pane border shows '<id> · <task>' colored
-                                          by cli (claude=blue, codex=orange) + 🔒sandbox marker on
-                                          the rare non-bypass workers;
+                                          by cli (claude=blue, codex=orange, kimi=magenta) + 🔒sandbox
+                                          marker on the rare non-bypass workers;
                                           claude workers also pin '🎯 <goal>' in a statusline
                                           (goal = first line under '## Mission' in the briefing,
                                           task label = --task or briefing basename).
                                           Sandbox default: Claude bypass; Codex workspace-write
                                             with approvals disabled and only FORMATION_HOME added
-                                            as an extra writable directory.
+                                            as an extra writable directory; Kimi --auto (autonomous),
+                                            guarded by the always-on harness-kimi bash guard.
                                           --bypass-sandbox forces full privilege bypass
-                                          (claude bypassPermissions / codex dangerously-bypass).
-                                          --sandbox forces normal sandbox/approval mode.
+                                          (claude bypassPermissions / codex dangerously-bypass /
+                                          kimi --auto).
+                                          --sandbox forces normal sandbox/approval mode
+                                          (kimi: the softer -y auto-approve).
                                           A one-line stderr notice states the chosen mode and why.
   formation msg <worker_id> <text>        Send instruction to worker pane
   formation status                        List active workers: task, age, last mailbox report
@@ -241,6 +244,8 @@ resolve_bypass_default() {
   # A normal-approval claude worker stalls at its first permission prompt and the
   # lead has to babysit it (observed twice this session), defeating the point of
   # an autonomous peer. --sandbox is the explicit opt-out back to normal approval.
+  # kimi follows the same autonomy-by-default rationale (its bash still goes
+  # through the always-on harness-kimi guard), so it also defaults to 1.
   echo 1
 }
 
@@ -251,6 +256,20 @@ codex_launch_flags() {
   else
     printf '%s %s %s %s %s %q' \
       --sandbox workspace-write --ask-for-approval never --add-dir "$FORMATION_HOME"
+  fi
+}
+
+# Kimi has no fine-grained sandbox like codex; its safety layer is the
+# always-on harness-kimi guard (kimi-guarded-bash via BASH_ENV), independent of
+# these flags. --auto = fully autonomous (no questions); -y = auto-approve tool
+# calls but the agent may still ask. Formation workers are autonomous peers, so
+# bypass=1 -> --auto, --sandbox (bypass=0) -> the softer -y.
+kimi_launch_flags() {
+  local bypass="$1"
+  if [[ "$bypass" == "1" ]]; then
+    echo "--auto"
+  else
+    echo "-y"
   fi
 }
 
@@ -276,8 +295,8 @@ cmd_spawn() {
       *) break ;;
     esac
   done
-  [[ "$cli" == "claude" || "$cli" == "codex" ]] || { echo "unknown --cli: $cli (claude|codex)" >&2; exit 2; }
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex] [--model <model>] [--task <label>] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+  [[ "$cli" == "claude" || "$cli" == "codex" || "$cli" == "kimi" ]] || { echo "unknown --cli: $cli (claude|codex|kimi)" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
 
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
@@ -349,6 +368,27 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     fi
     tmux send-keys -t "$pane_id" "codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
+  elif [[ "$cli" == "kimi" ]]; then
+    # Kimi: launch the interactive TUI, then inject the seed. Kimi has no
+    # positional prompt arg (its -p is one-shot non-interactive), so we can't
+    # pass the seed on the command line like codex — we wait for the TUI and
+    # double-tap submit it, same as claude. Autonomy via kimi_launch_flags; the
+    # always-on harness-kimi guard is the real safety layer, not a CLI sandbox.
+    session_name="kimi-$name"
+    local kimi_model_flag="" kimi_auto_flag
+    [[ -n "$model" ]] && kimi_model_flag="-m $model"
+    kimi_auto_flag="$(kimi_launch_flags "$bypass")"
+    if [[ "$bypass" == "1" ]]; then
+      echo "formation: spawning kimi worker '$name' with --auto (fully autonomous). Bash is intercepted by the harness-kimi guard; the briefing can drive local commands." >&2
+    else
+      echo "formation: spawning kimi worker '$name' with -y (auto-approve tool calls, agent may still ask). harness-kimi guard active." >&2
+    fi
+    tmux send-keys -t "$pane_id" "kimi $kimi_auto_flag $kimi_model_flag" Enter
+    # Kimi's prompt glyph isn't reliably greppable, so wait a fixed beat for the
+    # TUI to settle, then inject via the double-tap submit (the kimi textarea,
+    # like claude/codex, intermittently swallows a single Enter).
+    sleep 4
+    tmux_send_submit "$pane_id" "$seed"
   else
     # Claude Code: launch interactive then inject seed once prompt is ready.
     # Default (per #38): normal approval mode (security win) — claude does not

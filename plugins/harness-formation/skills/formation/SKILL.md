@@ -73,7 +73,7 @@ Template: `templates/briefing.md`, resolved relative to this `SKILL.md`.
 ### 2. Spawn
 
 ```bash
-formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
+formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   [--model <model>] [--task <label>] <path/to/briefing.md> [worker_name]
 ```
 
@@ -83,6 +83,13 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex] \
   `formation report/done/ask` autonomous without full filesystem bypass.
   `--bypass-sandbox` is an explicit high-risk Codex opt-in intended only when
   the process is already externally sandboxed. Flags go before the briefing.
+- **Kimi (`--cli kimi`)** launches the Kimi Code TUI with `--auto` (fully
+  autonomous); `--sandbox` picks the softer `-y` (auto-approve tools, may still
+  ask). Kimi has no CLI-level sandbox — its safety layer is the always-on
+  harness-kimi bash guard, so a kimi worker's shell is intercepted regardless of
+  flag. The seed briefing is injected into the TUI (Kimi has no positional
+  prompt arg). Coordinate via `formation msg`/tmux (Kimi has no `/remote-control`).
+  The offload target from `capacity-oracle substitute` (`k3`) lands here.
 - `--model` is omitted by default, so the worker inherits the global default
   model; set it explicitly when a worker needs a different tier than the
   session default.
