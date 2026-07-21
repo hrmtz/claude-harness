@@ -1,6 +1,6 @@
 ---
 name: dual-magi-review
-version: 0.6.0
+version: 0.8.0
 description: |
   Independent multi-perspective peer review for large design docs.
   Spawn 3 same-family sub-agent reviewers AND a cross-family reviewer
@@ -164,6 +164,11 @@ round). This avoids context exhaustion + makes state explicit in user transcript
 ### Step 2: Spawn 3 sub-agents in parallel
 
 Single message with 3 `Task` tool calls (= parallel execution):
+- **Each Task call MUST pass `model: "opus"` explicitly** (= review/批評系 child は opus 固定、
+  memory `feedback_ultramagi_children_opus_max`)。**理由: 省略すると親 model を継承する。親が
+  fable (Mythos-class) のとき子に fable がこぼれ、review 品質に寄与しないまま fable クォータを
+  無駄食いする（fable は親 orchestrator のみ、子に使うのは禁止）。opus 明示は親が opus/fable/sonnet の
+  いずれでも安全側。** review 品質は multi-perspective + cross-family(codex) で担保、子 tier ではない。
 - Each receives full doc as context
 - Each receives one perspective brief
 - Each must use structured finding schema (see § Finding schema)
@@ -308,6 +313,17 @@ Stop criteria (= user judges OR explicit flag for auto):
 2. All new findings LOW severity / nit
 3. Cumulative rounds = `--rounds N` max
 4. User says "ship" / "stop"
+5. **severity-gated terminal** (= v0.7.0、 Fable-class reviewer 対応): latest round (cross-family
+   含む) に invariant を破る NEW CRITICAL/HIGH がない → converge。 MED/LOW は doc revision せず
+   caller の deferred ledger (= `DEFERRED.md`) 行き、 実装 gate で解消。 **zero-findings は
+   Fable-class reviewer では到達不能** (2026-07-10 実測: 41 round 回しても毎 round 3-7 findings) —
+   findings ゼロ待ち・criterion 1 の発火待ちで loop を回し続けない。
+
+Runaway guard (= v0.7.0): round 5 到達で altitude checkpoint (= ship core / slice / descend to
+code の三択を明示提示)、 round 8 = hard stop (= 続行は user sign-off 必須)。 revision 後の
+re-review は **diff-scoped** (= diff + invariant を渡す、 unchanged text の再審は auto-dup 扱い)。
+enumerable detail (= grant list / opclass / column list 等) を prose で列挙する doc は altitude
+違反 — 修正は追記でなく executable gate 化 (= ultramagi § Convergence economics 参照)。
 
 ### Step 7: Mutation (= only if --apply-local or --commit-push)
 
@@ -627,6 +643,7 @@ PRS-LLM observed datum (= 4 applications):
 - **cross-family round skip 不能**: Claude 3 perspective 後 codex round で毎回 2-5 NEW finding (= 3 project 観測)
 - **多段 round で framing pivot**: 各 round で 1 段抽象高い primitive 発見 (= 例 provision_pg v1→v4: leak surface → atomicity → automation)、 線形 refine ではない
 - **ship gate = new/total<20%**: R1=100%→R2≈20%→R3≈10% で収束、 但し REJECT 残れば次 round 必須、 production minimum = 3 round
+- **Fable-class reviewer では ratio gate 不発** (= 2026-07-10 company-shared-hippocampus 実測): 41 round 回しても毎 round 3-7 findings (全部 grounded、 捏造でない)、 new-vs-dup ratio が閾値を切らない。 加えて **revision churn** (= r34 の fix が r35 の CRITICAL drift になる) で REVISE↔GO-WITH-REVISE を往復。 → severity-gated terminal (= stop criteria 5) + round budget + diff-scoped re-review が対応 rail
 
 ## Related skills
 
@@ -663,4 +680,6 @@ These are not prerequisites for skill function. Pattern is self-contained in thi
 | 2026-05-22 | 0.5.0 | **Schema-grounding mandate** を Step 2 sub-agent prompt template に baked-in (= 5/22 PRS-LLM ADR-TPN v0.1 incident 学習)。 AI 自起草 doc の 妄想 column / hallucinated schema を front-load catch、 全 sub-agent が必ず psql `\d` + grep migrations/core/api で table.column 実在 verify + populate state + 既存 code 挙動 premise drift を CRITICAL finding 化。 memory `feedback_design_doc_schema_grounding_required` の structural 上位対応、 behavioral rule から skill skeleton への昇格 |
 | 2026-05-22 | 0.5.1 | **Reviewer `verify_commands_executed` MUST-emit** 追加 (= 5/22 ADR-TPN v0.2 dual-magi v3 で MELCHIOR LOW #3 finding 即対応、 gh #194)。 v0.5.0 hook efficacy が anecdotal (= reviewer の self-report) だった問題を、 各 reviewer の output JSON に **実行 command 完全 list を MUST 含む** で measurable 化。 空 list or generic Read のみ = schema_grounding_verdict FAIL 自動判定、 round 全体が degraded mark。 user instruction「N+1 回目を待たない、 100 回叩く前に構造で先回り」 の literal application、 incident → memory → skill skeleton → output-format-mandate の 4 段 escalation 完了 |
 | 2026-05-22 | 0.6.0 | **Cross-family default mandatory** (= gh #195 incident 学習)。 v0.5.x までは `--external` opt-in flag、 同日 citation pipeline refactor v0.5 で 4 Claude same-family round plateau CONFIRM 4.3/4.5/4.8 到達後 Codex 1 round REJECT 1/5 + **6 NEW CRITICAL** (= Claude 全 round 全 miss、 production-shape dict drift / paradigm 矛盾 / GLOBAL rewrite span 等)。 root cause = memory `feedback_dual_magi_mandatory_for_scripts` mandate と skill default の乖離、 私 (= AI) が flag 忘れて skip。 structural fix 3 点: (1) `--external` default = `codex-exec` adapter で auto final round (= zero-config sync invocation、 `codex exec --skip-git-repo-check -`)、 (2) plateau CONFIRM declaration block until cross-family round recorded、 (3) cross-family REJECT/CRITICAL → final verdict 優先 overrule Claude CONFIRM。 `--no-cross-family <reason>` opt-out は valid reason 限定 (= quick-iteration / non-design-artifact) + telemetry audit。 memory `feedback_dual_magi_mandatory_for_scripts` の behavioral rule を skill default に焼付け、 私 (= Claude) の self-discipline failure を structural rail で先回り。 v0.5.0 schema-grounding と同 escalation pattern (= behavioral → skill skeleton)、 incident → memory → skill default の 3 段昇格 完了 |
+| 2026-07-10 | 0.7.0 | **Severity-gated terminal + runaway guard** (= company-shared-hippocampus 41-round run 学習)。 Fable-class reviewer は zero-findings に到達しない (実測: 41 round × 3-7 findings/round、 全部 grounded) ため ratio gate (= criterion 1) が不発、 加えて revision churn (= fix が次 round の CRITICAL になる) で verdict 往復。 structural fix: (1) stop criteria 5 = invariant を破る NEW CRITICAL/HIGH なし → converge、 MED/LOW は DEFERRED.md 行き (doc revision しない)、 (2) round 5 altitude checkpoint / round 8 hard stop、 (3) diff-scoped re-review、 (4) enumerable detail の prose 列挙は altitude 違反 → executable gate 化。 ultramagi v0.2.0 § Convergence economics と対 |
+| 2026-07-21 | 0.8.0 | **Drift reconciliation (#98)** — installed live 0.7.0 (opus-pin, severity-gated terminal) had never been committed to source, while source had independently gained the `Family routing policy` section and the plateau-gate script count grew G7→G9. Merged into one canonical superset (installed 0.7.0 as base + source-only routing section + G9 fix), re-established source as SoT. No behavior removed from either side. |
 | 2026-05-14 | 0.2.0 | Round 1 dual-Magi review applied (= 12 findings consolidated from Claude Magi v1-1/2/3 + Codex Magi v1-1/2/3 + Codex synthesis). Key changes: <br>- Tool name: `Agent` → `Task` (= Anthropic CLI canonical) <br>- Mutation opt-in (= review-only default, --apply-local / --commit-push flags) <br>- 1 invocation = 1 round pattern (= no in-skill loop, user re-invokes) <br>- Structured finding schema (= 10 fields) <br>- Standardized correlation fields (= request_id UUID + artifact_sha + round + response_kind + expected_count) <br>- Adapter abstraction (= cross-family transport pluggable; codex-mailbox / webhook / shared-file) <br>- Domain presets extracted to `examples/` <br>- Anti-patterns + Troubleshooting sections (= per formation template) <br>- Compressed description for skill-list rendering <br>- EN trigger keywords added <br>- Memory references demoted to optional reference material <br>- Created `feedback_dual_magi_iterative_review.md` memory (= dead reference fix) <br>- Self-application: this v0.2.0 is the recursive output of v0.1.0 reviewed by the pattern it codifies |

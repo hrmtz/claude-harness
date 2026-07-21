@@ -1,6 +1,6 @@
 ---
 name: ultramagi
-version: 0.1.0
+version: 0.3.0
 description: >-
   End-to-end rigor loop for a non-trivial, hard-to-reverse change: local plan/design →
   dual-magi review to PLATEAU → code → dual-magi/bug-hunt on the implementation → code-review →
@@ -113,19 +113,56 @@ degraded_until: <what must run before ship>
 [6] NEXT       update the epic checkboxes; pick the next task; back to [0].
 ```
 
-## Plateau definition (when [2] stops)
+## Plateau definition (when [2] stops) — severity-gated (v0.2.0)
 
 A design is at plateau ONLY when **all** hold:
 1. No `REJECT` verdict in the latest round.
-2. New-vs-prior findings ratio < ~20% (the round is mostly re-confirming, not discovering).
+2. No NEW `CRITICAL`/`HIGH` finding **that breaks the stated invariant** in the latest round
+   (cross-family included). MED/LOW/nit findings do **NOT** block plateau — they go to the
+   deferred ledger (see § Convergence economics), not into another doc revision.
 3. A **cross-family (codex) round** has run on the current revision with a non-blocking verdict
    (`GO` / `GO-WITH-REVISE` whose revisions are minor). Same-family Claude CONFIRM is **never**
    plateau (gh #195: 4 Claude CONFIRM rounds → codex 1 round = REJECT + 6 new criticals).
 4. Every load-bearing claim is schema-grounded (verified against the live DB / code, not prose).
 
-If a round surfaces NEW criticals (even at `GO-WITH-REVISE`), it is **not** plateau — revise and
-re-review. Productive rounds (new findings) mean keep going; a round that only re-states prior
-findings means ship.
+**Zero-findings is NOT a reachable state** with Fable-class reviewers — every round emits 3-7
+findings indefinitely (field datum 2026-07-10, company-shared-hippocampus: 41 rounds, findings
+never reached zero). Do not wait for it, and do not treat the old "new-vs-prior ratio < 20%"
+as a requirement — with strong reviewers it never fires. The ratio remains a *signal*; the
+severity gate above is the *criterion*.
+
+If a round surfaces NEW criticals that break the invariant, it is **not** plateau — revise
+(minimally, see churn rule) and re-review.
+
+## Convergence economics (v0.2.0 — token budget + altitude rails)
+
+Rigor per round is worthless if the loop never terminates. Four rails, all learned from the
+2026-07-10 41-round run:
+
+- **Round budget.** Design gate [2] soft budget = **5 rounds**. Hitting it does not mean "keep
+  grinding" — it triggers a mandatory **altitude checkpoint**: choose (a) ship the plateau'd
+  core and defer the rest, (b) slice the doc into smaller per-task docs, or (c) descend — stop
+  reviewing prose and start writing the code + executable checks that settle the open questions.
+  **8 rounds = hard stop**; continuing requires explicit user sign-off with a stated reason.
+- **Deferred ledger.** MED/LOW findings are recorded in `${doc_dir}/.dual-magi-<slug>/DEFERRED.md`
+  with the gate that will resolve each ([4] bug-hunt / [5] code-review / a named executable
+  check). The doc is NOT revised for them.
+- **Revision churn rule.** Every doc revision is new review surface: the fix for round N
+  routinely becomes round N+1's finding (field datum: the r34 grant fix itself was r35's
+  CRITICAL doc-vs-reality drift). Therefore: revise only for REJECT/CRITICAL/HIGH, minimal
+  span, no opportunistic rewriting; and re-review rounds after a revision are **diff-scoped** —
+  reviewers get the diff + the invariant, and re-litigation of unchanged text is auto-dup.
+- **Altitude rule (execution-derived, not text-derived).** If a finding class concerns
+  enumerable implementation detail that a script can derive or verify (grant lists, SQL
+  operators/opclasses, column lists, sequence privileges), the fix is NOT more prose — it is
+  an **executable gate** in the build ([3]/[4]). A doc that keeps generating this finding class
+  is written below design altitude (field datum: 3 straight rounds of grant whack-a-mole until
+  a reviewer itself concluded "the grant list must be execution-derived, not text-derived").
+  Design-doc altitude = invariants + interfaces + irreversibility strategy; enumerable detail
+  belongs to code and checks.
+- **Scope freeze.** A capability or section added *during* review is a new slice/task, never
+  inline review material — mid-review scope growth is what re-opened CRITICAL space at r29
+  after the doc had been at GO-WITH-REVISE since r13.
 
 ## Gates that block the irreversible step
 
@@ -159,12 +196,18 @@ For a product/launch task swap in security-abuse and business/GTM lenses.
 
 Drive it from the main loop, or from inside a Workflow:
 
+> **子 agent の model 固定（必須、memory `feedback_ultramagi_children_opus_max`）**: review/批評/verify
+> 系の子は **`model: "opus"` を必ず明示**（Agent tool は `model:"opus"`、Workflow の `agent()` は
+> `opts.model:"opus"`）。実装専任の子は `sonnet`。**省略すると親 model を継承する** — 親が **fable
+> (Mythos-class) のとき子に fable がこぼれ、review 品質に寄与しないまま fable クォータを無駄食いする
+> (fable は親 orchestrator のみ、子に使うのは禁止)**。opus 明示は親が opus/fable/sonnet のどれでも安全側。
+
 - **Design gate** → invoke the `dual-magi-review` skill (it runs Claude×3 + codex per round and
   synthesizes findings). Loop it (one invocation per round) until plateau.
 - **Build** → write the repo-baked, backup-first, gated scripts.
 - **Implementation gate (bug-hunt)** → a Workflow with `parallel()` of 3–5 adversarial reviewer
-  agents (each with a `schema`-typed findings return) that RUN read-only verification and return
-  structured findings; fix + re-run until clean. (This is the dedup-script-review pattern.)
+  agents (**each spawned with `opts.model: "opus"`** — 上記) that RUN read-only verification and
+  return structured findings (`schema`-typed); fix + re-run until clean. (dedup-script-review pattern.)
 - **code-review** → the `/code-review` skill (or `/simplify` for quality-only).
 
 When the user runs a **Workflow** for multi-agent execution, ultramagi is the contract that each
@@ -182,6 +225,10 @@ never `build → swap` directly.
 | `--confirm` as the only swap guard | an agent / operator clears it on bad state | programmatic coverage/residual/invariant gate in the script |
 | one mega design doc for the whole epic | un-reviewable, un-shippable | one task per loop, epic tracks the list |
 | `--apply`/auto-mutate by default | overwrites work, hides drift | review-only default; mutation opt-in |
+| reviewing until zero findings | Fable-class reviewers never emit zero; loop runs away (41-round field datum) | severity-gated plateau + deferred ledger |
+| revising the doc for MED/LOW every round | revision churn — each fix is new review surface | defer to gate [4]/[5] via DEFERRED.md |
+| prose that enumerates machine-derivable detail (grants, opclasses, column lists) | whack-a-mole finding class; doc below design altitude | executable gate in the build; execution-derived, not text-derived |
+| full-doc re-review after a small revision | re-litigates unchanged text, burns tokens | diff-scoped re-review with invariant attached |
 
 ## Cost / cadence
 
@@ -190,6 +237,10 @@ varies, bug-hunt ~1 workflow (~10 min), code-review ~5 min. A hard canonical tas
 loop — that is the point; it is cheaper than restoring corrupted canonical data. Scope to the
 task's blast radius: a tiny diff doesn't need ultramagi (use /simplify); a 436K-row author dedup
 or a public launch does.
+
+At each round's synthesis, report **round count vs budget + cumulative walltime** so runaway
+loops are visible in-flight, not post-mortem (the 41-round run burned ~4.7h before anyone
+counted).
 
 ## Related
 
@@ -204,3 +255,5 @@ or a public launch does.
 | date | version | change |
 |---|---|---|
 | 2026-06-02 | 0.1.0 | Initial — codifies the design→dual-magi→code→bug-hunt→code-review loop proven on the PRS-LLM authors-dedup (caught 3 data-corruption bugs at the gates). |
+| 2026-07-10 | 0.2.0 | **Convergence economics** — learned from the company-shared-hippocampus run (41 rounds, ~4.7h, findings never reached zero under Fable-class reviewers). Plateau redefined severity-gated (new CRITICAL/HIGH breaking the invariant blocks; MED/LOW → deferred ledger, never a doc revision). Added: round budget (soft 5 / hard 8 with user sign-off) + altitude checkpoint, revision churn rule (fix-minimal + diff-scoped re-review; the r34 fix was r35's CRITICAL), altitude rule (execution-derived not text-derived — enumerable detail goes to executable gates, not prose), scope freeze during review, per-round budget/walltime reporting. |
+| 2026-07-21 | 0.3.0 | **Drift reconciliation (#98)** — the live installed 0.2.0 (convergence economics) had never been committed to source, while source had independently gained the `Default family routing` section + `[2b] BATTLE` phase + flow routing hints. Merged both into a single canonical superset (installed 0.2.0 as base + source-only routing/battle content) and re-established source as SoT. No behavior removed from either side. |
