@@ -1,5 +1,5 @@
 {
-  "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), install-grok-hooks.sh (grok), harness-kimi/guard-check.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
+  "description": "Cross-CLI hook overlay (gh #55). The SSOT for events/matchers/timeouts is each plugin's hooks/hooks.json; this file only selects WHICH hooks each non-Claude CLI consumes, and in what order. Claude Code consumes the full hooks.json union via scripts/sync_hooks_to_live.py. Consumers: install-codex-hooks.sh (codex), install-grok-hooks.sh (grok), install-kimi-hooks.sh (kimi), scripts/check_cross_cli_hooks.sh (drift test).",
   "codex": {
     "note": "Codex consumes the portable subset. String entries must resolve uniquely in the owning hooks.json; object entries select an explicit event when the same command is registered more than once. event/matcher/timeout are looked up from the owning plugin's hooks.json. Order within an event is preserved in the generated TOML.",
     "hooks": [
@@ -76,19 +76,31 @@
     "external": []
   },
   "kimi": {
-    "note": "Bash-command-string guards only (BASH_ENV interception, gh #52) — Kimi has no native hook API, so only PreToolUse/Bash-shaped hooks apply. insurance runs first and never blocks; gates deny with rc=2; hints go to stderr.",
-    "insurance": [
-      "harness-core/hooks/sanada_autobackup.sh"
-    ],
-    "gates": [
+    "note": "Native Kimi hooks via ~/.kimi-code/config.toml [[hooks]] (install-kimi-hooks.sh), Kimi Code CLI >= 0.28 (gh #54). Kimi's payload is Claude-shaped snake_case and honors the same hookSpecificOutput JSON contract (verified 2026-07-21), so the hook scripts run unmodified; only lib.sh absorbs .tool_output (PostToolUse result string) and wire.jsonl resolution. Supersedes the BASH_ENV interception layer (#52, deprecated). Stop/SubagentStop gates (sr_depth_gate, stall_autocontinue) are NOT ported: they parse Claude transcript structure. event/matcher/timeout are looked up from the owning plugin's hooks.json (same SSOT as codex/grok). Order within an event is preserved.",
+    "hooks": [
+      "harness-core/hooks/sanada_autobackup.sh",
       "harness-core/hooks/bash_command_guard.sh",
       "harness-core/hooks/branch_policy_guard.sh",
       "harness-core/hooks/pg_rotation_propagation_guard.sh",
       "harness-rails/hooks/pipeline_preflight_gate.sh",
-      "harness-rails/hooks/phase_review_gate.sh"
-    ],
-    "hints": [
-      "harness-core/hooks/long_task_advisor.sh"
+      "harness-rails/hooks/phase_review_gate.sh",
+      "harness-core/hooks/long_task_advisor.sh",
+      {
+        "path": "harness-core/hooks/credential_file_read_guard.sh",
+        "event": "PreToolUse",
+        "matcher": "Read"
+      },
+      {
+        "path": "harness-core/hooks/credential_file_read_guard.sh",
+        "event": "PreToolUse",
+        "matcher": "mcp__.*__(read_file|read_text_file|get_file)$"
+      },
+      "harness-core/hooks/check_zsh_reserved_vars.sh",
+      "harness-core/hooks/check_early_check_timer.sh",
+      "harness-core/hooks/credential_value_scrub.sh",
+      "harness-core/hooks/credential_scrub.sh",
+      "harness-core/hooks/admission_reminder.sh",
+      "harness-core/hooks/code_review_suggest.sh"
     ]
   }
 }

@@ -1,7 +1,8 @@
 #!/bin/bash
 # install-grok-hooks.sh — wire harness hooks into ~/.grok/hooks/harness.json
 #
-# Grok has a NATIVE hook API (unlike Kimi), so this is a close cousin of
+# Grok has a NATIVE hook API (Kimi >= 0.28 got one too — see install-kimi-hooks.sh),
+# so this is a close cousin of
 # install-codex-hooks.sh: the hook SET comes from plugins/cross_cli_hooks.json
 # (gh #55, grok section); the event/matcher/timeout for each hook is looked up
 # from the owning plugin's hooks/hooks.json (the same SSOT that drives Claude via

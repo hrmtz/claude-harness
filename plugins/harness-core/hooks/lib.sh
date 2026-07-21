@@ -7,6 +7,15 @@
 # active_jsonl in the same script). Hooks that don't set HOOK_INPUT fall back
 # to reading stdin directly (backward-compatible with older Claude Code style).
 #
+# Kimi compat (gh #54, harness-kimi native hooks): Kimi Code CLI >= 0.28 has a
+# native hook API whose payload is already Claude-shaped snake_case
+# (.tool_input.command, .tool_name, .session_id, .prompt) and which honors the
+# same hookSpecificOutput permissionDecision/additionalContext JSON contract
+# (verified empirically 2026-07-21, including the extra hookEventName field).
+# Only two deltas need absorbing here: PostToolUse carries the result as a plain
+# string under .tool_output (not .tool_response), and there is no transcript_path
+# — the session log is ~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl.
+#
 # Grok compat (gh #55, harness-grok): Grok delivers a different payload shape —
 # tool input under `.toolInput` (camelCase) not `.tool_input`, tool name under
 # `.toolName` (= run_terminal_command/read_file/search_replace) not `.tool_name`,
@@ -29,8 +38,9 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 # ----------------------------------------
 # Prefers transcript_path from hook JSON context (works for both Claude Code and
 # Codex). For Grok, which has no transcript_path, resolves the session's
-# chat_history.jsonl by its unique sessionId. Falls back to scanning
-# ~/.claude/projects/ for Claude Code sessions that don't set HOOK_INPUT.
+# chat_history.jsonl by its unique sessionId. For Kimi, resolves the session's
+# wire.jsonl by its session_id (== the session directory name). Falls back to
+# scanning ~/.claude/projects/ for Claude Code sessions that don't set HOOK_INPUT.
 active_jsonl() {
     if [ -n "${HOOK_INPUT:-}" ]; then
         local tp
@@ -38,6 +48,18 @@ active_jsonl() {
         if [ -n "$tp" ] && [ -f "$tp" ]; then
             echo "$tp"
             return 0
+        fi
+    fi
+    # Kimi: transcript lives at $KIMI_CODE_HOME/sessions/<wd>/<session_id>/
+    # agents/main/wire.jsonl. The payload's .session_id is the session directory
+    # name (verified 2026-07-21), so we glob it across workspace dirs rather than
+    # re-deriving Kimi's wd_<name>_<hash> encoding.
+    if [ -n "${HOOK_INPUT:-}" ]; then
+        local ksid kj
+        ksid=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+        if [ -n "$ksid" ]; then
+            kj=$(ls -t "${KIMI_CODE_HOME:-$HOME/.kimi-code}"/sessions/*/"$ksid"/agents/main/wire.jsonl 2>/dev/null | head -1)
+            [ -n "$kj" ] && { echo "$kj"; return 0; }
         fi
     fi
     # Grok: transcript lives at ~/.grok/sessions/<pct-encoded-workspace>/<sid>/
@@ -162,12 +184,16 @@ parse_tool_output() {
     # `.toolResponse` (or `.toolOutput`). We add those alternates + a tostring
     # fallback so a Grok-shaped result is scanned too; the trailing tostring on each
     # container serializes whatever shape survives so no leak silently escapes.
+    # Kimi compat (gh #54): Kimi's PostToolUse carries the result as a plain string
+    # under `.tool_output`; tostring keeps it forward-compatible if it ever becomes
+    # a structured object.
     printf '%s' "$input" | jq -r '
         (.tool_response.stdout? // empty),
         (.tool_response.stderr? // empty),
         (.tool_response.output? // empty),
         (.tool_response.content? // empty),
         (.tool_response | select(. != null) | tostring),
+        ((.tool_output? // empty) | if type == "string" then . else tostring end),
         (.toolResponse.stdout? // empty),
         (.toolResponse.stderr? // empty),
         (.toolResponse.output? // empty),
@@ -286,8 +312,12 @@ recent_assistant_turns() {
     # Claude/Codex: assistant text under .message.content[].text (array of parts).
     # Grok chat_history.jsonl: {"type":"assistant","content":"<string>"} — plain
     # string content. Try the Claude array walk first, then the Grok string.
+    # Kimi wire.jsonl: assistant text lives in context.append_loop_event entries as
+    # .event{type:"content.part", part:{type:"text", text}} — walk those too.
     tac "$jsonl" 2>/dev/null \
-        | jq -r 'select(.type == "assistant")
-                 | (.message.content[]?.text // (.content | select(type == "string")) // empty)' 2>/dev/null \
+        | jq -r '(select(.type == "assistant")
+                  | (.message.content[]?.text // (.content | select(type == "string")) // empty)),
+                 (select(.type == "context.append_loop_event" and .event.type == "content.part" and .event.part.type == "text")
+                  | .event.part.text)' 2>/dev/null \
         | head -n "$n"
 }

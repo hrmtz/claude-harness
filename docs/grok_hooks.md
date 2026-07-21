@@ -6,7 +6,8 @@ This document records the harness-grok port (gh #55) — how Grok's native hook
 API differs from Claude Code / Codex, the defect the port closes, and the setup
 procedure for wiring harness hooks into Grok.
 
-Unlike Kimi (no native hook API → BASH_ENV interception, see `kimi_hooks.md`),
+Unlike Kimi at the time (no native hook API → BASH_ENV interception; Kimi >= 0.28
+later shipped native hooks — see `kimi_hooks.md`),
 Grok has a **native hook engine** modeled closely on Claude Code, so the port is
 a close cousin of the Codex one: a curated hook set in `cross_cli_hooks.json`
 plus an installer that writes Grok's config. The catch is that Grok's *payload

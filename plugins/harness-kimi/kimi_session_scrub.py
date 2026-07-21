@@ -2,8 +2,10 @@
 """
 kimi_session_scrub.py — periodic credential scrubber for Kimi Code CLI sessions.
 
-Kimi has no PostToolUse hook, so this script runs out-of-band (cron or systemd
-timer) and scans every active Kimi wire.jsonl for known credential literals.
+Kimi's native PostToolUse hook (>= 0.28) is observe-only — it cannot block and
+fires per tool call — so this script runs out-of-band (cron or systemd
+timer) as the standing detective layer, scanning every active Kimi wire.jsonl
+for known credential literals.
 Matches are redacted in-place with a generic <REDACTED> marker.
 
 It reuses the HMAC manifest/salt system from claude-harness harness-core

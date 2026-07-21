@@ -1,4 +1,48 @@
-# Kimi Hooks — BASH_ENV Interception Design and Setup
+# Kimi Hooks — Native Hook API (current) + BASH_ENV Interception (legacy)
+
+## Native hooks (current, gh #54)
+
+Kimi Code CLI >= 0.28 ships a native hook API: `[[hooks]]` entries in
+`~/.kimi-code/config.toml` with `event` / `matcher` / `command` / `timeout`.
+harness-kimi now uses it as the primary layer — the BASH_ENV interception
+below is kept as a historical record only.
+
+Empirically verified on 0.28.1 (2026-07-21):
+
+- The payload is Claude-shaped snake_case: `hook_event_name`, `session_id`,
+  `cwd`, `tool_name`, `tool_input` (e.g. `.tool_input.command`), plus
+  `tool_call_id` on tool events. UserPromptSubmit carries `.prompt`.
+- PostToolUse carries the result as a **plain string** under `.tool_output`
+  (not `.tool_response`) — absorbed by `lib.sh parse_tool_output`.
+- There is no `transcript_path`; the session log is
+  `$KIMI_CODE_HOME/sessions/<wd>/<session_id>/agents/main/wire.jsonl` where the
+  payload's `session_id` IS the directory name — resolved by `lib.sh active_jsonl`.
+- Kimi honors the Claude JSON contract **including the extra `hookEventName`
+  field**: `{"hookSpecificOutput":{"permissionDecision":"deny",...}}` blocks,
+  and `{"hookSpecificOutput":{"additionalContext":...}}` injects context on
+  UserPromptSubmit. Exit 2 + stderr also blocks (documented path).
+- Blockable events: PreToolUse, Stop, UserPromptSubmit. PostToolUse,
+  SessionStart, SubagentStop etc. are observe-only (fire-and-forget).
+- Fail-open: hook error/timeout defaults to allow.
+
+Wiring: `install-kimi-hooks.sh` reads the kimi section of
+`plugins/cross_cli_hooks.json` (hook set) and each plugin's `hooks/hooks.json`
+(event/matcher/timeout SSOT), generates `[[hooks]]` TOML, and merges it into
+`config.toml` inside a marker block (idempotent, backup + tomllib validation
+before install). Drift check: `scripts/check_cross_cli_hooks.sh --live`.
+
+Not ported: the Stop/SubagentStop gates (`sr_depth_gate.py`,
+`stall_autocontinue.sh`) parse Claude transcript structure and stay
+Claude/Codex-only. The wire.jsonl cron scrubber remains as the detective layer
+(PostToolUse cannot block).
+
+---
+
+## Legacy: BASH_ENV interception design (#52, deprecated)
+
+> Deprecated in favor of the native hooks above. Kept as a design record;
+> the scripts remain in the repo so existing installs can be uninstalled
+> (see plugins/harness-kimi/README.md "Legacy" for the migration steps).
 
 ## Background
 

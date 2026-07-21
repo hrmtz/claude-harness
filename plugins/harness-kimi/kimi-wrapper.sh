@@ -176,50 +176,10 @@ setup_formation_identity() {
 
 setup_formation_identity
 
-# Optional: route Bash tool calls through the harness guard wrapper.
-# This only takes effect when HARNESS_KIMI_BASH_GUARD=1 is set.
-#
-# Two interception layers (issue #52):
-#   1. BASH_ENV — bash sources guard-env.sh at every non-interactive start,
-#      catching absolute-path /bin/bash -c (Kimi's actual invocation style).
-#   2. PATH shim — guarded-bash-dir/bash, kept as fallback for PATH-resolved
-#      `bash` and for tools that honor PATH.
-setup_bash_guard() {
-    if [[ "${HARNESS_KIMI_BASH_GUARD:-0}" != "1" ]]; then
-        return 0
-    fi
-    local real_bash guard_dir
-    guard_dir="$HOME/.kimi-code/bin/guarded-bash-dir"
-    if [[ ! -x "$guard_dir/bash" ]]; then
-        echo "[harness-kimi] warning: HARNESS_KIMI_BASH_GUARD is set but $guard_dir/bash is missing." >&2
-        echo "  Run: $HERE/install-kimi-bash-guard.sh" >&2
-        return 0
-    fi
-    # Resolve the REAL bash, never the shim. In a nested guarded launch PATH
-    # already starts with guard_dir, so `command -v bash` would return the shim
-    # and guarded-bash.sh would exec-loop on itself (code-review #52 finding).
-    # Use `command -v -p` (default system PATH) and reject the shim explicitly.
-    real_bash="$(command -v -p bash 2>/dev/null || echo /bin/bash)"
-    if [[ "$real_bash" == "$guard_dir/bash" || "$real_bash" -ef "$guard_dir/bash" ]] 2>/dev/null; then
-        real_bash="/bin/bash"
-    fi
-    export HARNESS_KIMI_REAL_BASH="$real_bash"
-    # Idempotent PATH prepend: don't stack guard_dir if a parent launch already
-    # added it (keeps PATH bounded across nested launches).
-    case ":$PATH:" in
-        *":$guard_dir:"*) ;;
-        *) export PATH="$guard_dir:$PATH" ;;
-    esac
-
-    if [[ -f "$guard_dir/guard-env.sh" ]]; then
-        export BASH_ENV="$guard_dir/guard-env.sh"
-        export HARNESS_KIMI_GUARD_CHECK="$guard_dir/guard-check.sh"
-    else
-        echo "[harness-kimi] warning: $guard_dir/guard-env.sh missing — absolute-path /bin/bash calls are UNGUARDED." >&2
-        echo "  Run: $HERE/install-kimi-bash-guard.sh" >&2
-    fi
-}
-
-setup_bash_guard
+# NOTE: the BASH_ENV / PATH-shim Bash guard (issue #52) was removed — Kimi Code
+# CLI >= 0.28 has a native PreToolUse hook API, and install-kimi-hooks.sh wires
+# the same guards through it, closing the layer's known bypasses (bash --posix,
+# bash -i, sh -c) with no interception tricks. HARNESS_KIMI_BASH_GUARD is now
+# ignored. See docs/kimi_hooks.md.
 
 exec "$REAL_KIMI" "$@"

@@ -8,8 +8,8 @@
 #
 # Live checks (--live):
 #   3. the claude-harness-owned Codex block contains exactly the overlay commands
-#   4. installed kimi guard core (~/.kimi-code/bin/guarded-bash-dir/guard-check.sh)
-#      is identical to the repo version
+#   4. the harness-kimi marker block in ~/.kimi-code/config.toml contains exactly
+#      the overlay's kimi hook commands
 #   5. ~/.grok/hooks/harness.json contains exactly the overlay's grok hook commands
 #
 # Exit: 0 in sync, 1 drift found.
@@ -27,7 +27,7 @@ err() { echo "DRIFT: $*" >&2; fail=1; }
 [[ -f "$OVERLAY" ]] || { echo "error: $OVERLAY missing" >&2; exit 1; }
 
 # All hook paths referenced anywhere in the overlay.
-mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .grok.hooks[], .kimi.insurance[], .kimi.gates[], .kimi.hints[]] | map(if type == "object" then .path else . end) | unique | .[]' "$OVERLAY")
+mapfile -t ALL_HOOKS < <(jq -r '[.codex.hooks[], .grok.hooks[], .kimi.hooks[]] | map(if type == "object" then .path else . end) | unique | .[]' "$OVERLAY")
 
 for hook in "${ALL_HOOKS[@]}"; do
     plugin="${hook%%/*}"
@@ -136,13 +136,20 @@ PYEOF
         echo "skip: $GROK_HOOKS not present"
     fi
 
-    # 4. installed kimi guard core is current
-    KIMI_CHECK="$HOME/.kimi-code/bin/guarded-bash-dir/guard-check.sh"
-    if [[ -f "$KIMI_CHECK" ]]; then
-        cmp -s "$PLUGINS_DIR/harness-kimi/guard-check.sh" "$KIMI_CHECK" \
-            || err "installed kimi guard-check.sh is stale (run harness-kimi/install-kimi-bash-guard.sh)"
+    # 4. kimi config.toml marker block carries exactly the overlay set (commands only)
+    KIMI_CONFIG="${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml"
+    if [[ -f "$KIMI_CONFIG" ]] && grep -qF '# >>> harness-kimi hooks' "$KIMI_CONFIG"; then
+        want=$(mktemp); got=$(mktemp)
+        jq -r '.kimi.hooks[] | if type == "object" then .path else . end' "$OVERLAY" \
+            | sed "s|^|bash $PLUGINS_DIR/|" | sort > "$want"
+        sed -n '/# >>> harness-kimi hooks/,/# <<< harness-kimi hooks <<</p' "$KIMI_CONFIG" \
+            | sed -n "s/^command = ['\"]\\(.*\\)['\"]$/\\1/p" | sort > "$got"
+        if ! diff -u "$want" "$got" >&2; then
+            err "kimi config.toml hook block differs from overlay (run install-kimi-hooks.sh)"
+        fi
+        rm -f "$want" "$got"
     else
-        echo "skip: kimi guard not installed"
+        echo "skip: no harness-kimi hook block in $KIMI_CONFIG"
     fi
 fi
 

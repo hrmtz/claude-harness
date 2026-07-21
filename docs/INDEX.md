@@ -27,6 +27,8 @@
 |---|---|
 | [`releases/v1.0.0.md`](releases/v1.0.0.md) | Public-safe hardening release: opt-in incident automation, genericized paths, legacy-state compatibility |
 | [`releases/v1.0.0_ja.md`](releases/v1.0.0_ja.md) | 上記の日本語版 |
+| [`releases/v1.7.0.md`](releases/v1.7.0.md) | harness-kimi native hook port (#54): Kimi >= 0.28 `[[hooks]]` wiring, BASH_ENV layer deprecated |
+| [`releases/v1.7.0_ja.md`](releases/v1.7.0_ja.md) | 上記の日本語版 |
 
 ## Quick reference: which plugin for which situation
 
