@@ -1,6 +1,6 @@
 ---
 name: ultramagi
-version: 0.3.0
+version: 0.4.0
 description: >-
   End-to-end rigor loop for a non-trivial, hard-to-reverse change: local plan/design →
   dual-magi review to PLATEAU → code → dual-magi/bug-hunt on the implementation → code-review →
@@ -202,6 +202,16 @@ Drive it from the main loop, or from inside a Workflow:
 > (Mythos-class) のとき子に fable がこぼれ、review 品質に寄与しないまま fable クォータを無駄食いする
 > (fable は親 orchestrator のみ、子に使うのは禁止)**。opus 明示は親が opus/fable/sonnet のどれでも安全側。
 
+> **Headroom-aware child tier（capacity-oracle、任意・fail-open）**: Claude は実運用で唯一
+> subscription 枠を焼き切る family（Codex/Kimi はほぼ枯渇しない）。heavy な review/verify fan-out
+> の前に Claude の live headroom を oracle に問う — `capacity-oracle substitute -q '.keep'`
+> （CLI 不在なら fail-open で opus のまま）。`true` = Claude に余裕 → 上記どおり子は **opus**。
+> `false` = Claude が offload floor 未満 = 熱い → 同一 family の review 子を **`model:"sonnet"`**
+> に格下げして残枠を伸ばす（sonnet も**明示 tier** なので fable 継承 leak ではない）。子 tier を
+> 下げても review 品質は multi-perspective 幅 + **必須 codex cross-family round** で担保される（=
+> 上の opus-pin の論旨そのもの）。cross-family round は Codex（枯渇しない）なので Claude が熱いときこそ
+> full weight で回す — 決して薄めない。cf. capacity-oracle-mcp#92 / docs/WIRING.md §3。
+
 - **Design gate** → invoke the `dual-magi-review` skill (it runs Claude×3 + codex per round and
   synthesizes findings). Loop it (one invocation per round) until plateau.
 - **Build** → write the repo-baked, backup-first, gated scripts.
@@ -256,4 +266,5 @@ counted).
 |---|---|---|
 | 2026-06-02 | 0.1.0 | Initial — codifies the design→dual-magi→code→bug-hunt→code-review loop proven on the PRS-LLM authors-dedup (caught 3 data-corruption bugs at the gates). |
 | 2026-07-10 | 0.2.0 | **Convergence economics** — learned from the company-shared-hippocampus run (41 rounds, ~4.7h, findings never reached zero under Fable-class reviewers). Plateau redefined severity-gated (new CRITICAL/HIGH breaking the invariant blocks; MED/LOW → deferred ledger, never a doc revision). Added: round budget (soft 5 / hard 8 with user sign-off) + altitude checkpoint, revision churn rule (fix-minimal + diff-scoped re-review; the r34 fix was r35's CRITICAL), altitude rule (execution-derived not text-derived — enumerable detail goes to executable gates, not prose), scope freeze during review, per-round budget/walltime reporting. |
+| 2026-07-21 | 0.4.0 | **Headroom-aware child tier (capacity-oracle #92 / claude-harness#97)** — before a heavy review/verify fan-out, consult `capacity-oracle substitute -q '.keep'` (fail-open if the CLI is absent). Claude is the only family that routinely exhausts its subscription; when it's below the offload floor, downgrade same-family review children opus→sonnet (still an explicit tier, never inherited fable) to stretch its budget — quality is carried by multi-perspective breadth + the mandatory Codex round, not child tier. Cross-family (Codex) round stays full-weight. |
 | 2026-07-21 | 0.3.0 | **Drift reconciliation (#98)** — the live installed 0.2.0 (convergence economics) had never been committed to source, while source had independently gained the `Default family routing` section + `[2b] BATTLE` phase + flow routing hints. Merged both into a single canonical superset (installed 0.2.0 as base + source-only routing/battle content) and re-established source as SoT. No behavior removed from either side. |
