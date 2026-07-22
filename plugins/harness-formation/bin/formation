@@ -410,10 +410,18 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
       echo "formation: spawning kimi worker '$name' with -y (auto-approve tool calls, agent may still ask). harness-kimi guard active." >&2
     fi
     tmux send-keys -t "$pane_id" "kimi $kimi_auto_flag $kimi_model_flag" Enter
-    # Kimi's prompt glyph isn't reliably greppable, so wait a fixed beat for the
-    # TUI to settle, then inject via the double-tap submit (the kimi textarea,
-    # like claude/codex, intermittently swallows a single Enter).
-    sleep 4
+    # Poll for the Kimi TUI prompt (its input box draws the same '│ >' as
+    # claude's) up to 30s before injecting the seed — a fixed sleep would drop
+    # the double-tap submit into a not-yet-ready textarea on a slow/cold spawn,
+    # leaving the worker idle with no task. Fall through and submit anyway after
+    # the timeout so a glyph change never hangs the spawn.
+    local ki
+    for ki in $(seq 1 30); do
+      sleep 1
+      if tmux capture-pane -p -t "$pane_id" | grep -q '│ >'; then
+        break
+      fi
+    done
     tmux_send_submit "$pane_id" "$seed"
   else
     # Claude Code: launch interactive then inject seed once prompt is ready.
