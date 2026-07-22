@@ -315,6 +315,33 @@ must be reported to the parent via `formation done`; the parent decides
 whether to promote them into root-level `feedback_*` / `reference_*`. The
 worker never promotes on its own.
 
+## Nesting: fan out with subagents, not panes
+
+A worker that needs parallelism has two ways to get it, and they are NOT
+interchangeable:
+
+- **Subagent (Agent/Task tool)** — the worker's *internal* fan-out. Runs
+  inside the worker's own process, **no new pane**. The human sees only the
+  worker, not its children. This is the default for a worker's child tasks.
+- **`formation spawn` (new pane)** — a *peer* the human wants to observe and
+  steer directly. Every spawn adds a pane to the orchestrator's tmux.
+
+The failure mode is **pane explosion**: a worker that `formation spawn`s its
+own children buries the human orchestrator under panes they can't track, and
+the whole point of formation — live observability of a *small set of trunks* —
+is lost. So:
+
+- **Trunk → formation pane.** The few peers the human wants to watch / redirect.
+- **Branch → subagent.** A trunk's own fan-out (parallel readers, per-item
+  transforms, bounded builds). Invisible to the human, managed by the trunk,
+  returns a result.
+
+Decision rule a worker applies before spawning a child: *"does the human need
+to watch or steer THIS child directly?"* — yes → `formation spawn` (rare);
+no → subagent (the common case). Put this rule in worker briefings so the
+convention holds from the first turn (e.g. "child tasks go to subagents;
+`formation spawn` only for children the human must watch directly").
+
 ## Anti-patterns
 
 - Spawning a worker for a task that finishes in <10 minutes.
@@ -323,6 +350,10 @@ worker never promotes on its own.
 - Workers writing to Memory MCP without the `formation/<id>/` prefix.
 - Using `formation msg` to dump a multi-paragraph new briefing — re-spawn a
   fresh worker with a new briefing file instead.
+- **Nesting formation panes for a worker's own fan-out.** A worker's child
+  tasks belong in subagents (Agent/Task tool), not new panes — see "Nesting"
+  above. Every nested `formation spawn` costs the human a pane; reserve it for
+  children they genuinely need to watch or steer.
 
 ## Troubleshooting
 
