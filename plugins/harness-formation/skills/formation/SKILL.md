@@ -74,7 +74,7 @@ Template: `templates/briefing.md`, resolved relative to this `SKILL.md`.
 
 ```bash
 formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
-  [--model <model>] [--task <label>] <path/to/briefing.md> [worker_name]
+  [--model <model>] [--orchestrator] [--task <label>] <path/to/briefing.md> [worker_name]
 ```
 
 - **Claude defaults to permission bypass** so an unattended worker does not
@@ -93,6 +93,13 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
 - `--model` is omitted by default, so the worker inherits the global default
   model; set it explicitly when a worker needs a different tier than the
   session default.
+- `--orchestrator` (claude workers, no explicit `--model`): asks `capacity-oracle
+  orchestrator-model --weight-class heavy` to pick the Claude tier by live
+  subscription headroom — **fable** for a heavy orchestration when there's ample
+  quota, else **opus**. A running session can't switch its own model, so this is
+  how you launch a *peer* orchestrator on the right tier. Fail-open: if
+  capacity-oracle isn't installed the worker just inherits the default tier. A
+  one-line stderr notice states the picked tier. (See capacity-oracle-mcp#92.)
 - **Placement defaults to a new tmux window** (isolates the worker's SessionStart
   window-rename from the parent — the ember-tanuki incident); pass `--split` for
   the old split-pane behavior. Either way it launches `claude --session-name

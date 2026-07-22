@@ -161,7 +161,7 @@ usage() {
 formation - long-running peer AI agent panes (claude, codex, or kimi)
 
 Parent (lead) commands:
-  formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>]
+  formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator]
                   [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart
                                           rename-window from parent pane) or split current window (--split)
@@ -182,6 +182,10 @@ Parent (lead) commands:
                                           --sandbox forces normal sandbox/approval mode
                                           (kimi: the softer -y auto-approve).
                                           A one-line stderr notice states the chosen mode and why.
+                                          --orchestrator (claude, no explicit --model): capacity-oracle
+                                            picks the tier (opus vs fable) by live headroom — fable only
+                                            for a heavy orchestration with ample quota. Fail-open to the
+                                            default tier if the oracle is absent.
   formation msg <worker_id> <text>        Send instruction to worker pane
   formation status                        List active workers: task, age, last mailbox report
                                           (falls back to last pane line if no report yet)
@@ -282,7 +286,7 @@ cmd_spawn() {
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
-  local cli="claude" model="" placement="new-window" bypass="" task=""
+  local cli="claude" model="" placement="new-window" bypass="" task="" orchestrator=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cli)            cli="$2";   shift 2 ;;
@@ -292,14 +296,36 @@ cmd_spawn() {
       --split)          placement="split-window"; shift ;;
       --bypass-sandbox) bypass=1; shift ;;
       --sandbox)        bypass=0; shift ;;
+      --orchestrator)   orchestrator=1; shift ;;
       *) break ;;
     esac
   done
   [[ "$cli" == "claude" || "$cli" == "codex" || "$cli" == "kimi" ]] || { echo "unknown --cli: $cli (claude|codex|kimi)" >&2; exit 2; }
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
 
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
+
+  # --orchestrator: for a heavyweight claude orchestrator with no explicit
+  # --model, let capacity-oracle pick the Claude tier (opus vs fable) by live
+  # subscription headroom (fable only when there's ample quota). Fail-open — a
+  # missing oracle CLI or any error leaves --model unset so the worker inherits
+  # the global default tier. Only meaningful for claude (fable/opus are Claude
+  # models); ignored for codex/kimi.
+  if [[ -n "$orchestrator" && "$cli" == "claude" && -z "$model" ]]; then
+    if command -v capacity-oracle >/dev/null 2>&1; then
+      local picked
+      picked="$(capacity-oracle orchestrator-model --weight-class heavy -q '.model' 2>/dev/null)"
+      if [[ "$picked" == "opus" || "$picked" == "fable" ]]; then
+        model="$picked"
+        echo "formation: --orchestrator: capacity-oracle picked claude tier '$model' by live headroom." >&2
+      else
+        echo "formation: --orchestrator: capacity-oracle returned no usable tier; inheriting the default." >&2
+      fi
+    else
+      echo "formation: --orchestrator: capacity-oracle not installed; inheriting the default tier." >&2
+    fi
+  fi
 
   local briefing="$1" name="${2:-}"
   briefing="$(realpath "$briefing")"
