@@ -277,6 +277,11 @@ kimi_launch_flags() {
   fi
 }
 
+formation_window_name() {
+  local cli="$1" worker_id="$2"
+  printf '%s-%s' "$cli" "$worker_id"
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
@@ -351,7 +356,7 @@ cmd_spawn() {
   local spawn_id; spawn_id="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || date +%s%N)"
   local pane_id session_name="formation-$name"
   if [[ "$placement" == "new-window" ]]; then
-    pane_id="$(tmux new-window -d -P -F '#{pane_id}' -n "claude-$name" \
+    pane_id="$(tmux new-window -d -P -F '#{pane_id}' -n "$(formation_window_name "$cli" "$name")" \
                 -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
                 -e "FORMATION_SESSION_ID=$spawn_id")"
   else
@@ -377,7 +382,7 @@ cmd_spawn() {
 
   # Seed prompt shared by both CLIs.
   local seed
-  seed="Formation bootstrap. Your worker id is '$name'. Parent pane id is '$parent_id'.
+  seed="Formation bootstrap. Your Formation identity is '$name' (routing id and self-reference; introduce yourself as '$name'). Parent pane id is '$parent_id'.
 Briefing: $briefing
 Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt before starting work. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies."
 

@@ -1,6 +1,6 @@
 {
   "name": "harness-formation",
-  "version": "0.2.0+codex.20260718104924",
+  "version": "0.2.0+codex.20260723055505",
   "description": "Persistent tmux peer-worker orchestration for Claude and Codex.",
   "author": {
     "name": "hrmtz",

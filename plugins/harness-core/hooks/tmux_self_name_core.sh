@@ -36,6 +36,26 @@ SENTINEL="$SENTINEL_DIR/${SESSION_ID}"
 
 find "$SENTINEL_DIR" -type f -mtime +30 -delete 2>/dev/null || true
 
+# Formation owns this pane's routing and self-reference identity. Bypass random
+# and pane-keyed sentinel naming so compact/resume and pane-id reuse cannot
+# split the worker into multiple identities.
+if [ -n "${FORMATION_SELF:-}" ]; then
+    PANE_FORMATION_ID=$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)
+    [ "$PANE_FORMATION_ID" = "$FORMATION_SELF" ] || exit 0
+    NAME="${CHASSIS}-${FORMATION_SELF}"
+    WINDOW_PANES=$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)
+    if [ "$WINDOW_PANES" = "1" ]; then
+        tmux rename-window -t "$TMUX_PANE" "$NAME" 2>/dev/null || true
+    fi
+    tmux select-pane -t "$TMUX_PANE" -T "$NAME" 2>/dev/null || true
+    cat <<EOF
+## Formation identity anchor (tmux pane $TMUX_PANE)
+
+あなたの Formation identity は **${FORMATION_SELF}** デス (= routing id / self-reference の source of truth、 ${CHASSIS} chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${FORMATION_SELF}** を使う。 compact/resume 後も変更禁止。
+EOF
+    exit 0
+fi
+
 if [ -f "$SENTINEL" ]; then
     EXISTING_NAME=$(head -n1 "$SENTINEL" 2>/dev/null)
     if [ -n "$EXISTING_NAME" ]; then

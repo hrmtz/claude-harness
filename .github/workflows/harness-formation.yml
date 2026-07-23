@@ -1,0 +1,39 @@
+name: harness-formation
+
+on:
+  pull_request:
+    paths:
+      - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
+      - "plugins/harness-core/hooks/tmux_self_name_core.sh"
+      - "plugins/harness-formation/**"
+      - "plugins/harness-kimi/AGENTS.md.template"
+      - "plugins/harness-kimi/kimi-wrapper.sh"
+      - "plugins/harness-kimi/tests/test_formation_identity.sh"
+      - ".github/workflows/harness-formation.yml"
+  push:
+    paths:
+      - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
+      - "plugins/harness-core/hooks/tmux_self_name_core.sh"
+      - "plugins/harness-formation/**"
+      - "plugins/harness-kimi/AGENTS.md.template"
+      - "plugins/harness-kimi/kimi-wrapper.sh"
+      - "plugins/harness-kimi/tests/test_formation_identity.sh"
+      - ".github/workflows/harness-formation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test isolated hook installation
+        run: bash plugins/harness-formation/tests/test_formation_suggest.sh
+      - name: Test Formation hardening
+        run: bash plugins/harness-formation/tests/test_formation_hardening.sh
+      - name: Test cross-CLI Formation identity
+        run: bash plugins/harness-kimi/tests/test_formation_identity.sh
+      - name: Check documented CLI dispatch
+        run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py

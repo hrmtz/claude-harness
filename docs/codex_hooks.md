@@ -206,7 +206,7 @@ compatible. Notable Codex-specific points:
 |---|---|---|
 | `credential_value_scrub.sh` | PostToolUse / Bash | Uses `transcript_path` from hook JSON to locate the Codex session file under `~/.codex/sessions/`. |
 | `credential_scrub.sh` | PostToolUse / Bash and compatible tool events | Sources repo-local `lib.sh`, then uses `transcript_path` rather than Claude project scanning when available. |
-| `formation_suggest.sh` | UserPromptSubmit | Emits JSON `additionalContext` so Codex honors the hint when `FORMATION_SUGGEST_MODE=active`. |
+| `formation_suggest.sh` | UserPromptSubmit | Emits JSON `additionalContext` so Codex honors the hint. Active by default; `FORMATION_SUGGEST_MODE=shadow` logs without injecting. |
 | `versioning_autorun.py` | PostToolUse / Bash | After a main-branch `git push`, auto-detects semver bump, tags, and creates a GitHub Release. Docs-only pushes no-op. |
 | `sr_depth_gate.py` | Stop, SubagentStop | Normalizes Claude messages and Codex rollout records; SubagentStop reads `agent_transcript_path`. |
 | `stall_autocontinue.sh` | Stop | Uses Codex's stable `last_assistant_message` field instead of parsing its unstable rollout format. |
