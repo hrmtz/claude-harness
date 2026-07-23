@@ -130,6 +130,18 @@ fi
 expect_log "rename-window -t %77 codex-issue100-k3" "Codex hook replaces random drift with Formation identity"
 
 : > "$TEST_ROOT/tmux.log"
+codex_mismatch_json="$(printf '%s' '{"session_id":"stale-pane"}' | \
+  PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" TMUX_PANE="%77" \
+  FORMATION_SELF="issue100-k3" TEST_FORMATION_ID="sibling-worker" \
+  TEST_WINDOW_NAME="codex-sibling-worker" TEST_PANE_TITLE="codex-sibling-worker" \
+  TEST_TMUX_LOG="$TEST_ROOT/tmux.log" bash "$CODEX_HOOK")"
+if [[ -z "$codex_mismatch_json" && ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "Codex Formation ownership mismatch leaves sibling pane untouched"
+else
+  bad "Codex Formation ownership mismatch mutated sibling pane"
+fi
+
+: > "$TEST_ROOT/tmux.log"
 standalone_split_json="$(printf '%s' '{"session_id":"standalone-split"}' | \
   PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" TMUX_PANE="%77" \
   TEST_FORMATION_ID="" TEST_WINDOW_PANES="2" TEST_WINDOW_NAME="kimi-sibling" \
