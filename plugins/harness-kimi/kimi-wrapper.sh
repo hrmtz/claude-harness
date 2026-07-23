@@ -11,9 +11,9 @@
 #      so Kimi can participate in the harness-formation mailbox using a stable
 #      identity (e.g. slate-falcon). The id is random and checked against other
 #      panes so multiple Kimi launches in the same directory do not collide.
-#   4. Assigns a persistent tmux pane/window display name in the style used by
-#      Claude-harness (e.g. "kimi-slate-falcon") so parallel agent panes are
-#      visually distinguishable and self-reference is consistent.
+#   4. Derives the tmux pane/window display name from that same mailbox id
+#      (e.g. @formation_id=slate-falcon -> "kimi-slate-falcon") so routing,
+#      display, and self-reference cannot drift.
 #   5. Execs the real `kimi` binary with all original arguments.
 #
 # Environment variables:
@@ -108,15 +108,6 @@ generate_unique_formation_id() {
     echo "kimi-$(date +%s%N | sha256sum | cut -c1-8)"
 }
 
-# Generate a display name like Claude-harness uses: "<chassis>-<codename>".
-# Collisions across tmux panes are acceptable for display names; the pane
-# option @formation_id remains the stable mailbox identity.
-generate_display_name() {
-    local codename
-    codename="$(generate_formation_id)"
-    echo "kimi-${codename}"
-}
-
 # Sentinel file for persistent standalone display naming across compact/resume.
 # Formation workers do not consult this pane-keyed state: their spawn-scoped
 # FORMATION_SELF is authoritative, so a recycled pane id cannot inherit an old
@@ -125,15 +116,6 @@ self_name_sentinel() {
     local pane="${1:-${TMUX_PANE:-}}"
     local key="${pane//[^a-zA-Z0-9]/_}"
     echo "$HOME/.local/state/tmux_self_name/${key}"
-}
-
-# Read a previously assigned display name from the sentinel, if any.
-load_display_name() {
-    local sentinel
-    sentinel="$(self_name_sentinel)"
-    if [ -f "$sentinel" ]; then
-        head -n1 "$sentinel" 2>/dev/null || true
-    fi
 }
 
 # Store the display name so compact/resume reuses it.
@@ -154,33 +136,61 @@ setup_formation_identity() {
     fi
 
     # Formation id (stable mailbox identity).
-    local formation_id
+    local formation_id current_window
     formation_id="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
+    current_window="$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)"
     # A stale/inherited TMUX_PANE must not let this process rename a sibling
     # worker. Formation sets both values before launching the CLI.
     if [ -n "${FORMATION_SELF:-}" ] \
         && [ "$formation_id" != "$FORMATION_SELF" ]; then
         return 0
     fi
+    has_foreign_chassis_ancestor() {
+        local pid="${PPID:-}" comm next
+        while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
+            comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+            case "$comm" in
+                claude|codex|grok) return 0 ;;
+            esac
+            next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+            [ "$next" = "$pid" ] && break
+            pid="$next"
+        done
+        return 1
+    }
+
+    # A standalone Kimi launched as a child inside another chassis inherits its
+    # parent's TMUX_PANE. Permit sequential reuse after that process exits.
+    if [ -z "${FORMATION_SELF:-}" ]; then
+        case "$current_window" in
+            claude-*|codex-*|grok-*)
+                has_foreign_chassis_ancestor && return 0
+                ;;
+        esac
+    fi
     if [ -z "$formation_id" ]; then
         formation_id="${HARNESS_KIMI_FORMATION_ID:-}"
+        if [ -z "$formation_id" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then
+            formation_id="${HARNESS_KIMI_DISPLAY_NAME#kimi-}"
+            if formation_id_in_use "$formation_id"; then
+                formation_id="$(generate_unique_formation_id)"
+            fi
+        fi
         if [ -z "$formation_id" ]; then
             formation_id="$(generate_unique_formation_id)"
         fi
         tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
     fi
 
-    # Formation identity is the single source of truth for routing, display,
-    # and self-reference. Standalone Kimi keeps the random sticky display name.
+    # @formation_id is the single source of truth for routing, display, and
+    # self-reference in both Formation-managed and standalone Kimi sessions.
     local display_name
-    if [ -n "${FORMATION_SELF:-}" ]; then
-        display_name="kimi-${FORMATION_SELF}"
-    else
-        display_name="${HARNESS_KIMI_DISPLAY_NAME:-$(load_display_name)}"
-        if [ -z "$display_name" ]; then
-            display_name="$(generate_display_name)"
-            save_display_name "$display_name"
-        fi
+    display_name="kimi-${formation_id}"
+    if [ -z "${FORMATION_SELF:-}" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then
+        display_name="$HARNESS_KIMI_DISPLAY_NAME"
+    fi
+    if [ -z "${FORMATION_SELF:-}" ]; then
+        save_display_name "$display_name"
     fi
 
     # A split worker shares its window with the lead; only a dedicated
