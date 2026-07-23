@@ -9,6 +9,7 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 FORMATION="$ROOT/plugins/harness-formation/bin/formation"
 CLAUDE_CORE="$ROOT/plugins/harness-core/hooks/tmux_self_name_core.sh"
 CODEX_HOOK="$ROOT/plugins/harness-core/hooks/codex_tmux_self_name.sh"
+AGENTS_TEMPLATE="$ROOT/plugins/harness-kimi/AGENTS.md.template"
 
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
@@ -103,6 +104,12 @@ if [[ "$got" == "kimi-issue100-k3" ]]; then
   ok "Formation initial window is CLI-specific"
 else
   bad "Formation initial window drifted ($got)"
+fi
+
+if grep -Fq -- 'tmux display-message -p -t "$TMUX_PANE" '\''#{@formation_id}|#{window_name}'\''' "$AGENTS_TEMPLATE"; then
+  ok "Kimi identity self-check targets its own pane"
+else
+  bad "Kimi identity self-check can read the parent client window"
 fi
 
 : > "$TEST_ROOT/tmux.log"
