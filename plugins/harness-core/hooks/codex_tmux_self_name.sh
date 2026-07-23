@@ -39,17 +39,36 @@ if ! CURRENT_WINDOW_NAME=$(tmux display-message -p -t "$PANE" '#{window_name}' 2
 fi
 CURRENT_PANE_TITLE=$(tmux display-message -p -t "$PANE" '#{pane_title}' 2>/dev/null || true)
 TARGET_WINDOW_ID=$(tmux display-message -p -t "$PANE" '#{window_id}' 2>/dev/null || true)
+WINDOW_PANES=$(tmux display-message -p -t "$PANE" '#{window_panes}' 2>/dev/null || true)
 
-# Never overwrite another chassis's established identity.  formation currently
-# creates every new window with a legacy "claude-$FORMATION_SELF" placeholder;
-# permit only that exact, ownership-verified bootstrap name for a codex worker.
+# Formation owns the worker identity. Do not let a session sentinel or random
+# codename replace it on start, compact, or resume.
+if [ -n "${FORMATION_SELF:-}" ]; then
+    NAME="codex-$FORMATION_SELF"
+    if [ "$WINDOW_PANES" = "1" ]; then
+        tmux rename-window -t "$PANE" "$NAME" 2>/dev/null || true
+    fi
+    tmux select-pane -t "$PANE" -T "$NAME" 2>/dev/null || true
+    CTX="## Formation identity anchor (tmux pane $PANE)
+
+あなたの Formation identity は **${FORMATION_SELF}** デス (= routing id / self-reference の source of truth、 codex chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${FORMATION_SELF}** を使う。 compact/resume 後も変更禁止。"
+    jq -n --arg ctx "$CTX" '{
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: $ctx
+      }
+    }'
+    exit 0
+fi
+
+# In an ordinary interactive pane a different chassis name is stale: users
+# legitimately run Kimi/Claude and then Codex in the same shell. The hook is
+# executing inside that exact TMUX_PANE, so Codex may replace the stale title
+# only when it owns the whole single-pane window. A split window's name belongs
+# to every pane and may still be an active sibling's identity (#95).
 case "$CURRENT_WINDOW_NAME" in
     claude-*|kimi-*|grok-*)
-        if [ -z "${FORMATION_SELF:-}" ] \
-            || [ "$PANE_FORMATION_ID" != "$FORMATION_SELF" ] \
-            || [ "$CURRENT_WINDOW_NAME" != "claude-$FORMATION_SELF" ]; then
-            exit 0
-        fi
+        [ "$WINDOW_PANES" = "1" ] || exit 0
         ;;
 esac
 

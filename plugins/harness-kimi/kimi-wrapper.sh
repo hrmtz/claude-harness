@@ -117,8 +117,10 @@ generate_display_name() {
     echo "kimi-${codename}"
 }
 
-# Sentinel file for persistent display naming across compact/resume.
-# Keyed by normalized TMUX_PANE to match Claude-harness behavior.
+# Sentinel file for persistent standalone display naming across compact/resume.
+# Formation workers do not consult this pane-keyed state: their spawn-scoped
+# FORMATION_SELF is authoritative, so a recycled pane id cannot inherit an old
+# worker's display identity.
 self_name_sentinel() {
     local pane="${1:-${TMUX_PANE:-}}"
     local key="${pane//[^a-zA-Z0-9]/_}"
@@ -154,6 +156,12 @@ setup_formation_identity() {
     # Formation id (stable mailbox identity).
     local formation_id
     formation_id="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
+    # A stale/inherited TMUX_PANE must not let this process rename a sibling
+    # worker. Formation sets both values before launching the CLI.
+    if [ -n "${FORMATION_SELF:-}" ] \
+        && [ "$formation_id" != "$FORMATION_SELF" ]; then
+        return 0
+    fi
     if [ -z "$formation_id" ]; then
         formation_id="${HARNESS_KIMI_FORMATION_ID:-}"
         if [ -z "$formation_id" ]; then
@@ -162,15 +170,26 @@ setup_formation_identity() {
         tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
     fi
 
-    # Display name (pane + window title). Persist across compact/resume.
+    # Formation identity is the single source of truth for routing, display,
+    # and self-reference. Standalone Kimi keeps the random sticky display name.
     local display_name
-    display_name="${HARNESS_KIMI_DISPLAY_NAME:-$(load_display_name)}"
-    if [ -z "$display_name" ]; then
-        display_name="$(generate_display_name)"
-        save_display_name "$display_name"
+    if [ -n "${FORMATION_SELF:-}" ]; then
+        display_name="kimi-${FORMATION_SELF}"
+    else
+        display_name="${HARNESS_KIMI_DISPLAY_NAME:-$(load_display_name)}"
+        if [ -z "$display_name" ]; then
+            display_name="$(generate_display_name)"
+            save_display_name "$display_name"
+        fi
     fi
 
-    tmux rename-window -t "$TMUX_PANE" "$display_name" >/dev/null 2>&1 || true
+    # A split worker shares its window with the lead; only a dedicated
+    # single-pane worker window may be renamed without changing the lead.
+    local window_panes
+    window_panes="$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)"
+    if [ "$window_panes" = "1" ]; then
+        tmux rename-window -t "$TMUX_PANE" "$display_name" >/dev/null 2>&1 || true
+    fi
     tmux select-pane -t "$TMUX_PANE" -T "$display_name" >/dev/null 2>&1 || true
 }
 
