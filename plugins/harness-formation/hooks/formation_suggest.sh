@@ -9,21 +9,39 @@
 # "裏のお前", "裏のclaude", "裏でやって", etc.
 #
 # Modes:
-#   FORMATION_SUGGEST_MODE=shadow  (default) — log match only, no inject
-#   FORMATION_SUGGEST_MODE=active           — log + inject `formation skill`
-#
-# Switch to active after 24h shadow run with no false-positive complaints.
+#   FORMATION_SUGGEST_MODE=active  (default) — log + inject `formation skill`
+#   FORMATION_SUGGEST_MODE=shadow            — log match only, no inject
 
 set -uo pipefail
 
-source "$(dirname "$0")/../../harness-core/hooks/lib.sh"
+# Plugin caches install each plugin under its own versioned directory, so a
+# source-tree-relative path into the sibling harness-core plugin does not exist
+# at runtime. Keep the two small UserPromptSubmit helpers local: formation must
+# remain independently installable and must not depend on another plugin's
+# cache layout.
+parse_prompt() {
+  printf '%s' "${HOOK_INPUT:-}" \
+    | jq -r '.prompt // .userPrompt // .user_prompt // .input // .content // .message // empty' \
+      2>/dev/null \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+emit_context() {
+  local event="$1" content="$2"
+  jq -n --arg ctx "$content" --arg ev "$event" '{
+    "hookSpecificOutput": {
+      "hookEventName": $ev,
+      "additionalContext": $ctx
+    }
+  }'
+}
 
 HOOK_INPUT=$(cat)
 export HOOK_INPUT
 
 PROMPT="$(parse_prompt)"
 [ -z "$PROMPT" ] && PROMPT="$HOOK_INPUT"
-MODE="${FORMATION_SUGGEST_MODE:-shadow}"
+MODE="${FORMATION_SUGGEST_MODE:-active}"
 LOG="${FORMATION_SUGGEST_LOG:-$HOME/.local/log/formation_suggest.log}"
 mkdir -p "$(dirname "$LOG")"
 

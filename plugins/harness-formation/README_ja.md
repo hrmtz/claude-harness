@@ -47,6 +47,8 @@ ln -sfn ~/.claude/plugins/harness-formation/bin/formation ~/.local/bin/formation
 
 plugin install 後、hook は `hooks/hooks.json` 経由で Claude Code に配線される。CLI は `~/.local/bin/formation` など PATH 上に symlink して使う。ランタイム状態は `~/.formation/` (mailbox と registry、git 管理外) に作られる。既存の legacy runtime dir がある場合は自動検出する。
 
+自動提案 hook はデフォルトで active。高確度の worker 起動意図を検出すると Formation skill のヒントを注入する。注入せずログだけ確認したい場合は `FORMATION_SUGGEST_MODE=shadow` を設定する。
+
 update 後は plugin を更新し、必要なら symlink を張り直す。
 
 ## 使い方

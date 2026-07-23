@@ -42,9 +42,9 @@ After install:
    ```bash
    formation status   # → "(no workers)"
    ```
-3. Hook starts in **shadow mode** (logs matches to `~/.local/log/formation_suggest.log`, doesn't inject). After 24h with no false-positive complaints, switch to active:
+3. The auto-suggest hook is **active by default** and injects the Formation skill hint for high-confidence worker-spawn prompts. To observe matches without injecting:
    ```bash
-   echo 'export FORMATION_SUGGEST_MODE=active' >> ~/.bashrc
+   export FORMATION_SUGGEST_MODE=shadow
    ```
 
 ## Migration from legacy standalone formation

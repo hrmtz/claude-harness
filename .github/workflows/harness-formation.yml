@@ -1,0 +1,27 @@
+name: harness-formation
+
+on:
+  pull_request:
+    paths:
+      - "plugins/harness-formation/**"
+      - ".github/workflows/harness-formation.yml"
+  push:
+    paths:
+      - "plugins/harness-formation/**"
+      - ".github/workflows/harness-formation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test isolated hook installation
+        run: bash plugins/harness-formation/tests/test_formation_suggest.sh
+      - name: Test Formation hardening
+        run: bash plugins/harness-formation/tests/test_formation_hardening.sh
+      - name: Check documented CLI dispatch
+        run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py
