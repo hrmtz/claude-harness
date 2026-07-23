@@ -9,6 +9,10 @@ DOC="$TMP/design.md"; printf '%s\n' 'a test design' > "$DOC"
 
 cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
+if [ -n "${STUB_TMUX_LOG:-}" ]; then
+  if [ -z "${TMUX_PANE+x}" ]; then printf 'unset\n' >> "$STUB_TMUX_LOG"
+  else printf 'inherited:%s\n' "$TMUX_PANE" >> "$STUB_TMUX_LOG"; fi
+fi
 out=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; shift 2; else shift; fi
@@ -31,9 +35,15 @@ pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
+STUB_TMUX_LOG="$TMP/tmux-env" TMUX_PANE="%57" \
+  PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "stub fan-out completes" || bad "stub fan-out rc=$rc"
+if [ "$(sort -u "$TMP/tmux-env")" = "unset" ] && [ "$(wc -l < "$TMP/tmux-env")" -eq 3 ]; then
+  ok "non-interactive reviewers do not inherit the parent TMUX_PANE"
+else
+  bad "non-interactive reviewers inherited the parent TMUX_PANE"
+fi
 
 json_count="$(find "$TMP/out" -maxdepth 1 -name 'round_1_*.json' -type f | wc -l)"
 [ "$json_count" -eq 3 ] && ok "three persona JSON artifacts persist" \
@@ -89,7 +99,7 @@ if [ -n "${MAGI_TEST_LIVE:-}" ]; then
   mkfifo "$LIVE_FIFO"; exec 9<>"$LIVE_FIFO"
   ( exec 9>&-; python3 "$HERE/../scripts/magi_scrub.py" < "$LIVE_FIFO" > "$LIVE_SAFE" ) & live_scrub_pid=$!
   printf '%s\n' 'Return a GO verdict, reviewer LIVE, round 1, grounding FAIL, no operations, no findings.' \
-    | timeout 180 codex exec --skip-git-repo-check -s read-only --ephemeral \
+    | timeout 180 env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$HERE/../../.." --output-schema "$HERE/../schemas/finding.schema.json" \
         -o "$LIVE_FIFO" - >/dev/null 2>&1
   live_rc=$?; exec 9>&-; wait "$live_scrub_pid" || live_rc=1

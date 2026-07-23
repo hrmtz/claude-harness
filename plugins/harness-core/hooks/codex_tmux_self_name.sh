@@ -41,6 +41,34 @@ CURRENT_PANE_TITLE=$(tmux display-message -p -t "$PANE" '#{pane_title}' 2>/dev/n
 TARGET_WINDOW_ID=$(tmux display-message -p -t "$PANE" '#{window_id}' 2>/dev/null || true)
 WINDOW_PANES=$(tmux display-message -p -t "$PANE" '#{window_panes}' 2>/dev/null || true)
 
+has_foreign_chassis_ancestor() {
+    local pid="${PPID:-}" comm next
+    while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        case "$comm" in
+            claude|kimi|kimi-code|grok) return 0 ;;
+        esac
+        next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        [ "$next" = "$pid" ] && break
+        pid="$next"
+    done
+    return 1
+}
+
+# A Codex child launched inside another chassis inherits the parent's TMUX_PANE
+# and may also inherit FORMATION_SELF. Ownership is independent of the current
+# window label, so check ancestry before every rename path (#104). A sequential
+# CLI launch after the previous chassis exits has no foreign ancestor (#95).
+has_foreign_chassis_ancestor && exit 0
+
+# Shared windows have one window name for multiple panes. Preserve an existing
+# foreign chassis label even when no foreign process remains in our ancestry.
+case "$CURRENT_WINDOW_NAME" in
+    claude-*|kimi-*|grok-*)
+        [ "$WINDOW_PANES" = "1" ] || exit 0
+        ;;
+esac
+
 # Formation owns the worker identity. Do not let a session sentinel or random
 # codename replace it on start, compact, or resume.
 if [ -n "${FORMATION_SELF:-}" ]; then
@@ -60,30 +88,6 @@ if [ -n "${FORMATION_SELF:-}" ]; then
     }'
     exit 0
 fi
-
-has_foreign_chassis_ancestor() {
-    local pid="${PPID:-}" comm next
-    while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
-        comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
-        case "$comm" in
-            claude|kimi|kimi-code|grok) return 0 ;;
-        esac
-        next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
-        [ "$next" = "$pid" ] && break
-        pid="$next"
-    done
-    return 1
-}
-
-# A standalone Codex launched as a child inside another chassis inherits the
-# parent's TMUX_PANE. A stale title alone is not enough: sequential CLI launches
-# legitimately reuse the pane after the previous chassis exits (#95).
-case "$CURRENT_WINDOW_NAME" in
-    claude-*|kimi-*|grok-*)
-        [ "$WINDOW_PANES" = "1" ] || exit 0
-        has_foreign_chassis_ancestor && exit 0
-        ;;
-esac
 
 if [ -z "$SESSION_ID" ]; then
     SESSION_ID="${PANE//[^a-zA-Z0-9]/_}"

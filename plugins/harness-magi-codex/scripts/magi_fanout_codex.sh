@@ -214,7 +214,7 @@ for p in "${PERSONAS[@]}"; do
       ( exec 7>&- 8>&-; python3 "$SCRUB" < "$raw_fifo" > "$safe_out" ) & raw_scrub_pid=$!
       ( exec 7>&- 8>&-; python3 "$SCRUB" --text < "$log_fifo" > "$safe_log" ) & log_scrub_pid=$!
       timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
-        codex exec --skip-git-repo-check -s read-only --ephemeral \
+        env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
         --output-schema "$SCHEMA_FILE" \
         -o "$raw_fifo" \

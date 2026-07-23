@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Regression coverage for gh #101: Formation routing, self-reference, and tmux
-# display identity must share FORMATION_SELF; standalone Kimi remains random.
+# Regression coverage for gh #101/#104: Formation routing, self-reference, and
+# tmux display identity must share FORMATION_SELF; nested non-interactive Codex
+# must not overwrite its parent; standalone Kimi remains random.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -230,6 +231,32 @@ if [[ -z "$codex_child_json" && ! -s "$TEST_ROOT/tmux.log" ]]; then
   ok "standalone Codex child preserves another chassis"
 else
   bad "standalone Codex child mutated another chassis"
+fi
+
+: > "$TEST_ROOT/tmux.log"
+codex_exec_formation_json="$(printf '%s' '{"session_id":"nested-codex-exec"}' | \
+  PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" TMUX_PANE="%77" \
+  FORMATION_SELF="parent-id" TEST_FORMATION_ID="parent-id" TEST_WINDOW_PANES="1" \
+  TEST_WINDOW_NAME="claude-parent-id" TEST_PANE_TITLE="claude-parent-id" \
+  TEST_ANCESTOR_COMM="claude" \
+  TEST_TMUX_LOG="$TEST_ROOT/tmux.log" bash "$CODEX_HOOK")"
+if [[ -z "$codex_exec_formation_json" && ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "nested codex exec preserves a Formation-managed parent chassis"
+else
+  bad "nested codex exec overwrote its Formation-managed parent"
+fi
+
+: > "$TEST_ROOT/tmux.log"
+codex_exec_custom_window_json="$(printf '%s' '{"session_id":"nested-custom-window"}' | \
+  PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" TMUX_PANE="%77" \
+  FORMATION_SELF="parent-id" TEST_FORMATION_ID="parent-id" TEST_WINDOW_PANES="1" \
+  TEST_WINDOW_NAME="review-control" TEST_PANE_TITLE="review-control" \
+  TEST_ANCESTOR_COMM="claude" \
+  TEST_TMUX_LOG="$TEST_ROOT/tmux.log" bash "$CODEX_HOOK")"
+if [[ -z "$codex_exec_custom_window_json" && ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "nested codex exec preserves a custom-named parent window"
+else
+  bad "nested codex exec overwrote its custom-named parent"
 fi
 
 : > "$TEST_ROOT/tmux.log"
