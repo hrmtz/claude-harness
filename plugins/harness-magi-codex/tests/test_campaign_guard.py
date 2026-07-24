@@ -124,6 +124,31 @@ class CampaignGuardTest(unittest.TestCase):
             result = self.claim(round_no, phase)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def seed_ledger(self, launches: list[dict[str, object]]) -> Path:
+        control = self.doc.parent / ".dual-magi"
+        control.mkdir(exist_ok=True)
+        artifact_id = hashlib.sha256(str(self.doc.resolve()).encode()).hexdigest()[:16]
+        path = control / f"CAMPAIGN.{artifact_id}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "doc_id": artifact_id,
+                    "doc_path": str(self.doc.resolve()),
+                    "campaigns": [
+                        {
+                            "campaign_id": "seed",
+                            "started_at": "2026-01-01T00:00:00Z",
+                            "started_by": "test",
+                            "reason": "boundary fixture",
+                            "launches": launches,
+                        }
+                    ],
+                }
+            )
+        )
+        return path
+
     def test_global_fuse_has_no_extension_path(self) -> None:
         self.fill_default_campaign()
         denied = self.claim(9, "fanout")
@@ -180,6 +205,60 @@ class CampaignGuardTest(unittest.TestCase):
             env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "17"},
         )
         self.assertEqual(invalid.returncode, 64)
+
+    def test_failed_fanout_retry_preserves_xfamily_reserve(self) -> None:
+        first = self.claim(
+            1,
+            "fanout",
+            finish="failed",
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "4"},
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        denied = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "4"},
+        )
+        self.assertEqual(denied.returncode, 4)
+        self.assertIn("reserved for mandatory xfamily", denied.stderr)
+
+    def test_illegal_transition_precedes_exhausted_budget(self) -> None:
+        self.fill_default_campaign()
+        denied = self.guard("claim", str(self.doc), "9", "xfamily", str(self.state))
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("MAGI_TRANSITION_ERROR", denied.stderr)
+
+    def test_denied_explicit_rollover_is_not_persisted(self) -> None:
+        history = (
+            (1, "fanout", "success"),
+            (2, "xfamily", "failed"),
+            (2, "xfamily", "success"),
+            (3, "fanout", "success"),
+            (4, "xfamily", "success"),
+            (5, "fanout", "success"),
+            (6, "xfamily", "failed"),
+        )
+        launches = [
+            {
+                "round": round_no,
+                "phase": phase,
+                "model_launches": 3 if phase == "fanout" else 1,
+                "status": status,
+                "artifact_sha": "old-revision",
+                "protocol_sha": "old-protocol",
+                "state_dir": str(self.state),
+            }
+            for round_no, phase, status in history
+        ]
+        ledger_path = self.seed_ledger(launches)
+        denied = self.guard("claim", str(self.doc), "1", "fanout", str(self.state))
+        self.assertEqual(denied.returncode, 4, denied.stderr)
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 1)
+        self.assertEqual(len(ledger["campaigns"][0]["launches"]), len(history))
 
     def test_stray_authorization_file_cannot_extend_fuse(self) -> None:
         self.fill_default_campaign()

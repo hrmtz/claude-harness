@@ -134,6 +134,11 @@ severity gate above is the *criterion*.
 If a round surfaces NEW criticals that break the invariant, it is **not** plateau — revise
 (minimally, see churn rule) and re-review.
 
+For guarded campaigns, fan-out admission preserves one weighted launch for its immediately
+following mandatory cross-family review. Reserve denial is a definitive blocked state, never
+permission to ship; the cross-family claim still passes the normal transition and budget guards
+and is not double-charged.
+
 ## Convergence economics (v0.2.0 — token budget + altitude rails)
 
 Rigor per round is worthless if the loop never terminates. Four rails, all learned from the

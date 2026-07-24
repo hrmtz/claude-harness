@@ -19,6 +19,7 @@ from typing import Iterator
 
 DEFAULT_MAX_MODEL_LAUNCHES = 16
 PHASE_WEIGHT = {"fanout": 3, "xfamily": 1}
+FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
 GLOBAL_MAX_MODEL_LAUNCHES = 16
 
 
@@ -228,45 +229,110 @@ def base_ceiling() -> int:
     return value
 
 
-def validate_transition(launches: list[object], round_no: int, phase: str) -> int:
+def next_transition(launches: list[object]) -> dict[str, object]:
     if not launches:
-        if round_no != 1 or phase != "fanout":
-            raise TransitionError("a campaign must start at round 1 fanout")
-        return 1
+        return {
+            "kind": "candidate",
+            "round": 1,
+            "phase": "fanout",
+            "attempt": 1,
+        }
     last = launches[-1]
     if not isinstance(last, dict):
         raise StateError("campaign launch ledger contains a malformed entry")
     last_round, last_phase = last.get("round"), last.get("phase")
+    if not isinstance(last_round, int) or last_phase not in PHASE_WEIGHT:
+        raise StateError("campaign launch ledger contains an invalid transition entry")
     same_attempts = sum(
         1
         for launch in launches
         if isinstance(launch, dict)
-        and launch.get("round") == round_no
-        and launch.get("phase") == phase
+        and launch.get("round") == last_round
+        and launch.get("phase") == last_phase
     )
-    if round_no == last_round and phase == last_phase:
-        if last.get("status") == "success":
-            raise TransitionError(
-                f"round {round_no} {phase} already succeeded; retry would duplicate providers"
-            )
-        if last.get("status") not in {"failed", "abandoned"}:
-            raise TransitionError(f"round {round_no} {phase} is not terminal")
+    status = last.get("status")
+    if status == "running":
+        return {
+            "kind": "running",
+            "round": last_round,
+            "phase": last_phase,
+            "attempt": same_attempts,
+            "reason": f"round {last_round} {last_phase} is not terminal",
+        }
+    if status in {"failed", "abandoned"}:
         if same_attempts >= 2:
-            raise TransitionError(
-                f"retry budget exhausted for round {round_no} {phase}"
-            )
-        return same_attempts + 1
+            return {
+                "kind": "transition-blocked",
+                "round": last_round,
+                "phase": last_phase,
+                "attempt": same_attempts,
+                "reason": f"retry budget exhausted for round {last_round} {last_phase}",
+            }
+        return {
+            "kind": "candidate",
+            "round": last_round,
+            "phase": last_phase,
+            "attempt": same_attempts + 1,
+        }
+    if status != "success":
+        raise StateError(f"campaign launch has an invalid status: {status!r}")
+    expected_phase = "xfamily" if last_phase == "fanout" else "fanout"
+    return {
+        "kind": "candidate",
+        "round": last_round + 1,
+        "phase": expected_phase,
+        "attempt": 1,
+    }
+
+
+def validate_transition(launches: list[object], round_no: int, phase: str) -> int:
+    transition = next_transition(launches)
+    if (
+        transition["kind"] == "candidate"
+        and transition["round"] == round_no
+        and transition["phase"] == phase
+    ):
+        return int(transition["attempt"])
+    if transition["kind"] == "running":
+        raise TransitionError(str(transition["reason"]))
+    if transition["kind"] == "transition-blocked":
+        raise TransitionError(str(transition["reason"]))
+    if not launches:
+        raise TransitionError("a campaign must start at round 1 fanout")
+    last = launches[-1]
+    assert isinstance(last, dict)
+    last_round, last_phase = last["round"], last["phase"]
+    if round_no == last_round and phase == last_phase and last.get("status") == "success":
+        raise TransitionError(
+            f"round {round_no} {phase} already succeeded; retry would duplicate providers"
+        )
     if last.get("status") != "success":
         raise TransitionError(
             f"round {last_round} {last_phase} did not succeed; next phase cannot start"
         )
-    expected_phase = "xfamily" if last_phase == "fanout" else "fanout"
-    if round_no != last_round + 1 or phase != expected_phase:
-        raise TransitionError(
-            f"illegal campaign transition: after round {last_round} {last_phase}, expected "
-            f"round {last_round + 1} {expected_phase}"
-        )
-    return 1
+    raise TransitionError(
+        f"illegal campaign transition: after round {last_round} {last_phase}, expected "
+        f"round {transition['round']} {transition['phase']}"
+    )
+
+
+def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, object]:
+    weight = PHASE_WEIGHT[phase]
+    reserve = FINAL_XFAMILY_RESERVE if phase == "fanout" else 0
+    required = weight + reserve
+    affordable = total_used + required <= ceiling
+    reason = (
+        f"global campaign history would require {total_used + required}/{ceiling} "
+        f"model launches ({weight} for {phase}"
+        + (f" plus {reserve} reserved for mandatory xfamily)" if reserve else ")")
+    )
+    return {
+        "weight": weight,
+        "reserve": reserve,
+        "required": required,
+        "affordable": affordable,
+        "reason": reason,
+    }
 
 
 def model_launches(campaigns: list[object]) -> int:
@@ -277,6 +343,42 @@ def model_launches(campaigns: list[object]) -> int:
         for launch in campaign.get("launches", [])
         if isinstance(launch, dict)
     )
+
+
+def campaign_admission_status(doc: Path) -> dict[str, object]:
+    """Read the active campaign under its lock without changing ledger state."""
+    with document_lock(doc):
+        path = ledger_path(doc)
+        if path.is_file():
+            ledger = load_ledger(doc, create=False)
+            ledger_sha = file_sha(path)
+        else:
+            ledger = new_ledger(doc)
+            ledger_sha = "no-ledger"
+        campaign = active_campaign(ledger)
+        launches = campaign["launches"]
+        campaigns = ledger["campaigns"]
+        assert isinstance(launches, list)
+        assert isinstance(campaigns, list)
+        transition = next_transition(launches)
+        total_used = model_launches(campaigns)
+        ceiling = min(GLOBAL_MAX_MODEL_LAUNCHES, base_ceiling())
+        if transition["kind"] != "candidate":
+            return {
+                **transition,
+                "ledger_sha": ledger_sha,
+                "used": total_used,
+                "ceiling": ceiling,
+            }
+        admission = admission_decision(total_used, ceiling, str(transition["phase"]))
+        return {
+            **transition,
+            **admission,
+            "kind": "candidate" if admission["affordable"] else "budget-blocked",
+            "ledger_sha": ledger_sha,
+            "used": total_used,
+            "ceiling": ceiling,
+        }
 
 
 def may_rollover(
@@ -313,16 +415,8 @@ def claim(doc_raw: str, round_raw: str, phase: str, state_raw: str) -> None:
             launches[-1]["status"] = "abandoned"
         campaigns = ledger["campaigns"]
         assert isinstance(campaigns, list)
-        configured_ceiling = base_ceiling()
-        weight = PHASE_WEIGHT[phase]
-        total_used = model_launches(campaigns)
-        global_ceiling = min(GLOBAL_MAX_MODEL_LAUNCHES, configured_ceiling)
-        if total_used + weight > global_ceiling:
-            raise BudgetDenied(
-                f"global campaign history would use {total_used + weight}/"
-                f"{global_ceiling} model launches"
-            )
         transition_error = None
+        planned_rollover = False
         try:
             attempt = validate_transition(launches, round_no, phase)
         except TransitionError as exc:
@@ -334,10 +428,19 @@ def claim(doc_raw: str, round_raw: str, phase: str, state_raw: str) -> None:
                 operator="automatic-rollover",
                 reason="document or review protocol changed after prior campaign attempt",
             )
-            campaigns.append(campaign)
             launches = campaign["launches"]
             assert isinstance(launches, list)
             attempt = 1
+            planned_rollover = True
+        configured_ceiling = base_ceiling()
+        total_used = model_launches(campaigns)
+        global_ceiling = min(GLOBAL_MAX_MODEL_LAUNCHES, configured_ceiling)
+        admission = admission_decision(total_used, global_ceiling, phase)
+        if not admission["affordable"]:
+            raise BudgetDenied(str(admission["reason"]))
+        weight = int(admission["weight"])
+        if planned_rollover:
+            campaigns.append(campaign)
         claim_id = str(uuid.uuid4())
         launches.append(
             {
