@@ -40,6 +40,25 @@ def file_sha(path: Path) -> str:
 
 
 class ConvergenceGateTest(unittest.TestCase):
+    def test_protocol_digest_covers_load_bearing_convergence_files(self) -> None:
+        expected = {
+            "schemas/finding.schema.json",
+            "schemas/implementation-convergence.schema.json",
+            "scripts/magi_campaign_guard.py",
+            "scripts/magi_convergence_gate.py",
+            "scripts/magi_fanout_codex.sh",
+            "scripts/magi_git.py",
+            "scripts/magi_lock.sh",
+            "scripts/magi_plateau_gate.sh",
+            "scripts/magi_review_packet.py",
+            "scripts/magi_scrub.py",
+            "scripts/magi_validate_findings.py",
+            "scripts/magi_verify_round.py",
+            "scripts/magi_xfamily.sh",
+            "scripts/magi_xfamily_claude.sh",
+        }
+        self.assertEqual(set(guard.PROTOCOL_FILES), expected)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name) / "repo"
@@ -431,6 +450,54 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(external_result.returncode, 0, external_result.stderr)
         self.assertFalse(sentinel.exists())
 
+    def test_git_replace_cannot_substitute_named_commit_objects(self) -> None:
+        canonical = json.loads(self.manifest.read_text())
+        (self.repo / "implementation.py").write_text("VALUE = 999\n")
+        self.git("add", "implementation.py")
+        self.git("commit", "-qm", "replacement object")
+        replacement_sha = self.git("rev-parse", "HEAD")
+        self.git("reset", "--hard", self.target_sha)
+        self.git("replace", self.target_sha, replacement_sha)
+
+        replaced_tree = self.git("rev-parse", f"{self.target_sha}^{{tree}}")
+        self.assertNotEqual(replaced_tree, canonical["review_packet"]["target_tree_sha"])
+
+        result, payload = self.evaluate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+
+        generated = self.repo / "replacement-review.json"
+        deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        built = run(
+            "python3",
+            str(PACKET),
+            "--repo",
+            str(self.repo),
+            "--base",
+            self.base_sha,
+            "--target",
+            self.target_sha,
+            "--scope",
+            "replacement-proof",
+            "--invariant",
+            "bounded-review-loop",
+            "--deadline",
+            deadline,
+            "--output",
+            str(generated),
+        )
+        self.assertEqual(built.returncode, 0, built.stderr)
+        generated_packet = json.loads(generated.read_text())["review_packet"]
+        self.assertEqual(
+            generated_packet["target_tree_sha"],
+            canonical["review_packet"]["target_tree_sha"],
+        )
+        self.assertEqual(
+            generated_packet["diff_sha256"],
+            canonical["review_packet"]["diff_sha256"],
+        )
+        self.assertEqual(generated_packet["diff"], canonical["review_packet"]["diff"])
+
     def test_fanout_requires_reserved_final_diverse_review(self) -> None:
         artifact = file_sha(self.manifest)
         self.add_launch(1, "fanout", artifact, root="root-a")
@@ -440,6 +507,49 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(payload["decision"], "FINAL_REVIEW_REQUIRED")
         self.assertEqual(payload["next_mode"], "final-full")
         self.assertEqual(payload["usage"], 3)
+
+    def test_stale_protocol_fanout_requires_initial_full_rollover(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact)
+        self.launches[-1]["protocol_sha"] = "stale-protocol"
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+        self.assertEqual(payload["reason_code"], "INITIAL_FULL_REQUIRED")
+        self.assertEqual(payload["next_mode"], "initial-full")
+
+    def test_stale_protocol_xfamily_requires_initial_full_rollover(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact)
+        self.add_launch(2, "xfamily", artifact)
+        for launch in self.launches:
+            launch["protocol_sha"] = "stale-protocol"
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+        self.assertEqual(payload["reason_code"], "INITIAL_FULL_REQUIRED")
+        self.assertEqual(payload["next_mode"], "initial-full")
+
+    def test_stale_protocol_retry_exhaustion_requires_rollover(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact, status="failed")
+        self.add_launch(1, "fanout", artifact, status="failed")
+        for launch in self.launches:
+            launch["protocol_sha"] = "stale-protocol"
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+        self.assertEqual(payload["reason_code"], "INITIAL_FULL_REQUIRED")
+        self.assertEqual(payload["next_mode"], "initial-full")
 
     def test_one_blocking_cycle_requests_fix(self) -> None:
         artifact = file_sha(self.manifest)

@@ -41,6 +41,8 @@ from pathlib import Path
 
 from magi_verify_round import verify_round
 
+MAGI_GATE_OWNERSHIP = ("G7", "G8")
+
 doc, prefix, control_dir, orch_family, reviewer_family = sys.argv[1:6]
 actual_sha = hashlib.sha256(Path(doc).read_bytes()).hexdigest()
 doc_id = hashlib.sha256(os.path.realpath(doc).encode()).hexdigest()[:16]
@@ -77,7 +79,7 @@ else:
     meta = result["meta"]
     fails = list(result["failures"])
 
-if findings is not None and meta is not None:
+if not fails and findings is not None and meta is not None:
     verdict = findings["verdict"]
     if verdict in {"REJECT", "REVISE"}:
         fails.append(f"G7: cross-family verdict is {verdict}")

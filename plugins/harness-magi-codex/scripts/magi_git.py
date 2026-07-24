@@ -12,6 +12,10 @@ def sanitized_environment() -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
+    # A repository-local refs/replace entry otherwise substitutes object contents while commands
+    # such as rev-parse still print the caller's named commit ID. Exact-SHA packets must bind the
+    # canonical object graph, never a local replacement overlay.
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
     environment["GIT_CONFIG_GLOBAL"] = os.devnull
     return environment

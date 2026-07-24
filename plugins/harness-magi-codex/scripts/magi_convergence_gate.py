@@ -499,6 +499,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     active = guard.active_campaign(ledger)
     active_launches = active["launches"]
     assert isinstance(active_launches, list)
+    current_protocol_sha = guard.protocol_sha()
     transition = guard.next_transition(active_launches)
     transition_blocked = transition["kind"] == "transition-blocked" and not guard.may_rollover(
         ledger, active, manifest_path, 1, "fanout"
@@ -547,6 +548,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         if isinstance(launch, dict)
         and launch.get("status") == "success"
         and launch.get("artifact_sha") == current_artifact_sha
+        and launch.get("protocol_sha") == current_protocol_sha
     }
     completed_cycle_targets: list[str] = []
     for campaign in campaigns:

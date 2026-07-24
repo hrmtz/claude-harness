@@ -15,6 +15,7 @@ from typing import Any
 
 
 VALID_VERDICTS = {"GO", "GO-WITH-REVISE", "REVISE", "REJECT"}
+MAGI_GATE_OWNERSHIP = ("G1", "G2", "G3", "G4", "G5", "G6", "G9")
 FAMILY_MARKERS = {
     ("codex", "claude"): ("claude",),
     ("codex", "grok"): ("grok",),
@@ -100,6 +101,8 @@ def verify_round(
                         "G1",
                         f"verdict {findings.get('verdict')!r} not in {sorted(VALID_VERDICTS)}",
                     )
+                if not isinstance(findings.get("findings"), list):
+                    fail("G1", "findings is not an array")
 
     if failures or findings is None or meta is None:
         return {

@@ -181,6 +181,33 @@ if [ -n "$REAL_SID" ]; then
       || ok "malformed verifier exception path revokes plateau marker"
 fi
 
+# Parseable but schema-invalid findings must deny without dereferencing missing/wrong fields, and
+# every such denial must revoke a marker granted for the same document.
+for malformed_case in empty-object missing-verdict non-array-findings; do
+  P="$TMP/revoke-$malformed_case-good"; mkfind "$P" "GO" 3
+  mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  Q="$TMP/revoke-$malformed_case-bad"
+  case "$malformed_case" in
+    empty-object)
+      printf '{}\n' > "$Q.json"
+      ;;
+    missing-verdict)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("verdict"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    non-array-findings)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["findings"]={}; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+  esac
+  mkmeta "$Q" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$Q" >/dev/null 2>&1
+  ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+      && bad "$malformed_case left a plateau marker" \
+      || ok "$malformed_case denial revokes plateau marker"
+done
+
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
 if [ -n "$REAL_SID" ]; then
   # model_id carries a managed deployment prefix; requested_model is the bare id the operator passed.
