@@ -5,6 +5,14 @@ issue: `hrmtz/claude-harness#107`
 scope: PR 1b — implementation review convergence only
 date: 2026-07-24
 
+> [!IMPORTANT]
+> **PR 1b normative override:** the shipped PR 1b evaluator is the report-only slice defined by
+> [`ULTRAMAGI_PR1B_REPORT_ONLY_DECISION.md`](./ULTRAMAGI_PR1B_REPORT_ONLY_DECISION.md), the
+> harness-magi-codex README, and the shipped Ultramagi skills. Its complete decision alphabet is
+> `CONTINUE | FINAL_REVIEW_REQUIRED | BLOCKED | REDESIGN`; it never emits `PASS` or
+> `PASS_WITH_RESIDUALS`. The PASS-family return table and enforcement flow below are retained as
+> pre-implementation design for later slices and are not the PR 1b operator contract.
+
 ## FAMILY_ROUTING
 
 ```text
