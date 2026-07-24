@@ -775,28 +775,18 @@ class RunWatchdog:
         if self._enabled.is_set() and self._main_ident is not None:
             signal.pthread_kill(self._main_ident, WATCHDOG_SIGNAL)
 
-    def start(self) -> None:
+    def arm_deadline(self) -> None:
         if threading.current_thread() is not threading.main_thread():
             raise Slice0Error(
                 "watchdog requires the CLI main thread",
                 reason="watchdog-unavailable",
             )
+        if self._started:
+            return
         self._main_ident = threading.get_ident()
         self._old_handler = signal.getsignal(WATCHDOG_SIGNAL)
         signal.signal(WATCHDOG_SIGNAL, self._alarm)
         self._enabled.set()
-        try:
-            with self._lock:
-                self._publish_locked()
-        except Exception:
-            self._enabled.clear()
-            signal.signal(WATCHDOG_SIGNAL, self._old_handler)
-            raise
-        self._thread = threading.Thread(
-            target=self._loop,
-            name=f"deja-slice0-watchdog-{self.run_id[:8]}",
-            daemon=True,
-        )
         self._deadline_thread = threading.Thread(
             target=self._deadline_loop,
             name=f"deja-slice0-deadline-{self.run_id[:8]}",
@@ -804,15 +794,37 @@ class RunWatchdog:
         )
         try:
             self._deadline_thread.start()
-            self._thread.start()
         except Exception:
             self._enabled.clear()
-            self._stop.set()
-            if self._deadline_thread.is_alive():
-                self._deadline_thread.join()
             signal.signal(WATCHDOG_SIGNAL, self._old_handler)
             raise
         self._started = True
+
+    def start_heartbeat(self) -> None:
+        if not self._started:
+            self.arm_deadline()
+        if self._thread is not None:
+            return
+        with self._lock:
+            self._publish_locked()
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=f"deja-slice0-watchdog-{self.run_id[:8]}",
+            daemon=True,
+        )
+        try:
+            self._thread.start()
+        except Exception:
+            self._thread = None
+            raise
+
+    def start(self) -> None:
+        self.arm_deadline()
+        try:
+            self.start_heartbeat()
+        except Exception:
+            self.stop()
+            raise
 
     def update(self, stage: str, completed: int, total: int) -> None:
         self.check_deadline()
@@ -1876,6 +1888,15 @@ def prepare(args: argparse.Namespace) -> int:
     started = time.monotonic()
     try:
         lock_fd = lock_campaign(fds)
+        watchdog = RunWatchdog(
+            fds,
+            run_id,
+            deadline=started + DEADLINE_SECONDS,
+        )
+        # Arm the hard deadline as soon as the shared state-root lock is held.
+        # Heartbeat publication waits until stale-owner recovery has completed,
+        # so it cannot overwrite evidence belonging to the prior owner.
+        watchdog.arm_deadline()
         existing_receipt = False
         try:
             os.stat("prepare.json", dir_fd=fds.receipt_fd, follow_symlinks=False)
@@ -1911,12 +1932,7 @@ def prepare(args: argparse.Namespace) -> int:
             "started_at": utc_now(),
             "input_intent_digest": intent,
         }
-        watchdog = RunWatchdog(
-            fds,
-            run_id,
-            deadline=started + DEADLINE_SECONDS,
-        )
-        watchdog.start()
+        watchdog.start_heartbeat()
         atomic_write_at(fds.campaign_fd, "run-owner.json", canonical_bytes(owner), run_id)
         owner_published = True
         append_progress(

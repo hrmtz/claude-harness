@@ -2124,6 +2124,34 @@ class Slice0IntegrationTest(unittest.TestCase):
         self.assertTrue(cleanup_observed.is_set())
         self.assertFalse((directory / "stage-receipts" / "prepare.json").exists())
 
+    def test_deadline_is_armed_before_source_discovery(self) -> None:
+        args = slice0.argparse.Namespace(
+            campaign_id="watchdog-discovery-deadline",
+            state_root=str(self.state),
+            source=[str(self.source)],
+        )
+        entered = slice0.threading.Event()
+
+        def blocked_discovery(*discovery_args, **discovery_kwargs):
+            entered.set()
+            time.sleep(5)
+            return []
+
+        with (
+            mock.patch.object(slice0, "DEADLINE_SECONDS", 0.2),
+            mock.patch.object(
+                slice0,
+                "source_metadata",
+                side_effect=blocked_discovery,
+            ),
+        ):
+            started = time.monotonic()
+            with self.assertRaises(slice0.Slice0Error) as caught:
+                slice0.prepare(args)
+        self.assertTrue(entered.is_set())
+        self.assertEqual(caught.exception.reason, "foundation-deadline-exceeded")
+        self.assertLess(time.monotonic() - started, 2)
+
     def test_unprobeable_existing_process_is_not_declared_dead(self) -> None:
         directory = self.campaign("unprobeable-owner")
         (directory / "stage-receipts").mkdir(parents=True)
