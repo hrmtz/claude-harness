@@ -69,3 +69,20 @@ tmux pane 内で動作している場合、起動時に window name が `<chassi
 - 名前が `<chassis>-<codename>` 形式なら、self-reference 時は **<codename>** を使う。
 - codename が取得できない場合は、**実行中の実モデルと異なる固有名（Kimi 等）を名乗らない**。中立に self-reference する。
 - user への第一声は、codename があれば「ドーモ、 **<codename>** デス」と名乗る（例: `kimi-rust-fox` → 「ドーモ、rust-fox デス」）。codename が無ければ通常応答から始める。
+
+## 9. Formation pane messaging（double-submit レール, gh #105）
+
+Formation worker pane へのメッセージ送信:
+
+- 原則 `formation msg <worker-id> <message>` を使う（内部は共有 helper `tmux_send_submit`、
+  mailbox relay も同じ経路）。raw `tmux send-keys` の手組み注入は避ける。
+- `Enter` 1回だけだと、本文が visible-but-unsubmitted のまま残り worker が stuck することがある。
+  submit は必ず delayed double-submit: `sleep ~0.4s` → `Enter` → `sleep ~0.5s` → `Enter`。
+- direct tmux injection が不可避な場合:
+  - 先に copy-mode を解除する（`#{pane_in_mode}` が 1 なら `send-keys -X cancel`）
+  - 注入は bracketed paste（`load-buffer` + `paste-buffer -p`）。`send-keys -l` は使わない
+  - その後、上記の delayed double-submit
+- CLI 起動などの shell command launch は従来どおり `Enter` 1発。double-submit レールは
+  pane へのメッセージ textarea 専用。混同しない。
+
+canonical: `plugins/harness-formation/skills/formation/SKILL.md`（worker pane troubleshooting 節）
