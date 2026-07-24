@@ -94,7 +94,17 @@ degraded_until: <what must run before ship>
                Reviewers RUN read-only verification against real data and try to break it.
                After each completed phase, run:
                  python3 scripts/magi_convergence_gate.py evaluate <implementation-manifest.json>
-               Follow only CONTINUE or FINAL_REVIEW_REQUIRED. BLOCKED and REDESIGN are terminal.
+               Follow CONTINUE. On FINAL_REVIEW_REQUIRED / next_mode=final-full, run:
+                 # Full fanout only: first synthesize every round-N persona artifact into the
+                 # schema-valid round_N_codex.json prior required by round N+1.
+                 scripts/magi_xfamily.sh --reviewer claude <manifest> <next-round> \
+                   <state-dir/round_N_codex.json> <state-dir/round_N+1_xfamily>
+               Then evaluate again. A clean final cycle returns BLOCKED with reason
+               REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE: this is an evaluator-terminal
+               handoff to magi_plateau_gate.sh, not permission to ship and not a hard blocker.
+               Invoke the plateau gate only after mechanically matching both that decision and
+               reason code; any CONTINUE result requires its named fix/review path instead.
+               Every other BLOCKED reason and every REDESIGN are terminal fail-closed results.
                The evaluator is advisory/report-only: it never emits PASS or authorizes shipping.
                For a later standard-risk fix, rebuild the same packet with --allow-incremental.
                If the evaluator returns next_mode=incremental-fix, run:
@@ -146,6 +156,21 @@ cross-family review. Reserve denial is a definitive blocked state, never permiss
 cross-family claim still passes the normal transition and budget guards and is not double-charged.
 At global exhaustion, emit a definitive blocked result. Do not keep
 rerolling until a model happens to say GO and do not pause for user acknowledgement.
+
+If requirements change while an adapter owns a live claim, do not edit the target or relaunch
+around it. Cancel that exact charged revision first:
+
+```bash
+TARGET="/absolute/path/to/active-review-target"
+python3 scripts/magi_campaign_guard.py cancel-revision "$TARGET" \
+  --expected-artifact-sha "$(sha256sum "$TARGET" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+Proceed only after the verified owner process tree is gone and the guard confirms cancellation.
+A cleanup-blocked result remains terminal; retry the same cancellation instead of unlinking the
+review lock or starting another adapter. Change the target content before replacement round 1:
+a protocol-only change cannot restart a superseded revision.
 
 ## Schema-grounding mandate
 
