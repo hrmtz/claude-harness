@@ -77,12 +77,14 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   [--model <model>] [--orchestrator] [--task <label>] <path/to/briefing.md> [worker_name]
 ```
 
-- **Claude defaults to permission bypass** so an unattended worker does not
-  stall. **Codex defaults to `workspace-write` with `--ask-for-approval never`**
-  and adds only `FORMATION_HOME` as an extra writable directory, which keeps
-  `formation report/done/ask` autonomous without full filesystem bypass.
-  `--bypass-sandbox` is an explicit high-risk Codex opt-in intended only when
-  the process is already externally sandboxed. Flags go before the briefing.
+- **Claude and Codex default to full permission/sandbox bypass** so an
+  autonomous peer has the authority needed to finish its briefing. Safety is
+  enforced by the Formation harness: scoped briefing and decision boundaries,
+  credential refusal, mailbox/audit trails, stop conditions, and review gates.
+  `--sandbox` is an explicit per-spawn opt-in; for Codex it selects
+  `workspace-write`, disables approval prompts, and adds `FORMATION_HOME` as a
+  writable directory for `formation report/done/ask`. Flags go before the
+  briefing.
 - **Kimi (`--cli kimi`)** launches the Kimi Code TUI with `--auto` (fully
   autonomous); `--sandbox` picks the softer `-y` (auto-approve tools, may still
   ask). Kimi has no CLI-level sandbox — its safety layer is the always-on

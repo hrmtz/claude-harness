@@ -1,8 +1,8 @@
 #!/bin/bash
 # Regression tests for the formation security-hardening layer (PR #43).
 # Covers the codex REVISE findings:
-#   - HIGH #38/#67: Codex defaults to scoped workspace-write; Claude retains
-#     its unattended bypass default. Overrides force either mode.
+#   - HIGH #38/#67: Formation workers default to full capability; an explicit
+#     --sandbox override still forces the scoped mode.
 #   - MED  #37: the inbox UNTRUSTED-DATA envelope strips raw ANSI/control chars
 #     from the body (keeping newlines/tabs, preserving UTF-8).
 #   - LOW: is_credential_like catches lowercase keys, 'export KEY=', and
@@ -55,7 +55,7 @@ expect_bypass() { # cli bypass-arg expected label
   if [[ "$got" == "$3" ]]; then ok "$4 (cli=$1 in='$2' -> $got)"; else bad "$4 (cli=$1 in='$2' -> $got, want $3)"; fi
 }
 # Defaults (empty = pick per-cli)
-expect_bypass codex  "" 0 "codex default = scoped workspace-write"
+expect_bypass codex  "" 1 "codex default = full bypass"
 expect_bypass claude "" 1 "claude default = BYPASS (unattended worker)"
 # Explicit overrides win for either cli
 expect_bypass codex  0 0 "codex + --sandbox forces normal sandbox"
@@ -63,13 +63,13 @@ expect_bypass claude 1 1 "claude + --bypass-sandbox forces bypass"
 expect_bypass codex  1 1 "codex + --bypass-sandbox stays bypass"
 expect_bypass claude 0 0 "claude + --sandbox stays normal sandbox"
 
-CODEX_DEFAULT_FLAGS="$(codex_launch_flags 0)"
-if [[ "$CODEX_DEFAULT_FLAGS" == *"--sandbox workspace-write"* ]]; then ok "codex default uses workspace-write"; else bad "codex default missing workspace-write [$CODEX_DEFAULT_FLAGS]"; fi
-if [[ "$CODEX_DEFAULT_FLAGS" == *"--ask-for-approval never"* ]]; then ok "codex default is autonomous without approval bypass"; else bad "codex default missing never approval policy [$CODEX_DEFAULT_FLAGS]"; fi
-if [[ "$CODEX_DEFAULT_FLAGS" == *"--add-dir"*"$FORMATION_HOME"* ]]; then ok "codex default adds only formation runtime write root"; else bad "codex default missing formation add-dir [$CODEX_DEFAULT_FLAGS]"; fi
-if [[ "$CODEX_DEFAULT_FLAGS" != *"dangerously-bypass"* ]]; then ok "codex default excludes dangerous bypass"; else bad "codex default unexpectedly bypasses [$CODEX_DEFAULT_FLAGS]"; fi
-CODEX_BYPASS_FLAGS="$(codex_launch_flags 1)"
-if [[ "$CODEX_BYPASS_FLAGS" == "--dangerously-bypass-approvals-and-sandbox" ]]; then ok "codex explicit bypass remains available"; else bad "codex explicit bypass changed [$CODEX_BYPASS_FLAGS]"; fi
+CODEX_DEFAULT_FLAGS="$(codex_launch_flags "$(resolve_bypass_default codex "")")"
+if [[ "$CODEX_DEFAULT_FLAGS" == "--dangerously-bypass-approvals-and-sandbox" ]]; then ok "codex default uses full bypass"; else bad "codex default bypass changed [$CODEX_DEFAULT_FLAGS]"; fi
+CODEX_SANDBOX_FLAGS="$(codex_launch_flags 0)"
+if [[ "$CODEX_SANDBOX_FLAGS" == *"--sandbox workspace-write"* ]]; then ok "codex explicit sandbox uses workspace-write"; else bad "codex explicit sandbox missing workspace-write [$CODEX_SANDBOX_FLAGS]"; fi
+if [[ "$CODEX_SANDBOX_FLAGS" == *"--ask-for-approval never"* ]]; then ok "codex explicit sandbox remains autonomous"; else bad "codex explicit sandbox missing never approval policy [$CODEX_SANDBOX_FLAGS]"; fi
+if [[ "$CODEX_SANDBOX_FLAGS" == *"--add-dir"*"$FORMATION_HOME"* ]]; then ok "codex explicit sandbox adds formation runtime write root"; else bad "codex explicit sandbox missing formation add-dir [$CODEX_SANDBOX_FLAGS]"; fi
+if [[ "$CODEX_SANDBOX_FLAGS" != *"dangerously-bypass"* ]]; then ok "codex explicit sandbox excludes bypass"; else bad "codex explicit sandbox unexpectedly bypasses [$CODEX_SANDBOX_FLAGS]"; fi
 
 echo "== codex cache-safe delegation (#110) =="
 CACHE_SAFE_FIXTURE="$TMPDIR_T/codex-cache-safe"

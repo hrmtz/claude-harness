@@ -172,15 +172,15 @@ Parent (lead) commands:
                                           claude workers also pin '🎯 <goal>' in a statusline
                                           (goal = first line under '## Mission' in the briefing,
                                           task label = --task or briefing basename).
-                                          Sandbox default: Claude bypass; Codex workspace-write
-                                            with approvals disabled and only FORMATION_HOME added
-                                            as an extra writable directory; Kimi --auto (autonomous),
-                                            guarded by the always-on harness-kimi bash guard.
+                                          Sandbox default: Claude and Codex full bypass; Kimi
+                                            --auto (autonomous), guarded by the always-on
+                                            harness-kimi bash guard.
                                           --bypass-sandbox forces full privilege bypass
                                           (claude bypassPermissions / codex dangerously-bypass /
                                           kimi --auto).
-                                          --sandbox forces normal sandbox/approval mode
-                                          (kimi: the softer -y auto-approve).
+                                          --sandbox explicitly opts into normal sandbox/approval
+                                          mode (Codex: workspace-write + never-ask + scoped
+                                          FORMATION_HOME; Kimi: the softer -y auto-approve).
                                           A one-line stderr notice states the chosen mode and why.
                                           --orchestrator (claude, no explicit --model): capacity-oracle
                                             picks the tier (opus vs fable) by live headroom — fable only
@@ -236,20 +236,16 @@ cmd_remote_check() {
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
 # Input $2 (bypass): "" => pick default, "1"/"0" => explicit override.
-# Claude retains the unattended bypass default. Codex can stay unattended with
-# `--ask-for-approval never`, while `--add-dir FORMATION_HOME` grants only the
-# extra write scope needed by report/done/ask.
+# Formation workers default to full capability. Safety is enforced by the
+# surrounding harness (briefing boundaries, credential refusal, mailbox
+# auditability, review gates, and explicit stop conditions), not by silently
+# reducing a worker's filesystem or network authority. --sandbox remains an
+# explicit per-spawn opt-in.
 # Echoes 1 (bypass) or 0 (normal sandbox).
 resolve_bypass_default() {
   local cli="$1" bypass="$2"
   if [[ -n "$bypass" ]]; then echo "$bypass"; return; fi
-  if [[ "$cli" == "codex" ]]; then echo 0; return; fi
-  # user directive 2026-07-08: Claude formation workers default to BYPASS.
-  # A normal-approval claude worker stalls at its first permission prompt and the
-  # lead has to babysit it (observed twice this session), defeating the point of
-  # an autonomous peer. --sandbox is the explicit opt-out back to normal approval.
-  # kimi follows the same autonomy-by-default rationale (its bash still goes
-  # through the always-on harness-kimi guard), so it also defaults to 1.
+  : "$cli"
   echo 1
 }
 
@@ -327,8 +323,8 @@ cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
   # window 名を巻き込み identity drift。 別 window 化で隔離。 --split で旧挙動)
-  # Claude defaults to bypass. Codex defaults to workspace-write + never-ask,
-  # with FORMATION_HOME as its only extra writable directory.
+  # All Formation workers default to full capability. The harness provides the
+  # control plane; --sandbox is an explicit per-spawn opt-in.
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
@@ -451,9 +447,9 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     [[ -n "$model" ]] && codex_model_flag="-m $model"
     codex_sandbox_flag="$(codex_launch_flags "$bypass")"
     if [[ "$bypass" == "1" ]]; then
-      echo "formation: WARNING: spawning codex worker '$name' with EXPLICIT FULL SANDBOX/APPROVAL BYPASS (--bypass-sandbox). The briefing can drive unrestricted local commands." >&2
+      echo "formation: spawning codex worker '$name' with FULL SANDBOX/APPROVAL BYPASS (default). Harness controls remain active; the worker has unrestricted local authority." >&2
     else
-      echo "formation: spawning codex worker '$name' with workspace-write, approvals disabled, and scoped mailbox write access at $FORMATION_HOME. Use --bypass-sandbox only inside an external sandbox." >&2
+      echo "formation: spawning codex worker '$name' with EXPLICIT workspace-write sandbox (--sandbox), approvals disabled, and scoped mailbox write access at $FORMATION_HOME." >&2
     fi
     tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
@@ -488,16 +484,15 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     tmux_send_submit "$pane_id" "$seed"
   else
     # Claude Code: launch interactive then inject seed once prompt is ready.
-    # Default (per #38): normal approval mode (security win) — claude does not
-    # need to escape the workspace for the formation protocol.
-    # --bypass-sandbox opts into --permission-mode bypassPermissions.
+    # Default: permission bypass for an autonomous peer. --sandbox explicitly
+    # opts back into Claude's normal approval mode.
     local claude_model_flag="" claude_perm_flag=""
     [[ -n "$model" ]] && claude_model_flag="--model $model"
     if [[ "$bypass" == "1" ]]; then
       claude_perm_flag="--permission-mode bypassPermissions"
-      echo "formation: spawning claude worker '$name' with permission BYPASS (--bypass-sandbox) — no approval prompts." >&2
+      echo "formation: spawning claude worker '$name' with permission BYPASS (default) — no approval prompts." >&2
     else
-      echo "formation: spawning claude worker '$name' in normal approval mode (claude default — security win). Use --bypass-sandbox to opt into --permission-mode bypassPermissions." >&2
+      echo "formation: spawning claude worker '$name' in EXPLICIT normal approval mode (--sandbox)." >&2
     fi
 
     # Goal pin (#93): per-launch --settings keeps the user's settings.json
