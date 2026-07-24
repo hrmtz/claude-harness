@@ -21,6 +21,22 @@ DEFAULT_MAX_MODEL_LAUNCHES = 16
 PHASE_WEIGHT = {"fanout": 3, "xfamily": 1}
 FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
 GLOBAL_MAX_MODEL_LAUNCHES = 16
+PROTOCOL_FILES = (
+    "schemas/finding.schema.json",
+    "schemas/implementation-convergence.schema.json",
+    "scripts/magi_campaign_guard.py",
+    "scripts/magi_convergence_gate.py",
+    "scripts/magi_fanout_codex.sh",
+    "scripts/magi_git.py",
+    "scripts/magi_lock.sh",
+    "scripts/magi_plateau_gate.sh",
+    "scripts/magi_review_packet.py",
+    "scripts/magi_scrub.py",
+    "scripts/magi_validate_findings.py",
+    "scripts/magi_verify_round.py",
+    "scripts/magi_xfamily.sh",
+    "scripts/magi_xfamily_claude.sh",
+)
 
 
 class UsageError(ValueError):
@@ -66,16 +82,10 @@ def file_sha(doc: Path) -> str:
 
 def protocol_sha() -> str:
     root = Path(__file__).resolve().parent.parent
-    paths = [
-        root / "schemas" / "finding.schema.json",
-        root / "scripts" / "magi_campaign_guard.py",
-        root / "scripts" / "magi_validate_findings.py",
-        root / "scripts" / "magi_fanout_codex.sh",
-        root / "scripts" / "magi_xfamily.sh",
-    ]
     digest = hashlib.sha256()
-    for path in paths:
-        digest.update(str(path.relative_to(root)).encode())
+    for relative_path in PROTOCOL_FILES:
+        path = root / relative_path
+        digest.update(relative_path.encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")

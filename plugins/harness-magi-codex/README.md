@@ -31,6 +31,8 @@ same-family reviewers read the same text and found none of them.
 
 ```
 schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
+schemas/implementation-convergence.schema.json
+                              opt-in report-only implementation manifest
 scripts/
   magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
@@ -38,6 +40,10 @@ scripts/
   magi_xfamily_claude.sh      backward-compatible Claude wrapper
   magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
   magi_validate_findings.py   validates cross-field convergence rules after constrained output
+  magi_verify_round.py        write-free G1-G6/G9 verification
+  magi_git.py                 ambient-config-free Git object reads
+  magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
+  magi_convergence_gate.py    report-only implementation convergence evaluator
   magi_plateau_gate.sh        the ONLY thing that may write a plateau marker
   magi_lock.sh                flock(2) helper (recursion + concurrency guard)
   magi_scrub.py               redacts credential-shaped strings before anything hits disk
@@ -80,6 +86,28 @@ scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family grok
 
 Revise the doc with the findings and re-run. `--persona-set bug-hunt` swaps the personas to review
 an *implementation* instead of a design (ultramagi gate [4]).
+
+For implementation campaigns, create an untracked exact-SHA packet at one stable path, review
+that packet, then evaluate the already-charged history:
+
+```bash
+python3 scripts/magi_review_packet.py \
+  --repo "$PWD" --base <base-commit> --scope <issue-or-task> \
+  --invariant <invariant-id> --deadline <RFC3339> \
+  --output "$PWD/.magi-implementation-review.json"
+
+python3 scripts/magi_convergence_gate.py evaluate path/to/implementation-review.json
+```
+
+The packet embeds the exact target tree and full `--binary --full-index` diff. Updating the stable
+packet path archives the prior bytes by SHA-256 so historical review artifacts remain bound to
+their target Git revision.
+
+The evaluator is read-only and report-only. It returns only `CONTINUE`,
+`FINAL_REVIEW_REQUIRED`, `BLOCKED`, or `REDESIGN`; it never launches a reviewer, changes the
+ledger, writes a plateau marker, emits PASS, or authorizes shipping. Two complete logical
+`fanout(3) -> xfamily(1)` cycles are the maximum. Existing exact-revision G1-G9 plateau and human
+judgment remain the PASS authority.
 
 Every round after round 1 requires a schema-valid prior synthesis artifact from the same state
 directory, canonical document identity, and immediately preceding round. Every output carries

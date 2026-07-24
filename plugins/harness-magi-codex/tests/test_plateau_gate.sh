@@ -9,6 +9,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 DOC="$TMP/design.md"; printf 'a design document\n' > "$DOC"
 MARKER_DIR="$TMP/.dual-magi"
 SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
+DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -d' ' -f1 | cut -c1-16)"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
@@ -51,18 +52,22 @@ json.dump(meta, open(prefix + ".meta.json","w"), indent=2)
 PY
 }
 mkfind() { # mkfind <prefix> <verdict> <ncmds> [grounding] [worst-severity]
-  python3 - "$1" "$2" "$3" "${4:-PASS}" "${5:-}" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-PASS}" "${5:-}" "$DOC_ID" "$SHA" <<'PY'
 import json, sys
-prefix, verdict, n, grounding, sev = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+prefix, verdict, n, grounding, sev, artifact_id, artifact_sha = (
+    sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7]
+)
 findings = []
 if sev:
     findings = [{"finding_id":"x-1","severity":sev,"title":"a blocking defect","location":"§1",
                  "rationale":"r","required_fix":"f","confidence":"high","dup_flag":"new",
                  "missed_angle":"m"}]
-json.dump({"reviewer":"CLAUDE-XFAMILY","round":2,"verdict":verdict,
+json.dump({"reviewer":"CLAUDE-XFAMILY","round":2,
+           "artifact_id":artifact_id,"artifact_sha":artifact_sha,"verdict":verdict,
            "schema_grounding_verdict":grounding,
            "verify_commands_executed":[f"rg -n x {i}" for i in range(n)],
-           "findings":findings}, open(prefix + ".json","w"), indent=2)
+           "source_artifacts":[],"dispositions":[],"findings":findings},
+          open(prefix + ".json","w"), indent=2)
 PY
 }
 denied() { # denied <case> <prefix>
@@ -88,7 +93,7 @@ denied "G3 artifact_sha mismatch (stale round)" "$P"
 
 # G4: findings swapped after the adapter wrote them
 P="$TMP/g4"; mkfind "$P" "GO" 3; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-printf '{"verdict":"GO","verify_commands_executed":[],"findings":[]}' > "$P.json"
+mkfind "$P" "GO" 2
 denied "G4 output_sha mismatch (findings swapped)" "$P"
 
 # G5: one-turn round claiming to have executed commands
@@ -166,6 +171,87 @@ if [ -n "$REAL_SID" ]; then
   fi
   rm -f "$MARKER_DIR"/PLATEAU.*
 fi
+
+# A malformed rerun must revoke an existing marker even when later meta fields would have raised.
+if [ -n "$REAL_SID" ]; then
+  P="$TMP/revoke-exception-good"; mkfind "$P" "GO" 3
+  mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  Q="$TMP/revoke-exception-bad"; mkfind "$Q" "UNPARSEABLE" 3
+  mkmeta "$Q" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["num_turns"]="bad"; json.dump(m,open(p,"w"))' "$Q.meta.json"
+  "$GATE" "$DOC" "$Q" >/dev/null 2>&1
+  ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+      && bad "malformed verifier exception path left a plateau marker" \
+      || ok "malformed verifier exception path revokes plateau marker"
+fi
+
+# Parseable but schema-invalid findings must deny without dereferencing missing/wrong fields, and
+# every such denial must revoke a marker granted for the same document.
+for malformed_case in \
+  empty-object missing-verdict non-array-findings null-finding malformed-finding \
+  missing-grounding invalid-grounding missing-artifact-id missing-artifact-sha \
+  missing-reviewer missing-round invalid-dispositions
+do
+  P="$TMP/revoke-$malformed_case-good"; mkfind "$P" "GO" 3
+  mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  Q="$TMP/revoke-$malformed_case-bad"
+  case "$malformed_case" in
+    empty-object)
+      printf '{}\n' > "$Q.json"
+      ;;
+    missing-verdict)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("verdict"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    non-array-findings)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["findings"]={}; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    null-finding)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["findings"]=[None]; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    malformed-finding)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["findings"]=[{"finding_id":"broken"}]; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    missing-grounding)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("schema_grounding_verdict"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    invalid-grounding)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["schema_grounding_verdict"]="UNKNOWN"; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    missing-artifact-id)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("artifact_id"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    missing-artifact-sha)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("artifact_sha"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    missing-reviewer)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("reviewer"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    missing-round)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m.pop("round"); json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+    invalid-dispositions)
+      mkfind "$Q" "GO" 3
+      python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["dispositions"]=[{}]; json.dump(m,open(p,"w"))' "$Q.json"
+      ;;
+  esac
+  mkmeta "$Q" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$Q" >/dev/null 2>&1
+  ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+      && bad "$malformed_case left a plateau marker" \
+      || ok "$malformed_case denial revokes plateau marker"
+done
 
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
 if [ -n "$REAL_SID" ]; then
