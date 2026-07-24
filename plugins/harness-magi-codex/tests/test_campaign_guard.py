@@ -655,6 +655,26 @@ class CampaignGuardTest(unittest.TestCase):
             ),
             6,
         )
+        status = self.guard(
+            "claim-status",
+            str(self.doc),
+            launches[-1]["claim_id"],
+        )
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "success")
+
+    def test_protocol_only_rollover_cannot_use_targeted_weight(self) -> None:
+        self.assertEqual(self.claim(1, "fanout").returncode, 0)
+        self.assertEqual(self.claim(2, "xfamily").returncode, 0)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        ledger = json.loads(ledger_path.read_text())
+        ledger["campaigns"][-1]["launches"][-1]["protocol_sha"] = "stale-protocol"
+        ledger_path.write_text(json.dumps(ledger))
+
+        targeted = self.claim(1, "targeted", finish=None)
+        self.assertEqual(targeted.returncode, 64)
+        fanout = self.claim(1, "fanout")
+        self.assertEqual(fanout.returncode, 0, fanout.stderr)
 
     def test_targeted_cannot_bootstrap_or_replace_requirement_revision(self) -> None:
         initial = self.claim(1, "targeted", finish=None)
