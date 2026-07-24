@@ -51,6 +51,17 @@ After install:
    ```bash
    export FORMATION_SUGGEST_MODE=shadow
    ```
+4. Codex/Kimi panes: install the pane-messaging double-submit rail (gh #105/#130)
+   into the always-loaded AGENTS surface so agents that have not loaded the
+   Formation skill still route through `formation msg` / `tmux_send_submit`:
+   ```bash
+   bash ~/.claude/plugins/harness-formation/bin/install-pane-messaging-rail.sh            # ~/AGENTS.md (Codex global)
+   bash ~/.claude/plugins/harness-formation/bin/install-pane-messaging-rail.sh <project>/AGENTS.md
+   ```
+   The Kimi `AGENTS.md.template` already carries the same rail (§9). The installer
+   is marker-bounded and idempotent, fails closed on any inconsistent marker
+   state, preserves foreign content, and takes a persistent Sanada backup
+   before modifying an existing file.
 
 ## Migration from legacy standalone formation
 

@@ -85,4 +85,4 @@ Formation worker pane へのメッセージ送信:
 - CLI 起動などの shell command launch は従来どおり `Enter` 1発。double-submit レールは
   pane へのメッセージ textarea 専用。混同しない。
 
-canonical: `plugins/harness-formation/skills/formation/SKILL.md`（worker pane troubleshooting 節）
+canonical: `plugins/harness-formation/agents/pane-messaging-rail.md`
