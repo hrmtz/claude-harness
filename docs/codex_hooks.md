@@ -110,6 +110,11 @@ scanning `~/.claude/projects/` when running inside Codex.
                           "permissionDecisionReason": "reason text" } }
 ```
 
+Smoke fixture: `plugins/harness-core/tests/test_codex_hook_contract_smoke.py`
+feeds both envelopes above to `bash_command_guard.sh` (PreToolUse deny) and
+`credential_value_scrub.sh` (PostToolUse rollout-JSONL redaction) and asserts
+the documented output shapes end to end.
+
 ---
 
 ## lib.sh compatibility
