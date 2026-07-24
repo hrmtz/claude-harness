@@ -29,10 +29,11 @@ SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
+CONVERGENCE_GATE="$SELF_DIR/magi_convergence_gate.py"
 CANON="$REPO_ROOT/plugins/harness-magi/skills"
 
 usage() {
-    echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt] [--prior <json|->]" >&2
+    echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt] [--prior <json|->] [--review-mode full|incremental]" >&2
     exit 64
 }
 [ $# -ge 3 ] || usage
@@ -40,10 +41,13 @@ usage() {
 DOC_PATH="$1"; ROUND="$2"; OUT_DIR="$3"; shift 3
 PERSONA_SET="magi"
 PRIOR="-"
+REVIEW_MODE="full"
+PRIOR_BLOCKING_ROOTS="[]"
 while [ $# -gt 0 ]; do
     case "$1" in
         --persona-set) [ $# -ge 2 ] || usage; PERSONA_SET="$2"; shift 2 ;;
         --prior) [ $# -ge 2 ] || usage; PRIOR="$2"; shift 2 ;;
+        --review-mode) [ $# -ge 2 ] || usage; REVIEW_MODE="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
@@ -52,6 +56,17 @@ case "$PERSONA_SET" in
     magi)     PERSONAS=(melchior balthasar caspar) ;;
     bug-hunt) PERSONAS=(hornet gnat wasp) ;;
     *) echo "fanout: unknown persona set: $PERSONA_SET" >&2; exit 64 ;;
+esac
+
+case "$REVIEW_MODE" in
+    full) PHASE="fanout"; OUTPUT_LABEL="" ;;
+    incremental)
+        [ "$PERSONA_SET" = "bug-hunt" ] || {
+            echo "fanout: incremental review requires --persona-set bug-hunt" >&2; exit 64; }
+        PHASE="targeted"
+        OUTPUT_LABEL="targeted"
+        ;;
+    *) echo "fanout: unknown review mode: $REVIEW_MODE" >&2; exit 64 ;;
 esac
 
 TEMPLATE_DIR="$CANON/$PERSONA_SET/templates"
@@ -90,6 +105,37 @@ ARTIFACT_ID="$(printf '%s' "$(realpath "$DOC_PATH")" | sha256sum | cut -c1-16)"
 DOC_CONTROL_DIR="$(dirname "$(realpath "$DOC_PATH")")/.dual-magi"
 mkdir -p "$DOC_CONTROL_DIR"
 
+if [ "$REVIEW_MODE" = "incremental" ]; then
+    decision_json="$(python3 "$CONVERGENCE_GATE" evaluate "$DOC_PATH")" || exit $?
+    decision_fields="$(
+        printf '%s' "$decision_json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if d.get("decision") != "CONTINUE" or d.get("next_mode") != "incremental-fix":
+    raise SystemExit(2)
+p = d.get("next_persona")
+if p not in {"hornet", "gnat", "wasp"}:
+    raise SystemExit(2)
+print(p)
+print(json.dumps(d.get("prior_blocking_roots") or [], separators=(",", ":")))
+'
+    )" || {
+        echo "fanout: convergence evaluator did not authorize incremental review" >&2
+        exit 64
+    }
+    TARGETED_PERSONA="${decision_fields%%$'\n'*}"
+    PRIOR_BLOCKING_ROOTS="${decision_fields#*$'\n'}"
+    [ "$TARGETED_PERSONA" != "$PRIOR_BLOCKING_ROOTS" ] || {
+        echo "fanout: malformed incremental evaluator decision" >&2
+        exit 64
+    }
+    PERSONAS=("$TARGETED_PERSONA")
+fi
+
+artifact_label() {
+    if [ -n "$OUTPUT_LABEL" ]; then printf '%s' "$OUTPUT_LABEL"; else printf '%s' "$1"; fi
+}
+
 # Prompts hold the FULL document. Track them so no copy is left in TMPDIR on any exit path.
 PROMPTS=()
 PIDS=()
@@ -97,17 +143,20 @@ CLAIM_ID=""
 CLAIM_FINISHED=0
 STAGE_DIR=""
 _cleanup_stage() {
-    local p
+    local p label
     [ -n "$STAGE_DIR" ] || return 0
     for p in "${PERSONAS[@]}"; do
+        label="$(artifact_label "$p")"
         rm -f -- \
-            "$STAGE_DIR/round_${ROUND}_${p}.json" \
-            "$STAGE_DIR/round_${ROUND}_${p}.log" \
+            "$STAGE_DIR/round_${ROUND}_${label}.json" \
+            "$STAGE_DIR/round_${ROUND}_${label}.log" \
             "$STAGE_DIR/.round_${ROUND}_${p}.raw.fifo" \
             "$STAGE_DIR/.round_${ROUND}_${p}.log.fifo" \
             "$STAGE_DIR"/.round_"${ROUND}_${p}".safe.* \
             "$STAGE_DIR"/.round_"${ROUND}_${p}".log.safe.*
     done
+    [ "$REVIEW_MODE" = "incremental" ] \
+        && rm -f -- "$STAGE_DIR/round_${ROUND}_codex.json"
     rmdir -- "$STAGE_DIR" 2>/dev/null || true
 }
 _cleanup() {
@@ -138,7 +187,8 @@ magi_lock_acquire "$DOC_CONTROL_DIR/.review.${ARTIFACT_ID}.lock" || {
 
 # INV-3: refuse to start if a sibling output for this round already exists.
 for p in "${PERSONAS[@]}"; do
-    if [ -e "$OUT_DIR/round_${ROUND}_${p}.json" ]; then
+    label="$(artifact_label "$p")"
+    if [ -e "$OUT_DIR/round_${ROUND}_${label}.json" ]; then
         echo "fanout: sibling output already exists for round $ROUND ($p). Refusing: a re-run" >&2
         echo "        would let an existing reviewer's output contaminate its siblings." >&2
         exit 5
@@ -155,8 +205,9 @@ done
 # Claim only after validation, capability checks, and the execution lock, but before any provider
 # process starts. A crash after this boundary is conservatively charged; preflight refusal is not.
 claim_line="$(
-    python3 "$GUARD" claim "$DOC_PATH" "$ROUND" fanout "$OUT_DIR" \
-        --owner-pid "$$" --adapter-kind fanout
+    python3 "$GUARD" claim "$DOC_PATH" "$ROUND" "$PHASE" "$OUT_DIR" \
+        --owner-pid "$$" --adapter-kind "$PHASE" \
+        --expected-artifact-sha "$ARTIFACT_SHA"
 )" || exit $?
 echo "$claim_line"
 CLAIM_ID="${claim_line##*CLAIM_ID=}"
@@ -200,6 +251,15 @@ for p in "${PERSONAS[@]}"; do
         printf 'new or regression instead. Readiness-gap/scope-expansion alone require\n'
         printf 'GO-WITH-REVISE, not REVISE or REJECT. Do not perpetuate review by demanding\n'
         printf 'optional scope.\n\n'
+        if [ "$REVIEW_MODE" = "incremental" ]; then
+            printf 'INCREMENTAL FIX REVIEW (mandatory boundary): the target is a trusted exact-SHA\n'
+            printf 'implementation manifest whose review_packet contains only the previous-target\n'
+            printf 'to current-target diff. Review closure of prior blockers named by the guarded\n'
+            printf 'history, the affected invariants, and regressions induced by this diff. Do not\n'
+            printf 'promote an unrelated unchanged-area observation to a blocker. If the declared\n'
+            printf 'surface or risk requires broader review, report that escalation instead.\n\n'
+            printf 'PRIOR BLOCKING ROOT IDS: %s\n\n' "$PRIOR_BLOCKING_ROOTS"
+        fi
         printf 'ROUND: %s\nTARGET DOC: %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n\n' \
             "$ROUND" "$DOC_PATH" "$ARTIFACT_ID" "$ARTIFACT_SHA"
         if [ "$PRIOR" != "-" ]; then
@@ -265,8 +325,9 @@ for p in "${PERSONAS[@]}"; do
       rm -f "$prompt" "$raw_fifo" "$log_fifo"
       trap - INT TERM EXIT
       if [ "$s" -eq 0 ] && [ "$scrub_rc" -eq 0 ]; then
-          mv "$safe_out" "$STAGE_DIR/round_${ROUND}_${p}.json"
-          mv "$safe_log" "$STAGE_DIR/round_${ROUND}_${p}.log"
+          label="$(artifact_label "$p")"
+          mv "$safe_out" "$STAGE_DIR/round_${ROUND}_${label}.json"
+          mv "$safe_log" "$STAGE_DIR/round_${ROUND}_${label}.log"
       else
           rm -f "$safe_out" "$safe_log"
           s=1
@@ -281,7 +342,8 @@ for pid in "${PIDS[@]}"; do
 done
 
 for p in "${PERSONAS[@]}"; do
-    out="$STAGE_DIR/round_${ROUND}_${p}.json"
+    label="$(artifact_label "$p")"
+    out="$STAGE_DIR/round_${ROUND}_${label}.json"
     if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" --doc "$DOC_PATH" 2>/dev/null
     then
         echo "fanout: reviewer $p produced no schema-valid output" >&2
@@ -295,14 +357,49 @@ if [ $rc -ne 0 ]; then
     exit $rc
 fi
 
+if [ "$REVIEW_MODE" = "incremental" ]; then
+    python3 - \
+        "$STAGE_DIR/round_${ROUND}_targeted.json" \
+        "$STAGE_DIR/round_${ROUND}_codex.json" <<'PY'
+import hashlib, json, pathlib, sys
+
+source = pathlib.Path(sys.argv[1])
+output = pathlib.Path(sys.argv[2])
+payload = json.loads(source.read_text())
+payload["reviewer"] = "SYNTHESIS"
+payload["source_artifacts"] = [
+    {"path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+]
+payload["dispositions"] = [
+    {
+        "source_ref": f"{source.name}#{finding['finding_id']}",
+        "disposition": "carried",
+        "synthesis_finding_id": finding["finding_id"],
+    }
+    for finding in payload["findings"]
+]
+output.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
+PY
+    if ! python3 "$VALIDATOR" "$STAGE_DIR/round_${ROUND}_codex.json" "$SCHEMA_FILE" \
+        --same-doc "$DOC_PATH" --prior-for-round "$((ROUND + 1))" --state-dir "$STAGE_DIR"
+    then
+        echo "fanout: targeted synthesis envelope failed validation" >&2
+        exit 1
+    fi
+fi
+
 # The guard is the cancellation/requirement-revision authority. Only a claim that is still live
 # for this exact artifact may finish successfully; supersession makes this command fail and the
 # EXIT trap removes staging before any canonical pathname is touched.
 python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
 CLAIM_FINISHED=1
 for p in "${PERSONAS[@]}"; do
-    mv -- "$STAGE_DIR/round_${ROUND}_${p}.json" "$OUT_DIR/round_${ROUND}_${p}.json"
-    mv -- "$STAGE_DIR/round_${ROUND}_${p}.log" "$OUT_DIR/round_${ROUND}_${p}.log"
+    label="$(artifact_label "$p")"
+    mv -- "$STAGE_DIR/round_${ROUND}_${label}.json" "$OUT_DIR/round_${ROUND}_${label}.json"
+    mv -- "$STAGE_DIR/round_${ROUND}_${label}.log" "$OUT_DIR/round_${ROUND}_${label}.log"
 done
+if [ "$REVIEW_MODE" = "incremental" ]; then
+    mv -- "$STAGE_DIR/round_${ROUND}_codex.json" "$OUT_DIR/round_${ROUND}_codex.json"
+fi
 _cleanup_stage
 echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

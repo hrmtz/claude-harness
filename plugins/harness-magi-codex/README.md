@@ -99,15 +99,43 @@ python3 scripts/magi_review_packet.py \
 python3 scripts/magi_convergence_gate.py evaluate path/to/implementation-review.json
 ```
 
-The packet embeds the exact target tree and full `--binary --full-index` diff. Updating the stable
-packet path archives the prior bytes by SHA-256 so historical review artifacts remain bound to
-their target Git revision.
+The packet embeds the exact target tree and a `--binary --full-index` diff. Updating the stable
+packet path archives the prior bytes by SHA-256. Full review keeps the original base-to-target
+diff; an eligible `--allow-incremental` rebuild changes the packet diff base to the immediately
+preceding target SHA, so a fix review receives only the exact revision delta while historical
+review artifacts remain bound to their Git revisions.
+
+For a standard-risk fix, opt into the bounded incremental policy when rebuilding the packet:
+
+```bash
+python3 scripts/magi_review_packet.py \
+  --repo "$PWD" --base <original-base> --scope <issue-or-task> \
+  --invariant <invariant-id> --deadline <RFC3339> --allow-incremental \
+  --output "$PWD/.magi-implementation-review.json"
+
+scripts/magi_fanout_codex.sh path/to/implementation-review.json 1 state-dir \
+  --persona-set bug-hunt --review-mode incremental
+scripts/magi_xfamily.sh --reviewer claude path/to/implementation-review.json 2 \
+  state-dir/round_1_codex.json state-dir/round_2_xfamily
+```
+
+The evaluator selects exactly one bug-hunt persona deterministically from the affected invariants.
+The adapter mechanically wraps that one result in `round_1_codex.json` for the existing validated
+prior-envelope contract; this is not another model launch.
+The targeted claim costs 1 and still reserves 1 for the mandatory exact-SHA cross-family final
+review. Incremental mode is denied unless a prior reviewed revision exists, risk is `standard`,
+the exact fix is at most 8 paths and 200 changed lines, and no public-interface, trust-boundary,
+persistence/schema/rollback, or design-invariant change is declared. Use `--surface-change
+<kind>` (`public_interface`, `trust_boundary`, `persistence_schema_rollback`, or
+`design_invariant`) when rebuilding the packet to force full review (or REDESIGN for a design
+invariant).
 
 The evaluator is read-only and report-only. It returns only `CONTINUE`,
 `FINAL_REVIEW_REQUIRED`, `BLOCKED`, or `REDESIGN`; it never launches a reviewer, changes the
-ledger, writes a plateau marker, emits PASS, or authorizes shipping. Two complete logical
-`fanout(3) -> xfamily(1)` cycles are the maximum. Existing exact-revision G1-G9 plateau and human
-judgment remain the PASS authority.
+ledger, writes a plateau marker, emits PASS, or authorizes shipping. Two complete logical cycles
+are the maximum: initial `fanout(3) -> xfamily(1)`, followed by either full fanout or an eligible
+`targeted(1) -> xfamily(1)` fix cycle. Existing exact-revision G1-G9 plateau and human judgment
+remain the PASS authority.
 
 Every round after round 1 requires a schema-valid prior synthesis artifact from the same state
 directory, canonical document identity, and immediately preceding round. Every output carries
@@ -122,12 +150,12 @@ subset from masquerading as the round synthesis.
 
 ## Campaign guard
 
-The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3 and
-cross-family costs 1, permitting four pairs without retries.
-Fan-out admission also preserves one weighted launch for the immediately following mandatory
-cross-family review. If that reserve cannot be preserved, the campaign is blocked before any
-provider starts; denial is never permission to ship. Cross-family admission charges only its real
-weight, so the reserve is not charged twice.
+The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3,
+incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted admission both
+preserve one weighted launch for the immediately following mandatory cross-family review. If that
+reserve cannot be preserved, the campaign is blocked before any provider starts; denial is never
+permission to ship. Cross-family admission charges only its real weight, so the reserve is not
+charged twice.
 Both reviewer adapters append to a canonical document-scoped campaign ledger before launching a
 model. Retries consume budget; a fresh state directory or repeated round 1 cannot reset it. Exit `4`
 means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive

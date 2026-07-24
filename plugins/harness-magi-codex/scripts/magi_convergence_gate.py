@@ -35,6 +35,8 @@ PERSONA_SETS = (
 )
 MAX_LOGICAL_CYCLES = 2
 MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_INCREMENTAL_PATHS = 8
+MAX_INCREMENTAL_LOC = 200
 
 
 class UnsafeInput(RuntimeError):
@@ -95,6 +97,7 @@ def git_bytes(repo: Path, *args: str) -> bytes:
 def validate_packet(payload: dict[str, Any], repo: Path) -> None:
     packet = payload["review_packet"]
     target = payload["target_git_sha"]
+    review_base = payload.get("review_base_git_sha", payload["base_git_sha"])
     target_tree = git(repo, "rev-parse", f"{target}^{{tree}}")
     if packet["target_tree_sha"] != target_tree:
         raise UnsafeInput("review_packet target_tree_sha does not match target_git_sha")
@@ -105,7 +108,7 @@ def validate_packet(payload: dict[str, Any], repo: Path) -> None:
         "--no-textconv",
         "--binary",
         "--full-index",
-        payload["base_git_sha"],
+        review_base,
         target,
         "--",
         *payload["changed_paths"],
@@ -115,12 +118,13 @@ def validate_packet(payload: dict[str, Any], repo: Path) -> None:
     except UnicodeDecodeError as exc:
         raise UnsafeInput("review packet diff is not UTF-8") from exc
     if packet["diff"] != diff_text:
-        raise UnsafeInput("review_packet diff does not match base_git_sha..target_git_sha")
+        raise UnsafeInput("review_packet diff does not match review_base_git_sha..target_git_sha")
     if packet["diff_sha256"] != hashlib.sha256(diff_bytes).hexdigest():
         raise UnsafeInput("review_packet diff_sha256 mismatch")
 
 
 def validate_declared_scope(payload: dict[str, Any], repo: Path) -> None:
+    review_base = payload.get("review_base_git_sha", payload["base_git_sha"])
     actual_paths = sorted(
         line
         for line in git(
@@ -129,19 +133,78 @@ def validate_declared_scope(payload: dict[str, Any], repo: Path) -> None:
             "--no-ext-diff",
             "--no-textconv",
             "--name-only",
-            payload["base_git_sha"],
+            review_base,
             payload["target_git_sha"],
             "--",
         ).splitlines()
         if line
     )
     if actual_paths != sorted(payload["changed_paths"]):
-        raise UnsafeInput("changed_paths does not exactly cover base_git_sha..target_git_sha")
+        raise UnsafeInput("changed_paths does not exactly cover review_base_git_sha..target_git_sha")
     if payload["changed_paths"] != sorted(payload["changed_paths"]):
         raise UnsafeInput("changed_paths must be sorted")
     if payload["affected_invariants"] != sorted(payload["affected_invariants"]):
         raise UnsafeInput("affected_invariants must be sorted")
     validate_packet(payload, repo)
+
+
+def diff_changed_loc(payload: dict[str, Any], repo: Path) -> int:
+    review_base = str(payload.get("review_base_git_sha", payload["base_git_sha"]))
+    result = git(
+        repo,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--numstat",
+        review_base,
+        str(payload["target_git_sha"]),
+        "--",
+        *payload["changed_paths"],
+    )
+    total = 0
+    for line in result.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            raise UnsafeInput("malformed git numstat for incremental review")
+        if parts[0] == "-" or parts[1] == "-":
+            return 1_000_000
+        try:
+            total += int(parts[0]) + int(parts[1])
+        except ValueError as exc:
+            raise UnsafeInput("non-numeric git numstat for incremental review") from exc
+    return total
+
+
+def incremental_eligible(payload: dict[str, Any], repo: Path) -> bool:
+    policy = payload.get("incremental_review")
+    if not isinstance(policy, dict) or policy.get("eligible") is not True:
+        return False
+    surfaces = policy.get("surface_changes")
+    if not isinstance(surfaces, dict):
+        raise UnsafeInput("incremental_review surface_changes is malformed")
+    changed_loc = diff_changed_loc(payload, repo)
+    if policy.get("changed_loc") != changed_loc:
+        raise UnsafeInput("incremental_review changed_loc does not match exact diff")
+    eligible = (
+        payload.get("risk_class") == "standard"
+        and bool(payload.get("historical_manifests"))
+        and payload.get("review_base_git_sha") != payload.get("base_git_sha")
+        and len(payload["changed_paths"]) <= MAX_INCREMENTAL_PATHS
+        and changed_loc <= MAX_INCREMENTAL_LOC
+        and not any(surfaces.values())
+    )
+    if not eligible:
+        raise UnsafeInput("incremental_review eligibility contradicts safety rails")
+    return True
+
+
+def targeted_persona(payload: dict[str, Any]) -> str:
+    text = " ".join(str(item).lower() for item in payload["affected_invariants"])
+    if any(token in text for token in ("race", "lock", "concurr", "signal", "process")):
+        return "hornet"
+    if any(token in text for token in ("error", "fail", "retry", "rollback")):
+        return "wasp"
+    return "gnat"
 
 
 def validate_manifest(path: Path) -> tuple[dict[str, Any], str]:
@@ -342,6 +405,22 @@ def launch_reviews(
             )
             for persona in matching_sets[0]
         ]
+    if launch["phase"] == "targeted":
+        review = validate_review(
+            state / f"round_{round_no}_targeted.json",
+            manifest_path=manifest_path,
+            artifact_sha=artifact_sha,
+            round_no=round_no,
+            schema=schema,
+        )
+        manifest, _ = stable_json(manifest_path, limit=1024 * 1024)
+        expected = targeted_persona(manifest)
+        if str(review.get("reviewer", "")).lower() != expected:
+            raise UnsafeInput(
+                f"targeted reviewer mismatch: expected {expected}, "
+                f"got {review.get('reviewer')!r}"
+            )
+        return [review]
 
     try:
         verified = verify_round(
@@ -425,6 +504,8 @@ def output(
     cycles: int,
     new_roots: list[str] | None = None,
     resolved_roots: list[str] | None = None,
+    next_persona: str | None = None,
+    prior_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "mode": "report-only",
@@ -438,6 +519,8 @@ def output(
         "logical_cycles": cycles,
         "new_blocking_roots": new_roots or [],
         "resolved_blocking_roots": resolved_roots or [],
+        "next_persona": next_persona,
+        "prior_blocking_roots": prior_roots or [],
         "authorizes_shipping": False,
     }
 
@@ -450,6 +533,8 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise UsageError(f"manifest not found or unsafe: {manifest_path}")
     manifest, current_artifact_sha = validate_manifest(manifest_path)
+    repo = Path(manifest["repository_root"])
+    incremental_allowed = incremental_eligible(manifest, repo)
     ledger, ledger_path, ledger_sha = load_ledger(manifest_path)
     campaigns = ledger["campaigns"]
     used = guard.model_launches(campaigns)
@@ -478,6 +563,9 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         for launch in campaign.get("launches", [])
         if isinstance(launch, dict)
     ]
+    if launches and launches[-1].get("status") == "superseded-by-requirement-revision":
+        # A changed requirement invalidates the prior review scope, not merely its fix diff.
+        incremental_allowed = False
     for launch in launches:
         phase = launch.get("phase")
         if phase not in guard.PHASE_WEIGHT:
@@ -547,6 +635,23 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
             launch_reviews(launch, manifest_path, schema)
         )
 
+    if incremental_allowed:
+        current_target = str(manifest["target_git_sha"])
+        if current_target in revision_order:
+            current_index = revision_order.index(current_target)
+            expected_review_base = (
+                revision_order[current_index - 1] if current_index > 0 else None
+            )
+        else:
+            expected_review_base = revision_order[-1] if revision_order else None
+        if expected_review_base is None:
+            incremental_allowed = False
+        elif manifest.get("review_base_git_sha") != expected_review_base:
+            raise UnsafeInput(
+                "incremental review_base_git_sha is not the immediately preceding "
+                "successfully reviewed target"
+            )
+
     current_phases = {
         str(launch["phase"])
         for launch in active_launches
@@ -564,7 +669,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
             if not isinstance(launch, dict) or launch.get("status") != "success":
                 continue
             artifact_sha = str(launch["artifact_sha"])
-            if launch.get("phase") == "fanout":
+            if launch.get("phase") in {"fanout", "targeted"}:
                 pending_artifact = artifact_sha
             elif pending_artifact == artifact_sha:
                 completed_cycle_targets.append(artifact_targets[artifact_sha])
@@ -586,6 +691,9 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         if current_index > 0:
             previous_summary = summaries[revision_order[current_index - 1]]
             previous_roots = set(previous_summary["roots"])
+    elif revision_order:
+        previous_summary = summaries[revision_order[-1]]
+        previous_roots = set(previous_summary["roots"])
     new_roots = sorted(current_roots - previous_roots)
     resolved_roots = sorted(previous_roots - current_roots)
     cycles = len(completed_cycle_targets)
@@ -596,7 +704,11 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         if current_summary["roots"][root].get("subsystem")
     }
     if previous_summary is not None:
-        previous_index = revision_order.index(current_target_sha) - 1
+        previous_index = (
+            revision_order.index(current_target_sha) - 1
+            if current_target_sha in revision_order
+            else len(revision_order) - 1
+        )
         roots_before_previous: set[str] = set()
         if previous_index > 0:
             roots_before_previous = set(
@@ -622,7 +734,12 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
             new_roots=new_roots,
             resolved_roots=resolved_roots,
         )
-    elif any(
+    elif (
+        isinstance(manifest.get("incremental_review"), dict)
+        and manifest["incremental_review"].get("surface_changes", {}).get(
+            "design_invariant"
+        )
+    ) or any(
         finding.get("changes_design_invariant") is True
         for finding in current_summary["roots"].values()
     ):
@@ -703,19 +820,40 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
             new_roots=new_roots,
             resolved_roots=resolved_roots,
         )
-    elif not current_phases or "fanout" not in current_phases:
-        admission = guard.admission_decision(used, ceiling, "fanout")
+    elif not current_phases:
+        phase = "targeted" if incremental_allowed and previous_summary is not None else "fanout"
+        admission = guard.admission_decision(used, ceiling, phase)
+        is_targeted = phase == "targeted"
         decision = output(
             "CONTINUE" if admission["affordable"] else "BLOCKED",
-            "INITIAL_FULL_REQUIRED" if admission["affordable"] else "NEXT_FANOUT_UNAFFORDABLE",
-            next_mode="initial-full" if admission["affordable"] else None,
+            (
+                "INCREMENTAL_FIX_REVIEW_REQUIRED"
+                if is_targeted and admission["affordable"]
+                else "INITIAL_FULL_REQUIRED"
+                if admission["affordable"]
+                else "NEXT_TARGETED_UNAFFORDABLE"
+                if is_targeted
+                else "NEXT_FANOUT_UNAFFORDABLE"
+            ),
+            next_mode=(
+                "incremental-fix"
+                if is_targeted and admission["affordable"]
+                else "initial-full"
+                if admission["affordable"]
+                else None
+            ),
             used=used,
             ceiling=ceiling,
             target_sha=manifest["target_git_sha"],
             blocker_mass=0,
             cycles=cycles,
+            next_persona=targeted_persona(manifest) if is_targeted else None,
+            prior_roots=sorted(previous_roots) if is_targeted else None,
         )
-    elif "xfamily" not in current_phases:
+    elif (
+        current_phases & {"fanout", "targeted"}
+        and "xfamily" not in current_phases
+    ):
         admission = guard.admission_decision(used, ceiling, "xfamily")
         decision = output(
             "FINAL_REVIEW_REQUIRED" if admission["affordable"] else "BLOCKED",

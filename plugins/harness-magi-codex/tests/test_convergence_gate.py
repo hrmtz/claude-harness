@@ -21,6 +21,8 @@ HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
 SCRIPT = PLUGIN / "scripts" / "magi_convergence_gate.py"
 PACKET = PLUGIN / "scripts" / "magi_review_packet.py"
+FANOUT = PLUGIN / "scripts" / "magi_fanout_codex.sh"
+VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 sys.path.insert(0, str(PLUGIN / "scripts"))
 import magi_campaign_guard as guard  # noqa: E402
 import magi_convergence_gate as convergence  # noqa: E402
@@ -102,7 +104,18 @@ class ConvergenceGateTest(unittest.TestCase):
         scope: str = "issue-107",
         ceiling: int | None = None,
         historical: list[dict[str, str]] | None = None,
+        review_base: str | None = None,
+        incremental: bool = False,
+        surface_changes: dict[str, bool] | None = None,
     ) -> None:
+        packet_base = review_base or self.base_sha
+        changed_paths = self.git(
+            "diff",
+            "--name-only",
+            packet_base,
+            self.target_sha,
+            "--",
+        ).splitlines()
         diff = subprocess.run(
             [
                 "git",
@@ -111,11 +124,10 @@ class ConvergenceGateTest(unittest.TestCase):
                 "diff",
                 "--binary",
                 "--full-index",
-                self.base_sha,
+                packet_base,
                 self.target_sha,
                 "--",
-                "helper.py",
-                "implementation.py",
+                *changed_paths,
             ],
             capture_output=True,
             check=True,
@@ -129,8 +141,32 @@ class ConvergenceGateTest(unittest.TestCase):
             "repository_root": str(self.repo),
             "target_git_sha": self.target_sha,
             "base_git_sha": self.base_sha,
-            "changed_paths": ["helper.py", "implementation.py"],
+            "review_base_git_sha": packet_base,
+            "changed_paths": changed_paths,
             "affected_invariants": ["bounded-review-loop"],
+            "incremental_review": {
+                "eligible": incremental,
+                "changed_loc": sum(
+                    int(value)
+                    for line in self.git(
+                        "diff",
+                        "--numstat",
+                        packet_base,
+                        self.target_sha,
+                        "--",
+                        *changed_paths,
+                    ).splitlines()
+                    for value in line.split("\t", 2)[:2]
+                    if value != "-"
+                ),
+                "surface_changes": surface_changes
+                or {
+                    "public_interface": False,
+                    "trust_boundary": False,
+                    "persistence_schema_rollback": False,
+                    "design_invariant": False,
+                },
+            },
             "review_packet": {
                 "target_tree_sha": self.git("rev-parse", f"{self.target_sha}^{{tree}}"),
                 "diff_sha256": hashlib.sha256(diff).hexdigest(),
@@ -253,6 +289,20 @@ class ConvergenceGateTest(unittest.TestCase):
                     )
                     + "\n"
                 )
+        elif phase == "targeted":
+            payload = self.finding_payload(
+                reviewer="gnat",
+                round_no=round_no,
+                artifact_sha=artifact_sha,
+                root=root,
+                changes_design=changes_design,
+                subsystem=subsystem,
+                dup_flag=dup_flag,
+                relation=relation,
+            )
+            (output_state / f"round_{round_no}_targeted.json").write_text(
+                json.dumps(payload) + "\n"
+            )
         else:
             findings = output_state / f"round_{round_no}_xfamily.json"
             findings.write_text(
@@ -356,8 +406,21 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertFalse((self.repo / ".dual-magi").exists())
 
+    def test_legacy_v1_packet_without_incremental_fields_remains_full_review(self) -> None:
+        payload = json.loads(self.manifest.read_text())
+        payload.pop("review_base_git_sha")
+        payload.pop("incremental_review")
+        self.manifest.write_text(json.dumps(payload, indent=2) + "\n")
+
+        result, decision = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(decision["next_mode"], "initial-full")
+        self.assertEqual(decision["next_persona"], None)
+
     def test_packet_builder_archives_previous_exact_revision(self) -> None:
         previous_sha = file_sha(self.manifest)
+        previous_target = self.target_sha
         self.advance_target()
         deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         built = run(
@@ -375,12 +438,17 @@ class ConvergenceGateTest(unittest.TestCase):
             "bounded-review-loop",
             "--deadline",
             deadline,
+            "--allow-incremental",
             "--output",
             str(self.manifest),
         )
         self.assertEqual(built.returncode, 0, built.stderr)
         payload = json.loads(self.manifest.read_text())
         self.assertEqual(payload["target_git_sha"], self.target_sha)
+        self.assertEqual(payload["review_base_git_sha"], previous_target)
+        self.assertEqual(payload["changed_paths"], ["implementation.py"])
+        self.assertTrue(payload["incremental_review"]["eligible"])
+        self.assertEqual(payload["incremental_review"]["changed_loc"], 2)
         self.assertEqual(
             payload["implementation_campaign_id"],
             "11111111-2222-4333-8444-555555555555",
@@ -505,12 +573,230 @@ class ConvergenceGateTest(unittest.TestCase):
     def test_fanout_requires_reserved_final_diverse_review(self) -> None:
         artifact = file_sha(self.manifest)
         self.add_launch(1, "fanout", artifact, root="root-a")
-        self.write_ledger()
+        ledger_path = self.write_ledger()
         result, payload = self.evaluate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["decision"], "FINAL_REVIEW_REQUIRED")
         self.assertEqual(payload["next_mode"], "final-full")
         self.assertEqual(payload["usage"], 3)
+
+    def test_small_fix_revision_uses_weight_one_targeted_review(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+        self.assertEqual(payload["next_mode"], "incremental-fix")
+        self.assertEqual(payload["reason_code"], "INCREMENTAL_FIX_REVIEW_REQUIRED")
+        self.assertEqual(payload["next_persona"], "gnat")
+        self.assertEqual(payload["prior_blocking_roots"], ["root-a"])
+        self.assertEqual(payload["usage"], 4)
+
+    def test_incremental_targeted_review_still_requires_final_diverse_review(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        current_artifact = file_sha(self.manifest)
+        self.add_launch(1, "targeted", current_artifact)
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "FINAL_REVIEW_REQUIRED")
+        self.assertEqual(payload["next_mode"], "final-full")
+        self.assertEqual(payload["usage"], 5)
+
+    def test_incremental_adapter_runs_one_authorized_persona_and_charges_one(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        ledger_path = self.write_ledger()
+        stub_bin = Path(self.temp.name) / "bin"
+        stub_bin.mkdir()
+        codex = stub_bin / "codex"
+        codex.write_text(
+            """#!/usr/bin/env python3
+import json, re, sys
+args = sys.argv[1:]
+out = args[args.index("-o") + 1]
+prompt = sys.stdin.read()
+def field(name):
+    return re.search(rf"^{name}: (.+)$", prompt, re.M).group(1)
+payload = {
+    "reviewer": "GNAT",
+    "round": int(field("ROUND")),
+    "artifact_id": field("ARTIFACT ID"),
+    "artifact_sha": field("ARTIFACT SHA256"),
+    "verdict": "GO",
+    "schema_grounding_verdict": "PASS",
+    "verify_commands_executed": ["fixture exact-diff check"],
+    "source_artifacts": [],
+    "dispositions": [],
+    "findings": [],
+}
+open(out, "w").write(json.dumps(payload) + "\\n")
+print("incremental fixture")
+"""
+        )
+        codex.chmod(0o755)
+        output_state = self.repo / "incremental-state"
+
+        result = run(
+            str(FANOUT),
+            str(self.manifest),
+            "1",
+            str(output_state),
+            "--persona-set",
+            "bug-hunt",
+            "--review-mode",
+            "incremental",
+            env={
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "HOME": str(self.fake_home),
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((output_state / "round_1_targeted.json").is_file())
+        synthesis = output_state / "round_1_codex.json"
+        self.assertTrue(synthesis.is_file())
+        self.assertFalse((output_state / "round_1_hornet.json").exists())
+        self.assertFalse((output_state / "round_1_wasp.json").exists())
+        prior = run(
+            "python3",
+            str(VALIDATOR),
+            str(synthesis),
+            "--same-doc",
+            str(self.manifest),
+            "--prior-for-round",
+            "2",
+            "--state-dir",
+            str(output_state),
+        )
+        self.assertEqual(prior.returncode, 0, prior.stderr)
+        ledger = json.loads(ledger_path.read_text())
+        launches = [
+            launch
+            for campaign in ledger["campaigns"]
+            for launch in campaign["launches"]
+        ]
+        self.assertEqual(launches[-1]["phase"], "targeted")
+        self.assertEqual(launches[-1]["model_launches"], 1)
+
+    def test_surface_change_forces_full_fanout(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=False,
+            surface_changes={
+                "public_interface": True,
+                "trust_boundary": False,
+                "persistence_schema_rollback": False,
+                "design_invariant": False,
+            },
+        )
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["next_mode"], "initial-full")
+        self.assertEqual(payload["next_persona"], None)
+
+    def test_requirement_revision_forces_full_even_for_small_diff(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        self.add_launch(
+            3,
+            "fanout",
+            old_artifact,
+            status="superseded-by-requirement-revision",
+        )
+        self.launches[-1]["cancellation"] = {
+            "expected_artifact_sha": old_artifact,
+            "reason": "fixture requirement revision",
+            "requested_at": "2026-07-24T00:01:00+00:00",
+            "term_timeout_s": 1,
+            "kill_timeout_s": 1,
+            "inventory": [],
+            "cleanup": "complete",
+            "cleanup_detail": "",
+            "completed_at": "2026-07-24T00:02:00+00:00",
+        }
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["next_mode"], "initial-full")
+        self.assertEqual(payload["reason_code"], "INITIAL_FULL_REQUIRED")
+
+    def test_forged_incremental_changed_loc_fails_closed(self) -> None:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        payload = json.loads(self.manifest.read_text())
+        payload["incremental_review"]["changed_loc"] += 1
+        self.manifest.write_text(json.dumps(payload, indent=2) + "\n")
+        self.write_ledger()
+
+        result, blocked = self.evaluate()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(blocked["decision"], "BLOCKED")
+        self.assertIn("changed_loc does not match", blocked["detail"])
 
     def test_stale_protocol_fanout_requires_initial_full_rollover(self) -> None:
         artifact = file_sha(self.manifest)

@@ -85,6 +85,64 @@ def archive_previous(
     ]
 
 
+def exact_diff(repo: Path, base: str, target: str) -> tuple[list[str], bytes, int]:
+    changed_paths = sorted(
+        line
+        for line in str(
+            git(
+                repo,
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--name-only",
+                base,
+                target,
+                "--",
+            )
+        ).splitlines()
+        if line
+    )
+    if not changed_paths:
+        raise ValueError("review base..target has no changed paths")
+    diff = git(
+        repo,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "--full-index",
+        base,
+        target,
+        "--",
+        *changed_paths,
+        text=False,
+    )
+    assert isinstance(diff, bytes)
+    if len(diff) > 900000:
+        raise ValueError("exact-SHA review packet diff exceeds 900000 bytes")
+    numstat = str(
+        git(
+            repo,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            base,
+            target,
+            "--",
+            *changed_paths,
+        )
+    )
+    changed_loc = 0
+    for line in numstat.splitlines():
+        added, deleted, *_ = line.split("\t", 2)
+        if added == "-" or deleted == "-":
+            changed_loc = 1_000_000
+            break
+        changed_loc += int(added) + int(deleted)
+    return changed_paths, diff, changed_loc
+
+
 def build(args: argparse.Namespace) -> dict[str, Any]:
     repo_input = Path(args.repo).expanduser()
     if not repo_input.is_absolute() or repo_input.is_symlink():
@@ -96,44 +154,6 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if git(repo, "rev-parse", target) != target:
         raise ValueError("--target must be a full commit SHA")
     git(repo, "merge-base", "--is-ancestor", args.base, target)
-    changed_paths = sorted(
-        line
-        for line in str(
-            git(
-                repo,
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--name-only",
-                args.base,
-                target,
-                "--",
-            )
-        ).splitlines()
-        if line
-    )
-    if not changed_paths:
-        raise ValueError("base..target has no changed paths")
-    diff = git(
-        repo,
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--binary",
-        "--full-index",
-        args.base,
-        target,
-        "--",
-        *changed_paths,
-        text=False,
-    )
-    assert isinstance(diff, bytes)
-    if len(diff) > 900000:
-        raise ValueError("exact-SHA review packet diff exceeds 900000 bytes")
-    try:
-        diff_text = diff.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("exact-SHA review packet diff is not UTF-8") from exc
     deadline = datetime.fromisoformat(args.deadline.replace("Z", "+00:00"))
     if deadline.tzinfo is None:
         raise ValueError("--deadline must include a timezone")
@@ -144,6 +164,39 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     if canonical_output != output:
         raise ValueError("--output must be canonical")
     previous_raw, previous = read_previous(output)
+    surface_changes = {
+        name: name in set(args.surface_change)
+        for name in (
+            "public_interface",
+            "trust_boundary",
+            "persistence_schema_rollback",
+            "design_invariant",
+        )
+    }
+    incremental_candidate = (
+        args.allow_incremental
+        and previous is not None
+        and isinstance(previous.get("target_git_sha"), str)
+        and args.risk_class == "standard"
+        and not any(surface_changes.values())
+    )
+    review_base = (
+        str(previous["target_git_sha"]) if incremental_candidate else args.base
+    )
+    git(repo, "merge-base", "--is-ancestor", review_base, target)
+    changed_paths, diff, changed_loc = exact_diff(repo, review_base, target)
+    incremental_eligible = (
+        incremental_candidate
+        and len(changed_paths) <= 8
+        and changed_loc <= 200
+    )
+    if review_base != args.base and not incremental_eligible:
+        review_base = args.base
+        changed_paths, diff, changed_loc = exact_diff(repo, review_base, target)
+    try:
+        diff_text = diff.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("exact-SHA review packet diff is not UTF-8") from exc
     invariants = sorted(set(args.invariant))
     if previous is None:
         campaign_id = str(uuid.uuid4())
@@ -178,8 +231,14 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "repository_root": str(repo),
         "target_git_sha": target,
         "base_git_sha": args.base,
+        "review_base_git_sha": review_base,
         "changed_paths": changed_paths,
         "affected_invariants": invariants,
+        "incremental_review": {
+            "eligible": incremental_eligible,
+            "changed_loc": changed_loc,
+            "surface_changes": surface_changes,
+        },
         "review_packet": {
             "target_tree_sha": git(repo, "rev-parse", f"{target}^{{tree}}"),
             "diff_sha256": hashlib.sha256(diff).hexdigest(),
@@ -213,6 +272,23 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--invariant", action="append", required=True)
     root.add_argument("--deadline", required=True)
     root.add_argument("--max-model-launches", type=int)
+    root.add_argument(
+        "--allow-incremental",
+        action="store_true",
+        help="allow a bounded weight-1 fix review when all mechanical safety rails pass",
+    )
+    root.add_argument(
+        "--surface-change",
+        action="append",
+        default=[],
+        choices=(
+            "public_interface",
+            "trust_boundary",
+            "persistence_schema_rollback",
+            "design_invariant",
+        ),
+        help="declare a fix surface that mechanically forces full review or redesign",
+    )
     root.add_argument("--output", required=True)
     return root
 

@@ -136,8 +136,9 @@ doc is honest about its limits, ship it.
 
 Plateau safety and autonomous-loop safety are separate. Before launching any reviewer, both
 adapters claim from a canonical document-scoped ledger through `scripts/magi_campaign_guard.py`.
-The default autonomous ceiling is 16 weighted model launches: fan-out costs 3 and cross-family
-costs 1, permitting four pairs without retries. Retries consume
+The default autonomous ceiling is 16 weighted model launches: fan-out costs 3, implementation-only
+incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted review both
+reserve the following cross-family unit. Retries consume
 budget; repeating round 1 or changing state directory cannot reset it. Above it, scripts exit `4` with
 `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU` before a model starts.
 
