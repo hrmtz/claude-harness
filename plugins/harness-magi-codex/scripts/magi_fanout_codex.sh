@@ -101,7 +101,36 @@ if [ "$PRIOR" != "-" ] && [ ! -f "$PRIOR" ]; then
     echo "fanout: prior findings not found: $PRIOR" >&2
     exit 64
 fi
+# gh #57: canonicalize every caller-supplied path before anything is spawned. Reviewers
+# launch with the TARGET repository as their cwd (below), not the caller's cwd, so a
+# relative DOC_PATH/OUT_DIR/PRIOR would otherwise resolve against the wrong repository.
+DOC_PATH="$(realpath "$DOC_PATH")"
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(realpath "$OUT_DIR")"
+if [ "$PRIOR" != "-" ]; then
+    PRIOR="$(realpath "$PRIOR")"
+fi
+# Reviewer verification commands must run in the repository/worktree that owns the
+# document, not in the harness checkout: a relative doc path in repo B launched from
+# repo A must still ground reviewers in repo B (gh #57). Fall back to the document's
+# own directory when it lives outside any git worktree. Strip GIT_DIR/GIT_WORK_TREE:
+# an inherited pair would make rev-parse ignore on-disk discovery and silently
+# re-narrow grounding to the document directory. Warn (not silently degrade) when the
+# lookup fails for anything other than "not a git repository" (e.g. dubious
+# ownership), since the fallback narrows what reviewers can ground against.
+git_toplevel="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$(dirname "$DOC_PATH")" \
+    rev-parse --show-toplevel 2>&1)" && TARGET_ROOT="$git_toplevel" || {
+    case "$git_toplevel" in
+        *"not a git repository"*) : ;;
+        *) echo "fanout: warning: git toplevel lookup failed ($git_toplevel);" \
+               "grounding reviewers in the document directory" >&2 ;;
+    esac
+    TARGET_ROOT=""
+}
+if [ -z "$TARGET_ROOT" ]; then
+    TARGET_ROOT="$(dirname "$DOC_PATH")"
+fi
+unset git_toplevel
 if [ "$PRIOR" != "-" ]; then
     python3 "$VALIDATOR" "$PRIOR" "$SCHEMA_FILE" --same-doc "$DOC_PATH" \
         --prior-for-round "$ROUND" --state-dir "$OUT_DIR" || {
@@ -306,6 +335,7 @@ for p in "${PERSONAS[@]}"; do
         printf 'command (rg / grep / reading real files). Report each verbatim in\n'
         printf 'verify_commands_executed. Doc-vs-reality drift is a CRITICAL finding. If you ran\n'
         printf 'no verification commands you MUST self-report schema_grounding_verdict "FAIL".\n'
+        printf 'Your working directory is TARGET REPO ROOT (below); run verification there.\n'
         printf 'Read-only. Never read, print, or decrypt a credential file, *.enc.yaml, or auth.json.\n\n'
         printf 'FAMILY ROUTING REVIEW (mandatory for design docs that lead to implementation):\n'
         printf 'Preferred route is Claude design/planning plateau -> Codex implementation ->\n'
@@ -339,8 +369,8 @@ for p in "${PERSONAS[@]}"; do
             printf 'surface or risk requires broader review, report that escalation instead.\n\n'
             printf 'PRIOR BLOCKING ROOT IDS: %s\n\n' "$PRIOR_BLOCKING_ROOTS"
         fi
-        printf 'ROUND: %s\nTARGET DOC: %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n\n' \
-            "$ROUND" "$DOC_PATH" "$ARTIFACT_ID" "$ARTIFACT_SHA"
+        printf 'ROUND: %s\nTARGET DOC: %s\nTARGET REPO ROOT: %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n\n' \
+            "$ROUND" "$DOC_PATH" "$TARGET_ROOT" "$ARTIFACT_ID" "$ARTIFACT_SHA"
         if [ "$PRIOR" != "-" ]; then
             printf 'PRIOR SYNTHESIS (check resolution and classify relationships; do not repeat):\n---\n'
             (
@@ -395,7 +425,7 @@ for p in "${PERSONAS[@]}"; do
       "$CROSS_CLI_GUARD" --isolate-tmux -- \
         timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
         codex exec --skip-git-repo-check -s read-only --ephemeral \
-        -C "$REPO_ROOT" \
+        -C "$TARGET_ROOT" \
         --output-schema "$PROVIDER_SCHEMA_FILE" \
         -o "$raw_fifo" \
         - < "$prompt" > "$log_fifo" 2>&1 & codex_pid=$!
