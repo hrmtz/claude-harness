@@ -150,6 +150,23 @@ Timeout and signal cleanup release the canonical lock, close the claim as failed
 bounded retry. Exit `4` is reserved for the global fuse; state corruption exits `2`, and illegal
 phase transitions exit `64`.
 
+If requirements change while an adapter owns a live claim, cancel that exact charged revision
+before modifying the document:
+
+```bash
+python3 scripts/magi_campaign_guard.py cancel-revision "$D" \
+  --expected-artifact-sha "$(sha256sum "$D" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+The guard records cancellation intent before signaling the verified adapter process tree, waits
+for bounded TERM/KILL cleanup, proves the canonical review lock is released, and then marks the
+claim `superseded-by-requirement-revision`. The launch remains charged and is never review
+evidence. Repeating the same command is idempotent. A replacement round 1 is admitted only after
+the document content SHA changes; changing only the review protocol does not restart a superseded
+revision. Do not unlink `.review.*.lock`, and do not treat a cleanup-blocked result as permission
+to launch or ship.
+
 `new-campaign` is not a production escape hatch. It is disabled unless deterministic fixtures set
 `MAGI_TEST_ALLOW_NEW_CAMPAIGN=1`; even there, the canonical global fuse remains unchanged.
 
@@ -202,7 +219,8 @@ and invents its findings passes. That is the largest residual risk, and it is un
 Adapter exit codes: `0` complete · `2` fail-closed (no usable result; no plateau) · `3` lock held
 (recursion or a concurrent review of the same doc) · `4` autonomous campaign budget exhausted
 (autonomous pivot or definitive blocked result required; not plateau) · `64` invalid invocation or
-ceiling arguments.
+ceiling arguments. Exit `2` also covers requirement-revision cleanup that cannot yet prove the
+verified owner tree and canonical lock are gone; retry the same cancellation, never launch around it.
 Fan-out exit `5` = a same-round sibling output already exists (re-running would contaminate).
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
