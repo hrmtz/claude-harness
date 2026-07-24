@@ -194,7 +194,7 @@ fi
 if grep -Fq 'guard_command="$(' "$FORMATION" \
    && grep -Fq -- '--target-pane' "$FORMATION" \
    && grep -Fq -- '--allow-self-name' "$FORMATION" \
-   && grep -Fq '"$guard_command codex ' "$FORMATION" \
+   && grep -Fq '"$guard_command $(printf '\''%q'\'' "$CODEX_LAUNCH_BIN") ' "$FORMATION" \
    && grep -Fq '"$guard_command kimi ' "$FORMATION" \
    && grep -Fq '"$guard_command claude ' "$FORMATION"; then
   ok "Formation routes every CLI through the shared explicit-pane launch guard"
