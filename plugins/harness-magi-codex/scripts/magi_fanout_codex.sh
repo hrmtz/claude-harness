@@ -26,6 +26,8 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
+PROVIDER_SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.codex.schema.json"
+SCHEMA_PREFLIGHT="$SELF_DIR/magi_codex_schema_preflight.py"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
@@ -114,6 +116,9 @@ command -v timeout >/dev/null 2>&1 || { echo "fanout: timeout utility not found"
     echo "fanout: harness-cross-cli is required for provider identity isolation" >&2
     exit 1
 }
+# Provider schema refusal is deterministic and must not consume campaign budget.  Keep this
+# before the claim boundary; the richer SSOT schema is still used for every local validation.
+python3 "$SCHEMA_PREFLIGHT" "$PROVIDER_SCHEMA_FILE" || exit $?
 FANOUT_TIMEOUT_S="${MAGI_FANOUT_TIMEOUT_S:-900}"
 case "$FANOUT_TIMEOUT_S" in
     ''|*[!0-9]*) echo "fanout: MAGI_FANOUT_TIMEOUT_S must be an integer" >&2; exit 64 ;;
@@ -391,7 +396,7 @@ for p in "${PERSONAS[@]}"; do
         timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
         codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
-        --output-schema "$SCHEMA_FILE" \
+        --output-schema "$PROVIDER_SCHEMA_FILE" \
         -o "$raw_fifo" \
         - < "$prompt" > "$log_fifo" 2>&1 & codex_pid=$!
       wait "$codex_pid" || s=$?

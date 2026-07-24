@@ -21,9 +21,17 @@ if [ -n "${STUB_TMUX_LOG:-}" ]; then
   else printf 'inherited:%s\n' "$TMUX_PANE" >> "$STUB_TMUX_LOG"; fi
 fi
 out=""
+schema=""
 while [ $# -gt 0 ]; do
-  if [ "$1" = "-o" ]; then out="$2"; shift 2; else shift; fi
+  if [ "$1" = "-o" ]; then out="$2"; shift 2
+  elif [ "$1" = "--output-schema" ]; then schema="$2"; shift 2
+  else shift; fi
 done
+[ -z "${STUB_CALLED:-}" ] || printf 'called\n' >> "$STUB_CALLED"
+[ -z "$schema" ] || ! grep -q '"allOf"' "$schema" || {
+  printf '%s\n' "invalid_json_schema: In context=('properties', 'findings', 'items'), 'allOf' is not permitted." >&2
+  exit 1
+}
 [ -n "$out" ] || exit 64
 if [ -n "${STUB_INVALID:-}" ]; then printf '{}\n' > "$out"; exit 0; fi
 if [ -n "${STUB_HANG:-}" ]; then sleep 60; exit 1; fi
@@ -47,6 +55,90 @@ chmod +x "$TMP/bin/codex"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
+
+# Reproduce the provider's exact rejection deterministically.  The adapter must discover it before
+# campaign claim (and before provider invocation), leaving usage and the xfamily reserve untouched.
+INCOMPAT_DOC="$TMP/incompatible.md"; printf '%s\n' 'unsupported schema fixture' > "$INCOMPAT_DOC"
+INCOMPAT_OUT="$TMP/incompatible-out"; mkdir -p "$INCOMPAT_OUT"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" \
+  "$HERE/../schemas/finding.schema.json" \
+  >"$TMP/incompatible.stdout" 2>"$TMP/incompatible.stderr"
+incompat_rc=$?
+if [ "$incompat_rc" -eq 64 ] \
+    && grep -q 'provider-incompatible.*allOf' "$TMP/incompatible.stderr" \
+    && [ ! -d "$TMP/.dual-magi" ]; then
+  ok "unsupported allOf fails deterministic provider-schema preflight"
+else
+  bad "unsupported schema passed deterministic preflight (rc=$incompat_rc)"
+fi
+
+DEPENDENT_SCHEMA="$TMP/dependent-schema.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false,"dependentRequired":{"value":["other"]}}' \
+  > "$DEPENDENT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$DEPENDENT_SCHEMA" \
+  >"$TMP/dependent.stdout" 2>"$TMP/dependent.stderr"
+dependent_rc=$?
+if [ "$dependent_rc" -eq 64 ] \
+    && grep -q 'provider-incompatible.*dependentRequired' "$TMP/dependent.stderr"; then
+  ok "dependent schema keywords fail provider preflight"
+else
+  bad "schema preflight accepted a dependent schema keyword"
+fi
+
+MISSING_REQUIRED_SCHEMA="$TMP/missing-required.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"kept":{"type":"string"},"missing":{"type":"string"}},"required":["kept"],"additionalProperties":false}' \
+  > "$MISSING_REQUIRED_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$MISSING_REQUIRED_SCHEMA" \
+  >"$TMP/missing-required.stdout" 2>"$TMP/missing-required.stderr"
+missing_required_rc=$?
+if [ "$missing_required_rc" -eq 64 ] \
+    && grep -q 'required missing provider-required properties missing' \
+      "$TMP/missing-required.stderr"; then
+  ok "provider-required property omissions fail schema preflight"
+else
+  bad "schema preflight accepted a property omitted from required"
+fi
+
+OPEN_OBJECT_SCHEMA="$TMP/open-object.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}' \
+  > "$OPEN_OBJECT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$OPEN_OBJECT_SCHEMA" \
+  >"$TMP/open-object.stdout" 2>"$TMP/open-object.stderr"
+open_object_rc=$?
+if [ "$open_object_rc" -eq 64 ] \
+    && grep -q 'additionalProperties must be false' "$TMP/open-object.stderr"; then
+  ok "open object schemas fail provider preflight"
+else
+  bad "schema preflight accepted an open object"
+fi
+
+KEYWORD_PROPERTY_SCHEMA="$TMP/keyword-property.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"if":{"type":"string"}},"required":["if"],"additionalProperties":false}' \
+  > "$KEYWORD_PROPERTY_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$KEYWORD_PROPERTY_SCHEMA" \
+  >"$TMP/keyword-property.stdout" 2>"$TMP/keyword-property.stderr"
+keyword_property_rc=$?
+if [ "$keyword_property_rc" -eq 0 ]; then
+  ok "property names matching schema keywords remain valid"
+else
+  bad "schema preflight confused a property name with a schema keyword"
+fi
+
+NON_OBJECT_SCHEMA="$TMP/non-object.json"
+printf '%s\n' '{"type":"string"}' > "$NON_OBJECT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$NON_OBJECT_SCHEMA" \
+  >"$TMP/non-object.stdout" 2>"$TMP/non-object.stderr"
+non_object_rc=$?
+if [ "$non_object_rc" -eq 64 ] \
+    && grep -q 'root type must be object' "$TMP/non-object.stderr"; then
+  ok "non-object provider schemas fail preflight"
+else
+  bad "schema preflight accepted a non-object root"
+fi
 
 STUB_TMUX_LOG="$TMP/tmux-env" TMUX_PANE="%57" \
   PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
@@ -267,7 +359,7 @@ if [ -n "${MAGI_TEST_LIVE:-}" ]; then
   ( exec 9>&-; python3 "$HERE/../scripts/magi_scrub.py" < "$LIVE_FIFO" > "$LIVE_SAFE" ) & live_scrub_pid=$!
   printf '%s\n' 'Return a GO verdict, reviewer LIVE, round 1, grounding FAIL, no operations, no findings.' \
     | timeout 180 env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
-        -C "$HERE/../../.." --output-schema "$HERE/../schemas/finding.schema.json" \
+        -C "$HERE/../../.." --output-schema "$HERE/../schemas/finding.codex.schema.json" \
         -o "$LIVE_FIFO" - >/dev/null 2>&1
   live_rc=$?; exec 9>&-; wait "$live_scrub_pid" || live_rc=1
   if [ "$live_rc" -eq 0 ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$LIVE_SAFE" 2>/dev/null; then

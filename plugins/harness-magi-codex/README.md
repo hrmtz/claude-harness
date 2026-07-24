@@ -32,7 +32,9 @@ same-family reviewers read the same text and found none of them.
 ## What's inside
 
 ```
-schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
+schemas/finding.schema.json   Local validation SSOT, including conditional HIGH+ identity rules.
+schemas/finding.codex.schema.json
+                              Provider subset for Codex constrained decoding; deliberately stricter.
 schemas/implementation-convergence.schema.json
                               opt-in report-only implementation manifest
 schemas/preflight-{review,decision}.schema.json
