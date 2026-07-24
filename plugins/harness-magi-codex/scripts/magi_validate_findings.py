@@ -25,10 +25,16 @@ def validate(
     *,
     doc: Path | None = None,
     same_doc_only: bool = False,
+    expected_reviewer: str | None = None,
+    expected_round: int | None = None,
 ) -> None:
     jsonschema.validate(instance=payload, schema=schema)
     if not isinstance(payload, dict):
         raise ValueError("findings payload must be an object")
+    if expected_reviewer is not None and payload.get("reviewer") != expected_reviewer:
+        raise ValueError("reviewer does not match the launched persona")
+    if expected_round is not None and payload.get("round") != expected_round:
+        raise ValueError("round does not match the launched review round")
     if doc is not None:
         if payload.get("artifact_id") != artifact_id(doc):
             raise ValueError("artifact_id does not match the canonical document path")
@@ -149,6 +155,8 @@ def main() -> int:
     mode.add_argument("--same-doc")
     parser.add_argument("--prior-for-round", type=int)
     parser.add_argument("--state-dir")
+    parser.add_argument("--reviewer")
+    parser.add_argument("--round", type=int)
     args = parser.parse_args()
     payload_path = Path(args.findings)
     schema_path = Path(args.schema) if args.schema else (
@@ -158,7 +166,14 @@ def main() -> int:
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         expected_doc = Path(args.doc or args.same_doc).resolve() if (args.doc or args.same_doc) else None
-        validate(payload, schema, doc=expected_doc, same_doc_only=bool(args.same_doc))
+        validate(
+            payload,
+            schema,
+            doc=expected_doc,
+            same_doc_only=bool(args.same_doc),
+            expected_reviewer=args.reviewer,
+            expected_round=args.round,
+        )
         if args.prior_for_round is not None:
             if args.prior_for_round <= 1:
                 raise ValueError("--prior-for-round must be greater than 1")

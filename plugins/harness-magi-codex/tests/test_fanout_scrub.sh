@@ -12,6 +12,10 @@ DOC="$TMP/design.md"; printf '%s\n' 'a test design' > "$DOC"
 
 cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
+if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then
+  printf '%s\n' '--output-schema --output-last-message --ephemeral'
+  exit 0
+fi
 if [ -n "${STUB_TMUX_LOG:-}" ]; then
   if [ -z "${TMUX_PANE+x}" ]; then printf 'unset\n' >> "$STUB_TMUX_LOG"
   else printf 'inherited:%s\n' "$TMUX_PANE" >> "$STUB_TMUX_LOG"; fi
@@ -26,11 +30,14 @@ if [ -n "${STUB_HANG:-}" ]; then sleep 60; exit 1; fi
 prompt="$(cat)"
 artifact_id="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT ID: //p' | head -n 1)"
 artifact_sha="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT SHA256: //p' | head -n 1)"
+reviewer="$(printf '%s\n' "$prompt" | sed -n 's/^You are the \([^ ]*\) reviewer.*/\1/p' | head -n 1 | tr '[:lower:]' '[:upper:]')"
+[ -z "${STUB_WRONG_REVIEWER:-}" ] || reviewer="WRONG"
 marker="Bearer "
 marker="${marker}AAAAAAAAAAAA"
-printf '{"reviewer":"STUB","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
-  "$artifact_id" "$artifact_sha" "$marker" > "$out"
+printf '{"reviewer":"%s","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$reviewer" "$artifact_id" "$artifact_sha" "$marker" > "$out"
 printf '%s\n' "$marker"
+[ -z "${STUB_EXIT:-}" ] || exit 70
 if [ -n "${STUB_CANCEL:-}" ] && printf '%s\n' "$prompt" | grep -q 'You are the CASPAR reviewer'; then
   sleep 60
 fi
@@ -93,10 +100,98 @@ PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
 mkdir -p "$TMP/invalid"
 INVALID_DOC="$TMP/invalid-design.md"; printf '%s\n' 'another design' > "$INVALID_DOC"
 STUB_INVALID=1 PATH="$TMP/bin:$PATH" "$FANOUT" "$INVALID_DOC" 1 "$TMP/invalid" >/dev/null 2>&1
-if [ $? -ne 0 ] && ! find "$TMP/invalid" -name 'round_1_*.json' -type f | grep -q .; then
-  ok "durable JSON is schema-validated and invalid partials are cleared"
+invalid_rc=$?
+invalid_diag="$(find "$TMP/invalid" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' -type f | head -n 1)"
+if [ "$invalid_rc" -ne 0 ] \
+    && ! find "$TMP/invalid" -maxdepth 1 \( -name 'round_1_melchior.json' -o \
+        -name 'round_1_balthasar.json' -o -name 'round_1_caspar.json' \) | grep -q . \
+    && [ -s "$invalid_diag" ] \
+    && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' "$invalid_diag")" \
+         = "json-schema-rejection" ]; then
+  ok "invalid partials clear while bounded schema diagnostics persist"
 else
-  bad "schema-invalid durable output passed fan-out"
+  bad "schema-invalid output was published or not durably classified"
+fi
+
+mkdir -p "$TMP/wrong-identity"
+WRONG_DOC="$TMP/wrong-identity-design.md"; printf '%s\n' 'identity fixture' > "$WRONG_DOC"
+STUB_WRONG_REVIEWER=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$WRONG_DOC" 1 "$TMP/wrong-identity" >/dev/null 2>&1
+wrong_rc=$?
+wrong_diag="$(
+  find "$TMP/wrong-identity" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+    -type f | head -n 1
+)"
+if [ "$wrong_rc" -ne 0 ] && [ -s "$wrong_diag" ] \
+    && [ "$(jq -r '[.reviewers[] | .classification + ":" + .identity_field] | unique | join(",")' \
+        "$wrong_diag")" = "artifact-identity-rejection:reviewer" ]; then
+  ok "reviewer identity mismatch is fail-closed and classified"
+else
+  bad "reviewer identity mismatch escaped or was misclassified"
+fi
+
+mkdir -p "$TMP/provider-exit"
+EXIT_DOC="$TMP/provider-exit-design.md"; printf '%s\n' 'provider exit fixture' > "$EXIT_DOC"
+STUB_EXIT=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$EXIT_DOC" 1 "$TMP/provider-exit" >/dev/null 2>&1
+exit_rc=$?
+exit_diag="$(
+  find "$TMP/provider-exit" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+    -type f | head -n 1
+)"
+if [ "$exit_rc" -ne 0 ] && [ -s "$exit_diag" ] \
+    && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' "$exit_diag")" \
+         = "provider-exit" ] \
+    && ! rg -F 'Bearer' "$TMP/provider-exit" >/dev/null 2>&1 \
+    && ! rg -F 'REDACTED' "$TMP/provider-exit" >/dev/null 2>&1; then
+  ok "provider failure persists metadata only, without scrubbed payload content"
+else
+  bad "provider failure diagnostic retained content or lost its classification"
+fi
+
+mkdir -p "$TMP/broken-bin" "$TMP/preflight"
+cat > "$TMP/broken-bin/codex" <<'STUB'
+#!/usr/bin/env bash
+exit 127
+STUB
+chmod +x "$TMP/broken-bin/codex"
+PREFLIGHT_DOC="$TMP/preflight-design.md"; printf '%s\n' 'preflight fixture' > "$PREFLIGHT_DOC"
+preflight_launches_before="$(python3 - "$TMP/.dual-magi" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+print(sum(
+    len(campaign.get("launches") or [])
+    for path in root.glob("CAMPAIGN.*.json")
+    for campaign in (json.loads(path.read_text()).get("campaigns") or [])
+))
+PY
+)"
+PATH="$TMP/broken-bin:$PATH" "$FANOUT" "$PREFLIGHT_DOC" 1 "$TMP/preflight" \
+  >/dev/null 2>&1
+preflight_rc=$?
+preflight_diag="$TMP/preflight/round_1_fanout.PREFLIGHT_FAILED.json"
+preflight_launches_after="$(python3 - "$TMP/.dual-magi" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+print(sum(
+    len(campaign.get("launches") or [])
+    for path in root.glob("CAMPAIGN.*.json")
+    for campaign in (json.loads(path.read_text()).get("campaigns") or [])
+))
+PY
+)"
+if [ "$preflight_rc" -ne 0 ] && [ -s "$preflight_diag" ] \
+    && [ "$(jq -r '.classification' "$preflight_diag")" = "cli-interface-preflight" ] \
+    && [ "$preflight_launches_after" -eq "$preflight_launches_before" ]; then
+  ok "broken CLI interface fails durably before a campaign claim"
+else
+  bad "broken CLI interface was charged or not durably classified"
+fi
+PATH="$TMP/bin:$PATH" "$FANOUT" "$PREFLIGHT_DOC" 1 "$TMP/preflight" >/dev/null 2>&1
+if [ $? -eq 0 ] && [ ! -e "$preflight_diag" ]; then
+  ok "successful retry clears the stale preflight marker"
+else
+  bad "successful retry retained a stale preflight marker"
 fi
 
 mkdir -p "$TMP/hang"

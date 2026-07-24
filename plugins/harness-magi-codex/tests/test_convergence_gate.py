@@ -51,6 +51,7 @@ class ConvergenceGateTest(unittest.TestCase):
             "schemas/finding.schema.json",
             "schemas/implementation-convergence.schema.json",
             "scripts/magi_campaign_guard.py",
+            "scripts/magi_classify_failure.py",
             "scripts/magi_convergence_gate.py",
             "scripts/magi_convergence_kernel.py",
             "scripts/magi_design_convergence_gate.py",
@@ -649,6 +650,9 @@ class ConvergenceGateTest(unittest.TestCase):
             """#!/usr/bin/env python3
 import json, re, sys
 args = sys.argv[1:]
+if args == ["exec", "--help"]:
+    print("--output-schema --output-last-message --ephemeral")
+    raise SystemExit(0)
 out = args[args.index("-o") + 1]
 prompt = sys.stdin.read()
 def field(name):

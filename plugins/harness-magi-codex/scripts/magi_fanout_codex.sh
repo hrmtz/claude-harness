@@ -29,6 +29,7 @@ SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
+CLASSIFIER="$SELF_DIR/magi_classify_failure.py"
 CONVERGENCE_GATE="$SELF_DIR/magi_convergence_gate.py"
 CANON="$REPO_ROOT/plugins/harness-magi/skills"
 CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
@@ -152,6 +153,45 @@ print(json.dumps(d.get("prior_blocking_roots") or [], separators=(",", ":")))
     PERSONAS=("$TARGETED_PERSONA")
 fi
 
+# Reject a broken launcher/cache generation and CLI releases missing the live interface after
+# semantic authorization but before charging the campaign or starting a provider. This is a local
+# help probe, not a model launch.
+cli_help=""; cli_help_rc=0
+cli_help="$(timeout 10 codex exec --help 2>&1)" || cli_help_rc=$?
+if [ "$cli_help_rc" -ne 0 ] \
+    || ! grep -q -- '--output-schema' <<<"$cli_help" \
+    || ! grep -q -- '--output-last-message' <<<"$cli_help" \
+    || ! grep -q -- '--ephemeral' <<<"$cli_help"
+then
+    preflight_tmp="$(mktemp "$OUT_DIR/.round_${ROUND}_fanout.PREFLIGHT_FAILED.XXXXXX")"
+    if ! python3 - "$preflight_tmp" "$ROUND" "$ARTIFACT_ID" "$ARTIFACT_SHA" "$cli_help_rc" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({
+    "status": "failed",
+    "classification": "cli-interface-preflight",
+    "round": int(sys.argv[2]),
+    "artifact_id": sys.argv[3],
+    "artifact_sha": sys.argv[4],
+    "cli_exit_code": int(sys.argv[5]),
+}, separators=(",", ":"), sort_keys=True) + "\n")
+PY
+    then
+        rm -f -- "$preflight_tmp"
+        echo "fanout: could not write bounded CLI preflight diagnostics" >&2
+        exit 1
+    fi
+    if ! mv -- "$preflight_tmp" "$OUT_DIR/round_${ROUND}_fanout.PREFLIGHT_FAILED.json"; then
+        rm -f -- "$preflight_tmp"
+        echo "fanout: could not publish bounded CLI preflight diagnostics" >&2
+        exit 1
+    fi
+    echo "fanout: Codex CLI interface preflight failed before campaign claim" >&2
+    exit 1
+fi
+unset cli_help
+rm -f -- "$OUT_DIR/round_${ROUND}_fanout.PREFLIGHT_FAILED.json"
+
 artifact_label() {
     if [ -n "$OUTPUT_LABEL" ]; then printf '%s' "$OUTPUT_LABEL"; else printf '%s' "$1"; fi
 }
@@ -174,7 +214,10 @@ _cleanup_stage() {
             "$STAGE_DIR/.round_${ROUND}_${p}.raw.fifo" \
             "$STAGE_DIR/.round_${ROUND}_${p}.log.fifo" \
             "$STAGE_DIR"/.round_"${ROUND}_${p}".safe.* \
-            "$STAGE_DIR"/.round_"${ROUND}_${p}".log.safe.*
+            "$STAGE_DIR"/.round_"${ROUND}_${p}".log.safe.* \
+            "$STAGE_DIR/.round_${ROUND}_${p}.scrub-meta.json" \
+            "$STAGE_DIR/.round_${ROUND}_${p}.status" \
+            "$STAGE_DIR/.round_${ROUND}_${p}.diagnostic.json"
     done
     [ "$REVIEW_MODE" = "incremental" ] \
         && rm -f -- "$STAGE_DIR/round_${ROUND}_codex.json"
@@ -325,6 +368,8 @@ for p in "${PERSONAS[@]}"; do
       trap child_cleanup INT TERM EXIT
       raw_fifo="$STAGE_DIR/.round_${ROUND}_${p}.raw.fifo"
       log_fifo="$STAGE_DIR/.round_${ROUND}_${p}.log.fifo"
+      scrub_meta="$STAGE_DIR/.round_${ROUND}_${p}.scrub-meta.json"
+      status_file="$STAGE_DIR/.round_${ROUND}_${p}.status"
       safe_out="$(mktemp "$STAGE_DIR/.round_${ROUND}_${p}.safe.XXXXXX")"
       safe_log="$(mktemp "$STAGE_DIR/.round_${ROUND}_${p}.log.safe.XXXXXX")"
       rm -f "$raw_fifo" "$log_fifo"
@@ -335,7 +380,7 @@ for p in "${PERSONAS[@]}"; do
       (
           exec 7>&- 8>&-
           eval "exec ${MAGI_LOCK_FD}>&-"
-          exec python3 "$SCRUB" < "$raw_fifo" > "$safe_out"
+          exec python3 "$SCRUB" --meta "$scrub_meta" < "$raw_fifo" > "$safe_out"
       ) & raw_scrub_pid=$!
       (
           exec 7>&- 8>&-
@@ -356,12 +401,15 @@ for p in "${PERSONAS[@]}"; do
       wait "$log_scrub_pid" || scrub_rc=1
       rm -f "$prompt" "$raw_fifo" "$log_fifo"
       trap - INT TERM EXIT
-      if [ "$s" -eq 0 ] && [ "$scrub_rc" -eq 0 ]; then
+      printf '%s %s\n' "$s" "$scrub_rc" > "$status_file"
+      if [ "$scrub_rc" -eq 0 ]; then
           label="$(artifact_label "$p")"
           mv "$safe_out" "$STAGE_DIR/round_${ROUND}_${label}.json"
           mv "$safe_log" "$STAGE_DIR/round_${ROUND}_${label}.log"
       else
           rm -f "$safe_out" "$safe_log"
+      fi
+      if [ "$s" -ne 0 ] || [ "$scrub_rc" -ne 0 ]; then
           s=1
       fi
       exit "$s" ) &
@@ -376,7 +424,8 @@ done
 for p in "${PERSONAS[@]}"; do
     label="$(artifact_label "$p")"
     out="$STAGE_DIR/round_${ROUND}_${label}.json"
-    if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" --doc "$DOC_PATH" 2>/dev/null
+    if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" \
+        --doc "$DOC_PATH" --reviewer "${p^^}" --round "$ROUND" 2>/dev/null
     then
         echo "fanout: reviewer $p produced no schema-valid output" >&2
         rc=1
@@ -385,6 +434,84 @@ for p in "${PERSONAS[@]}"; do
 done
 
 if [ $rc -ne 0 ]; then
+    diagnostics=()
+    for p in "${PERSONAS[@]}"; do
+        label="$(artifact_label "$p")"
+        status_file="$STAGE_DIR/.round_${ROUND}_${p}.status"
+        provider_rc=1
+        scrub_rc=1
+        status_valid=0
+        if [ -s "$status_file" ]; then
+            read -r provider_rc scrub_rc < "$status_file" || true
+        fi
+        case "$provider_rc:$scrub_rc" in
+            *[!0-9:]*|:*|*:) provider_rc=1; scrub_rc=1 ;;
+            *) status_valid=1 ;;
+        esac
+        diagnostic="$STAGE_DIR/.round_${ROUND}_${p}.diagnostic.json"
+        if ! python3 "$CLASSIFIER" \
+            --output "$STAGE_DIR/round_${ROUND}_${label}.json" \
+            --log "$STAGE_DIR/round_${ROUND}_${label}.log" \
+            --scrub-meta "$STAGE_DIR/.round_${ROUND}_${p}.scrub-meta.json" \
+            --provider-exit "$provider_rc" --scrub-exit "$scrub_rc" \
+            --status-valid "$status_valid" --schema "$SCHEMA_FILE" --doc "$DOC_PATH" \
+            --reviewer "${p^^}" --round "$ROUND" \
+            --claim-id "$CLAIM_ID" --artifact-id "$ARTIFACT_ID" \
+            --artifact-sha "$ARTIFACT_SHA" \
+            > "$diagnostic"
+        then
+            if ! python3 - "$diagnostic" "$p" "$ROUND" "$provider_rc" "$scrub_rc" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "reviewer": sys.argv[2].upper(),
+    "round": int(sys.argv[3]),
+    "classification": "diagnostic-generation-failure",
+    "provider_exit_code": int(sys.argv[4]),
+    "scrubber_exit_code": int(sys.argv[5]),
+}, separators=(",", ":"), sort_keys=True) + "\n")
+PY
+            then
+                echo "fanout: could not write bounded reviewer diagnostics" >&2
+                exit 1
+            fi
+        fi
+        diagnostics+=("$diagnostic")
+    done
+    failure_stage="$STAGE_DIR/round_${ROUND}_fanout.${CLAIM_ID}.FAILED.json"
+    if ! python3 - "$failure_stage" "$CLAIM_ID" "$ARTIFACT_ID" "$ARTIFACT_SHA" \
+        "$ROUND" "${diagnostics[@]}" <<'PY'
+import json, pathlib, sys
+output = pathlib.Path(sys.argv[1])
+claim_id, artifact_id, artifact_sha, round_number = sys.argv[2:6]
+allowed = {
+    "reviewer", "round", "classification", "provider_exit_code",
+    "scrubber_exit_code", "output_bytes", "log_bytes", "input_bytes",
+    "input_parsed_json", "redactions", "identity_field",
+}
+reviewers = []
+for path in sys.argv[6:]:
+    item = json.loads(pathlib.Path(path).read_text())
+    reviewers.append({key: item[key] for key in allowed if key in item})
+output.write_text(json.dumps({
+    "status": "failed",
+    "classification": "reviewer-fanout-failure",
+    "round": int(round_number),
+    "claim_id": claim_id,
+    "artifact_id": artifact_id,
+    "artifact_sha": artifact_sha,
+    "reviewers": reviewers,
+}, separators=(",", ":"), sort_keys=True) + "\n")
+PY
+    then
+        rm -f -- "$failure_stage"
+        echo "fanout: could not aggregate bounded reviewer diagnostics" >&2
+        exit 1
+    fi
+    if ! mv -- "$failure_stage" "$OUT_DIR/round_${ROUND}_fanout.${CLAIM_ID}.FAILED.json"; then
+        rm -f -- "$failure_stage"
+        echo "fanout: could not publish bounded reviewer diagnostics" >&2
+        exit 1
+    fi
     echo "fanout: clearing claim-scoped staging for failed round $ROUND" >&2
     exit $rc
 fi

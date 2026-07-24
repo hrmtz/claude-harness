@@ -222,6 +222,15 @@ Adapter exit codes: `0` = round complete · `2` = fail-closed, no usable result 
 autonomous pivot or definitive blocked result required · `64` = invalid invocation or
 ceiling arguments.
 
+Fan-out also exits `1` for a CLI preflight or reviewer failure. A preflight failure writes
+`round_<N>_fanout.PREFLIGHT_FAILED.json`; a charged reviewer failure writes
+`round_<N>_fanout.<claim-id>.FAILED.json`. These are bounded metadata envelopes only (classification,
+exit codes, byte/redaction counts, and artifact/claim identity), never canonical reviewer artifacts
+or retained provider response/log content. Inspect the envelope before deciding whether a retry is
+safe; its bounded classifications distinguish missing child status, provider/scrubber/timeout
+failure, live-document drift, parse/schema/convergence/identity rejection, and post-scrub
+corruption. It does not relax the campaign fuse.
+
 Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 16 but cannot extend it.
 There is no acknowledgement or authorization path that extends the fuse.
 `MAGI_FANOUT_TIMEOUT_S` may tighten the fan-out deadline from its default/maximum of 900 seconds.

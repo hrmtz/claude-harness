@@ -45,6 +45,7 @@ scripts/
   magi_xfamily.sh             provider-selectable adapter -> headless Claude or Grok
   magi_xfamily_claude.sh      backward-compatible Claude wrapper
   magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
+  magi_classify_failure.py    bounded content-free fan-out failure classification
   magi_validate_findings.py   validates cross-field convergence rules after constrained output
   magi_verify_round.py        write-free G1-G6/G9 verification
   magi_git.py                 ambient-config-free Git object reads
@@ -319,6 +320,14 @@ Adapter exit codes: `0` complete · `2` fail-closed (no usable result; no platea
 ceiling arguments. Exit `2` also covers requirement-revision cleanup that cannot yet prove the
 verified owner tree and canonical lock are gone; retry the same cancellation, never launch around it.
 Fan-out exit `5` = a same-round sibling output already exists (re-running would contaminate).
+Before a claim, fan-out checks that the local Codex launcher exposes the required `exec` interface.
+That check writes only `round_<N>_fanout.PREFLIGHT_FAILED.json` metadata on failure. A charged
+reviewer failure writes `round_<N>_fanout.<claim-id>.FAILED.json` with provider/scrubber exit codes,
+byte counts, redaction counts, and a bounded classification. Neither failure artifact contains the
+provider response, prompt, document, or scrubbed log content, and neither occupies a canonical
+persona artifact path. Classifications distinguish missing child status, scrubber/provider/timeout
+failure, live-document drift, empty output, JSON parse/schema/convergence rejection, post-scrub
+corruption, and exact artifact-identity rejection.
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
 `claude-fable-5`) · `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`) ·
@@ -331,6 +340,7 @@ only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 python3 tests/test_docs_match_scripts.py     # doc-vs-code contract (exit codes, G-asserts, env)
 python3 tests/test_campaign_guard.py          # global fuse, rollover, migration, prior/schema contracts
 python3 tests/test_convergence_gate.py        # exact-SHA packet + bounded implementation convergence
+python3 tests/test_failure_classification.py  # content-free provider/FIFO/schema/identity diagnostics
 python3 tests/test_autorun.py                 # no-ack Stop continuation, plateau, terminal block
 bash    tests/test_fanout_scrub.sh           # FIFO pre-write scrub + three-persona/sibling rail
 bash    tests/test_inv7_lock.sh              # flock: both sides, concurrency, SIGKILL, recursion

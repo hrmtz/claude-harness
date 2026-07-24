@@ -37,6 +37,7 @@ PROTOCOL_FILES = (
     "schemas/finding.schema.json",
     "schemas/implementation-convergence.schema.json",
     "scripts/magi_campaign_guard.py",
+    "scripts/magi_classify_failure.py",
     "scripts/magi_convergence_gate.py",
     "scripts/magi_convergence_kernel.py",
     "scripts/magi_design_convergence_gate.py",
