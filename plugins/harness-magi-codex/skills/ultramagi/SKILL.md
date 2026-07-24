@@ -87,10 +87,17 @@ degraded_until: <what must run before ship>
                idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   adversarial review of the IMPLEMENTATION, not the design:
+                 python3 scripts/magi_review_packet.py --repo <absolute-root> --base <sha> \
+                   --scope <id> --invariant <id> --deadline <RFC3339> --output <stable-manifest>
                  scripts/magi_fanout_codex.sh <target> <round> <dir> --persona-set bug-hunt \
                    --prior <prior-synthesis.json|->
                Reviewers RUN read-only verification against real data and try to break it.
-               Fix findings; re-run until clean. This is the gate before an irreversible run.
+               After each completed phase, run:
+                 python3 scripts/magi_convergence_gate.py evaluate <implementation-manifest.json>
+               Follow only CONTINUE or FINAL_REVIEW_REQUIRED. BLOCKED and REDESIGN are terminal.
+               The evaluator is advisory/report-only: it never emits PASS or authorizes shipping.
+               At most two full fanout->xfamily cycles may run; never "re-run until clean".
+               Existing exact-revision plateau + human judgment remain the ship authority.
 [5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
                then Codex for final fixes/tests. Commit only when requested or policy allows.
 [6] NEXT       update the epic; pick the next task; back to [0].
