@@ -1,6 +1,6 @@
 {
   "name": "harness-core",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260724212152",
   "description": "Credential-leak prevention and workflow safety hooks for Codex.",
   "author": {
     "name": "hrmtz",

@@ -1,0 +1,284 @@
+#!/bin/bash
+# Guard direct Codex CLI starts against cross-session plugin cache invalidation.
+#
+# Codex caches plugin hooks under versioned directories, but a normal startup
+# may install a new local-marketplace generation and delete the old directory.
+# Running sessions retain absolute hook paths into that deleted generation and
+# then fail with exit 127. This launcher publishes missing local generations
+# additively before Codex starts, so Codex sees the source generation as already
+# active and does not garbage-collect paths pinned by older sessions.
+
+set -euo pipefail
+
+DEFAULT_REAL_CODEX="$HOME/.local/libexec/claude-harness-codex-real"
+[[ -x "$DEFAULT_REAL_CODEX" ]] ||
+  DEFAULT_REAL_CODEX="$HOME/.codex/packages/standalone/current/bin/codex"
+REAL_CODEX="${CODEX_REAL_BIN:-$DEFAULT_REAL_CODEX}"
+CODEX_STATE_HOME="${CODEX_HOME:-$HOME/.codex}"
+INVENTORY_SNAPSHOT="$CODEX_STATE_HOME/plugins/harness-local-inventory.json"
+
+die() {
+  echo "codex-cache-safe: $*" >&2
+  exit 70
+}
+
+publish_generation() {
+  local source_path="$1" cache_root="$2" expected="$3"
+  local marketplace_cache="${cache_root%/*}" stage
+  mkdir -p "$cache_root"
+  [[ ! -e "$cache_root/$expected" ]] || return 0
+  stage="$(mktemp -d "$marketplace_cache/.codex-cache-safe.XXXXXX")"
+  if ! cp -a "$source_path" "$stage/$expected"; then
+    die "failed to stage $source_path as generation $expected"
+  fi
+  if ! mv "$stage/$expected" "$cache_root/$expected"; then
+    die "failed to publish generation $expected; staging retained at $stage"
+  fi
+  rmdir "$stage"
+}
+
+publish_snapshot_generations() {
+  local rows row_count row_index plugin_id marketplace plugin_name source_path
+  local manifest expected cache_root segment
+  [[ -f "$INVENTORY_SNAPSHOT" ]] ||
+    die "local inventory snapshot missing; run install-cache-safe-entrypoints first"
+  rows="$(jq -ce '
+    if type == "array" and
+       all(.[]; type == "object" and
+         all(.plugin_id, .marketplace, .plugin_name, .source_path;
+           type == "string"))
+    then .
+    else error("invalid local inventory snapshot")
+    end
+  ' "$INVENTORY_SNAPSHOT" 2>/dev/null)" ||
+    die "local inventory snapshot is malformed"
+  row_count="$(jq -r 'length' <<<"$rows")"
+  for ((row_index = 0; row_index < row_count; row_index++)); do
+    plugin_id="$(jq -r ".[$row_index].plugin_id" <<<"$rows")"
+    marketplace="$(jq -r ".[$row_index].marketplace" <<<"$rows")"
+    plugin_name="$(jq -r ".[$row_index].plugin_name" <<<"$rows")"
+    source_path="$(jq -r ".[$row_index].source_path" <<<"$rows")"
+    [[ "$marketplace" != "openai-curated" &&
+       "$marketplace" != "openai-curated-remote" ]] || continue
+    for segment in "$marketplace" "$plugin_name"; do
+      [[ "$segment" =~ ^[A-Za-z0-9._+-]+$ &&
+         "$segment" != "." && "$segment" != ".." ]] ||
+        die "invalid snapshot cache segment for $plugin_id"
+    done
+    if [[ -f "$source_path/.codex-plugin/plugin.json" ]]; then
+      manifest="$source_path/.codex-plugin/plugin.json"
+    elif [[ -f "$source_path/.claude-plugin/plugin.json" ]]; then
+      manifest="$source_path/.claude-plugin/plugin.json"
+    else
+      # The plugin may have been uninstalled and its local checkout removed
+      # since the previous successful inventory. It no longer has a generation
+      # to prepublish; the fresh inventory below will discard this stale row.
+      continue
+    fi
+    expected="$(jq -er '
+      if has("version") then .version else "local" end
+      | select(type == "string" and length > 0)
+    ' "$manifest" 2>/dev/null)" ||
+      die "invalid snapshot source version for $plugin_id"
+    [[ "$expected" =~ ^[A-Za-z0-9._+-]+$ &&
+       "$expected" != "." && "$expected" != ".." ]] ||
+      die "invalid snapshot source version for $plugin_id"
+    cache_root="$CODEX_STATE_HOME/plugins/cache/$marketplace/$plugin_name"
+    [[ -e "$cache_root/$expected" ]] ||
+      publish_generation "$source_path" "$cache_root" "$expected"
+  done
+}
+
+save_inventory_snapshot() {
+  local inventory="$1" stage
+  mkdir -p "$(dirname "$INVENTORY_SNAPSHOT")"
+  stage="$(mktemp "$(dirname "$INVENTORY_SNAPSHOT")/.harness-inventory.XXXXXX")"
+  if ! jq -e '
+    [
+      .installed[]
+      | select(
+          .installed == true and
+          .enabled == true and
+          (.marketplaceSource.sourceType // "unknown") == "local" and
+          .marketplaceName != "openai-curated" and
+          .marketplaceName != "openai-curated-remote"
+        )
+      | {
+          plugin_id: .pluginId,
+          marketplace: .marketplaceName,
+          plugin_name: .name,
+          source_path: .source.path
+        }
+    ]
+    | if all(.[]; all(.[]; type == "string"))
+      then .
+      else error("invalid inventory snapshot row")
+      end
+  ' <<<"$inventory" >"$stage"; then
+    rm -f "$stage"
+    die "could not create local inventory snapshot"
+  fi
+  mv -f "$stage" "$INVENTORY_SNAPSHOT"
+}
+
+cache_preflight() {
+  command -v jq >/dev/null 2>&1 || die "jq is required"
+  command -v flock >/dev/null 2>&1 || die "flock is required"
+  [[ -x "$REAL_CODEX" ]] || die "real Codex binary not found at $REAL_CODEX"
+
+  mkdir -p "$CODEX_STATE_HOME/plugins/cache"
+  local lock_fd
+  exec {lock_fd}>"$CODEX_STATE_HOME/plugins/cache/.harness-generation.lock"
+  flock -x "$lock_fd"
+
+  # Publish the live source versions from the last validated inventory before
+  # invoking Codex. A converged inventory query does not enter Codex's
+  # replacement path, so generations referenced by older sessions are never
+  # unlinked and there is no delete/restore window.
+  publish_snapshot_generations
+
+  local inventory
+  inventory="$("$REAL_CODEX" plugin list --json 2>/dev/null)" ||
+    die "could not read Codex plugin inventory"
+  jq -e '
+    (.installed | type == "array") and
+    all(.installed[];
+      (.installed | type == "boolean") and
+      (.enabled | type == "boolean"))
+  ' >/dev/null 2>&1 <<<"$inventory" ||
+    die "Codex plugin inventory is malformed"
+
+  local plugin_id marketplace plugin_name active source_type source_path
+  local manifest expected cache_root rows row_count row_index
+  rows="$(jq -ce '
+    [
+      .installed[]
+      | select(.installed == true and .enabled == true)
+      | {
+          plugin_id: .pluginId,
+          marketplace: .marketplaceName,
+          plugin_name: .name,
+          active: .version,
+          source_type: (.marketplaceSource.sourceType // "unknown"),
+          source_path: (.source.path // "")
+        }
+    ]
+    | if all(.[]; all(.[]; type == "string"))
+      then .
+      else error("invalid inventory row")
+      end
+  ' <<<"$inventory")" || die "Codex plugin inventory rows are malformed"
+  row_count="$(jq -r 'length' <<<"$rows")"
+  for ((row_index = 0; row_index < row_count; row_index++)); do
+    plugin_id="$(jq -r ".[$row_index].plugin_id" <<<"$rows")"
+    marketplace="$(jq -r ".[$row_index].marketplace" <<<"$rows")"
+    plugin_name="$(jq -r ".[$row_index].plugin_name" <<<"$rows")"
+    active="$(jq -r ".[$row_index].active" <<<"$rows")"
+    source_type="$(jq -r ".[$row_index].source_type" <<<"$rows")"
+    source_path="$(jq -r ".[$row_index].source_path" <<<"$rows")"
+    [[ "$source_type" == "local" ]] || continue
+    [[ "$marketplace" != "openai-curated" &&
+       "$marketplace" != "openai-curated-remote" ]] || continue
+    for segment in "$marketplace" "$plugin_name" "$active"; do
+      [[ "$segment" =~ ^[A-Za-z0-9._+-]+$ && "$segment" != "." && "$segment" != ".." ]] ||
+        die "invalid cache path segment for $plugin_id"
+    done
+
+    if [[ -f "$source_path/.codex-plugin/plugin.json" ]]; then
+      manifest="$source_path/.codex-plugin/plugin.json"
+    elif [[ -f "$source_path/.claude-plugin/plugin.json" ]]; then
+      manifest="$source_path/.claude-plugin/plugin.json"
+    else
+      die "source manifest missing for $plugin_id at $source_path"
+    fi
+    expected="$(jq -er '
+      if has("version") then .version else "local" end
+      | select(type == "string" and length > 0)
+    ' "$manifest" 2>/dev/null)" ||
+      die "invalid source version for $plugin_id"
+    [[ "$expected" =~ ^[A-Za-z0-9._+-]+$ && "$expected" != "." && "$expected" != ".." ]] ||
+      die "invalid source version for $plugin_id"
+
+    cache_root="$CODEX_STATE_HOME/plugins/cache/$marketplace/$plugin_name"
+    if [[ ! -e "$cache_root/$expected" ]]; then
+      publish_generation "$source_path" "$cache_root" "$expected"
+    fi
+  done
+
+  # Re-read active versions after additive publication. Fail closed if Codex
+  # would still refresh or select a different generation on startup.
+  inventory="$("$REAL_CODEX" plugin list --json 2>/dev/null)" ||
+    die "could not verify Codex plugin inventory"
+  jq -e '
+    (.installed | type == "array") and
+    all(.installed[];
+      (.installed | type == "boolean") and
+      (.enabled | type == "boolean"))
+  ' >/dev/null 2>&1 <<<"$inventory" ||
+    die "Codex verification inventory is malformed"
+  rows="$(jq -ce '
+    [
+      .installed[]
+      | select(.installed == true and .enabled == true)
+      | {
+          plugin_id: .pluginId,
+          marketplace: .marketplaceName,
+          plugin_name: .name,
+          active: .version,
+          source_type: (.marketplaceSource.sourceType // "unknown"),
+          source_path: (.source.path // "")
+        }
+    ]
+    | if all(.[]; all(.[]; type == "string"))
+      then .
+      else error("invalid inventory row")
+      end
+  ' <<<"$inventory")" || die "Codex verification inventory rows are malformed"
+  row_count="$(jq -r 'length' <<<"$rows")"
+  for ((row_index = 0; row_index < row_count; row_index++)); do
+    plugin_id="$(jq -r ".[$row_index].plugin_id" <<<"$rows")"
+    marketplace="$(jq -r ".[$row_index].marketplace" <<<"$rows")"
+    plugin_name="$(jq -r ".[$row_index].plugin_name" <<<"$rows")"
+    active="$(jq -r ".[$row_index].active" <<<"$rows")"
+    source_type="$(jq -r ".[$row_index].source_type" <<<"$rows")"
+    source_path="$(jq -r ".[$row_index].source_path" <<<"$rows")"
+    [[ "$source_type" == "local" &&
+       "$marketplace" != "openai-curated" &&
+       "$marketplace" != "openai-curated-remote" ]] || continue
+    if [[ -f "$source_path/.codex-plugin/plugin.json" ]]; then
+      manifest="$source_path/.codex-plugin/plugin.json"
+    else
+      manifest="$source_path/.claude-plugin/plugin.json"
+    fi
+    expected="$(jq -er 'if has("version") then .version else "local" end' "$manifest")"
+    cache_root="$CODEX_STATE_HOME/plugins/cache/$marketplace/$plugin_name"
+    [[ "$active" == "$expected" && -d "$cache_root/$expected" ]] ||
+      die "$plugin_id did not converge: source=$expected active=$active"
+  done
+
+  save_inventory_snapshot "$inventory"
+  flock -u "$lock_fd"
+  exec {lock_fd}>&-
+}
+
+# Read-only/maintenance commands do not start a hook-bearing session.
+case "${1:-}" in
+  -V|--version|help|completion|doctor|update|features)
+    exec "$REAL_CODEX" "$@"
+    ;;
+esac
+cache_preflight
+if [[ "${CODEX_CACHE_SAFE_CHECK_ONLY:-0}" == "1" ]]; then
+  exit 0
+fi
+
+exec {retention_lock_fd}>"$CODEX_STATE_HOME/plugins/cache/.harness-generation.lock"
+flock -x "$retention_lock_fd"
+if [[ "${1:-}" == "plugin" && "${2:-}" != "help" ]]; then
+  # The descriptor remains open across exec, so competing launcher mutations
+  # cannot enter until the real Codex plugin command exits.
+  exec "$REAL_CODEX" "$@"
+fi
+flock -u "$retention_lock_fd"
+exec {retention_lock_fd}>&-
+exec "$REAL_CODEX" "$@"

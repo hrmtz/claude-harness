@@ -1,0 +1,57 @@
+#!/bin/bash
+# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1
+# Stable dispatcher for plugin hooks.
+#
+# Hook declarations call this PATH-stable command instead of embedding a
+# versioned Codex/Claude plugin cache root. The dispatcher resolves scripts from
+# the live claude-harness checkout, so cache generation replacement cannot
+# invalidate commands already retained by a running session.
+
+set -euo pipefail
+
+if [[ "${1:-}" == "--identity" && $# -eq 1 ]]; then
+  printf '%s\n' 'claude-harness/harness-hook/v1'
+  exit 0
+fi
+
+[[ $# -ge 2 ]] || {
+  echo "usage: harness-hook <plugin> <relative-script> [args...]" >&2
+  exit 64
+}
+
+plugin="$1"
+relative_script="$2"
+shift 2
+
+case "$plugin" in
+  harness-core|harness-formation|harness-magi-codex|harness-rails) ;;
+  *)
+    echo "harness-hook: unsupported plugin: $plugin" >&2
+    exit 64
+    ;;
+esac
+[[ "$relative_script" != /* && "$relative_script" != *".."* ]] || {
+  echo "harness-hook: invalid relative script: $relative_script" >&2
+  exit 64
+}
+
+self="${BASH_SOURCE[0]}"
+while [[ -L "$self" ]]; do self="$(readlink -f "$self")"; done
+core_root="$(cd "$(dirname "$self")/.." && pwd)"
+plugins_root="$(dirname "$core_root")"
+plugin_root="$plugins_root/$plugin"
+script="$plugin_root/$relative_script"
+
+[[ -f "$script" ]] || {
+  echo "harness-hook: script not found: $script" >&2
+  exit 127
+}
+
+export PLUGIN_ROOT="$plugin_root"
+export CLAUDE_PLUGIN_ROOT="$plugin_root"
+
+case "$script" in
+  *.sh) exec bash "$script" "$@" ;;
+  *.py) exec python3 "$script" "$@" ;;
+  *)    exec "$script" "$@" ;;
+esac
