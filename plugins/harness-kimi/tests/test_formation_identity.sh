@@ -3,6 +3,9 @@
 # tmux display identity must share FORMATION_SELF; nested non-interactive Codex
 # must not overwrite its parent; standalone Kimi remains random.
 set -u
+unset HARNESS_TMUX_SELF_NAME_DISABLE HIPPOCAMPUS_TMUX_NAME_DISABLE
+unset KIMI_TMUX_NAME_DISABLE CODEX_TMUX_NAME_DISABLE CLAUDE_TMUX_NAME_DISABLE
+unset GROK_TMUX_NAME_DISABLE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WRAPPER="$HERE/../kimi-wrapper.sh"
@@ -11,6 +14,7 @@ FORMATION="$ROOT/plugins/harness-formation/bin/formation"
 CLAUDE_CORE="$ROOT/plugins/harness-core/hooks/tmux_self_name_core.sh"
 CODEX_HOOK="$ROOT/plugins/harness-core/hooks/codex_tmux_self_name.sh"
 AGENTS_TEMPLATE="$ROOT/plugins/harness-kimi/AGENTS.md.template"
+KIMI_INSTALLER="$ROOT/plugins/harness-kimi/install-kimi-wrapper.sh"
 
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
@@ -79,8 +83,9 @@ run_wrapper() {
   TEST_WINDOW_PANES="${TEST_WINDOW_PANES:-1}" \
   TEST_ANCESTOR_COMM="${TEST_ANCESTOR_COMM:-}" \
   TEST_OTHER_FORMATION_ID="${TEST_OTHER_FORMATION_ID:-}" \
+  HARNESS_KIMI_FORCE_INTERACTIVE_IDENTITY=1 \
   FORMATION_SELF="${FORMATION_SELF:-}" \
-  bash "$WRAPPER"
+  bash "$WRAPPER" "$@"
 }
 
 expect_log() {
@@ -127,6 +132,22 @@ expect_log "rename-window -t %77 kimi-standalone-test" "standalone Kimi display 
 expect_log "set-option -p -t %77 @formation_id standalone-test" "standalone Kimi display override seeds routing identity"
 
 : > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="kimi-help-test" run_wrapper --help
+if [[ ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "non-interactive Kimi help does not claim the parent pane"
+else
+  bad "non-interactive Kimi help mutated tmux identity"
+fi
+
+: > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="kimi-doctor-test" run_wrapper doctor
+if [[ ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "Kimi utility subcommands do not claim the parent pane"
+else
+  bad "Kimi utility subcommand mutated tmux identity"
+fi
+
+: > "$TEST_ROOT/tmux.log"
 TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="review-agent" run_wrapper
 expect_log "rename-window -t %77 review-agent" "standalone Kimi preserves an unprefixed display override"
 expect_log "set-option -p -t %77 @formation_id review-agent" "unprefixed Kimi display override seeds routing identity"
@@ -169,6 +190,16 @@ if grep -Fq -- 'tmux display-message -p -t "$TMUX_PANE" '\''#{@formation_id}|#{w
   ok "Kimi identity self-check targets its own pane"
 else
   bad "Kimi identity self-check can read the parent client window"
+fi
+if grep -Fq 'guard_command="$(' "$FORMATION" \
+   && grep -Fq -- '--target-pane' "$FORMATION" \
+   && grep -Fq -- '--allow-self-name' "$FORMATION" \
+   && grep -Fq '"$guard_command codex ' "$FORMATION" \
+   && grep -Fq '"$guard_command kimi ' "$FORMATION" \
+   && grep -Fq '"$guard_command claude ' "$FORMATION"; then
+  ok "Formation routes every CLI through the shared explicit-pane launch guard"
+else
+  bad "Formation has an unguarded CLI launch path"
 fi
 
 : > "$TEST_ROOT/tmux.log"
@@ -354,6 +385,19 @@ if [[ -z "$claude_collision_ctx" ]] \
   ok "legacy Claude sentinel refuses a duplicate routing identity"
 else
   bad "legacy Claude sentinel duplicated a live routing identity"
+fi
+
+INSTALL_HOME="$TEST_ROOT/install-home"
+mkdir -p "$INSTALL_HOME/.kimi-code/bin" "$INSTALL_HOME/.local/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$INSTALL_HOME/.kimi-code/bin/kimi"
+chmod +x "$INSTALL_HOME/.kimi-code/bin/kimi"
+if HOME="$INSTALL_HOME" bash "$KIMI_INSTALLER" >/dev/null \
+   && HOME="$INSTALL_HOME" bash "$KIMI_INSTALLER" >/dev/null \
+   && [ "$(readlink -f "$INSTALL_HOME/.local/bin/harness-cross-cli")" = \
+        "$(readlink -f "$ROOT/plugins/harness-core/bin/harness-cross-cli")" ]; then
+  ok "Kimi installer is idempotent with the shared guard symlink"
+else
+  bad "Kimi installer conflicts with the shared guard symlink"
 fi
 
 printf 'RESULT: %d passed, %d failed\n' "$PASS" "$FAIL"

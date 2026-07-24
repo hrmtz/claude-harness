@@ -203,7 +203,25 @@ setup_formation_identity() {
     tmux select-pane -t "$TMUX_PANE" -T "$display_name" >/dev/null 2>&1 || true
 }
 
-setup_formation_identity
+KIMI_IDENTITY_INTERACTIVE=1
+if [ ! -t 1 ] && [ "${HARNESS_KIMI_FORCE_INTERACTIVE_IDENTITY:-0}" != "1" ]; then
+    KIMI_IDENTITY_INTERACTIVE=0
+fi
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help|-V|--version|-p|--prompt|\
+        export|provider|acp|web|server|login|doctor|vis|migrate|upgrade|update)
+            KIMI_IDENTITY_INTERACTIVE=0
+            ;;
+    esac
+done
+
+if [ "$KIMI_IDENTITY_INTERACTIVE" = "1" ] \
+   && [ "${HARNESS_TMUX_SELF_NAME_DISABLE:-0}" != "1" ] \
+   && [ "${KIMI_TMUX_NAME_DISABLE:-0}" != "1" ] \
+   && [ "${HIPPOCAMPUS_TMUX_NAME_DISABLE:-0}" != "1" ]; then
+    setup_formation_identity
+fi
 
 # NOTE: the BASH_ENV / PATH-shim Bash guard (issue #52) was removed — Kimi Code
 # CLI >= 0.28 has a native PreToolUse hook API, and install-kimi-hooks.sh wires

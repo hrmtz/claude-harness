@@ -14,6 +14,10 @@
 # Sentinel: $HOME/.local/state/tmux_self_name/<session_id>  (one line: <name>)
 set -uo pipefail
 
+[ "${HARNESS_TMUX_SELF_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${CLAUDE_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${HIPPOCAMPUS_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+
 CHASSIS="claude"
 SESSION_ID=""
 while [ $# -gt 0 ]; do

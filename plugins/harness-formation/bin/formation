@@ -282,6 +282,30 @@ formation_window_name() {
   printf '%s-%s' "$cli" "$worker_id"
 }
 
+resolve_cross_cli_guard() {
+  local candidate="${HARNESS_CROSS_CLI_GUARD:-}" cache_root match
+  if [[ -z "$candidate" ]]; then
+    candidate="$(command -v harness-cross-cli 2>/dev/null || true)"
+  fi
+  if [[ -z "$candidate" && -x "$SCRIPT_DIR/../../harness-core/bin/harness-cross-cli" ]]; then
+    candidate="$SCRIPT_DIR/../../harness-core/bin/harness-cross-cli"
+  fi
+  if [[ -z "$candidate" ]]; then
+    for cache_root in "${CODEX_HOME:-$HOME/.codex}/plugins/cache" "$HOME/.claude/plugins/cache"; do
+      [[ -d "$cache_root" ]] || continue
+      while IFS= read -r match; do
+        candidate="$match"
+      done < <(find "$cache_root" -type f \
+        -path '*/harness-core/*/bin/harness-cross-cli' -perm -u+x 2>/dev/null | sort)
+    done
+  fi
+  [[ -x "$candidate" ]] || {
+    echo "formation: harness-cross-cli is required for tmux identity isolation." >&2
+    return 1
+  }
+  printf '%s' "$candidate"
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
@@ -350,7 +374,9 @@ cmd_spawn() {
     echo "worker already exists: $name" >&2; exit 2
   fi
 
-  local parent_id; parent_id="$(self_id)"
+  local parent_id guard_path
+  parent_id="$(self_id)"
+  guard_path="$(resolve_cross_cli_guard)"
   # Generate a spawn-scoped UUID so mailbox entries from this worker are
   # distinguishable from a different session that happened to pick the same codename.
   local spawn_id; spawn_id="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || date +%s%N)"
@@ -380,6 +406,14 @@ cmd_spawn() {
   tmux set-option -w -t "$pane_id" pane-border-status top >/dev/null
   tmux set-option -w -t "$pane_id" pane-border-format "$FORMATION_BORDER_FORMAT" >/dev/null
 
+  local guard_command expected_window
+  guard_command="$(printf '%q' "$guard_path") --target-pane $(printf '%q' "$pane_id") --allow-self-name"
+  if [[ "$placement" == "new-window" ]]; then
+    expected_window="$(formation_window_name "$cli" "$name")"
+    guard_command="$guard_command --expected-window $(printf '%q' "$expected_window")"
+  fi
+  guard_command="$guard_command --"
+
   # Seed prompt shared by both CLIs.
   local seed
   seed="Formation bootstrap. Your Formation identity is '$name' (routing id and self-reference; introduce yourself as '$name'). Parent pane id is '$parent_id'.
@@ -397,7 +431,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning codex worker '$name' with workspace-write, approvals disabled, and scoped mailbox write access at $FORMATION_HOME. Use --bypass-sandbox only inside an external sandbox." >&2
     fi
-    tmux send-keys -t "$pane_id" "codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
     # Kimi: launch the interactive TUI, then inject the seed. Kimi has no
@@ -414,7 +448,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning kimi worker '$name' with -y (auto-approve tool calls, agent may still ask). harness-kimi guard active." >&2
     fi
-    tmux send-keys -t "$pane_id" "kimi $kimi_auto_flag $kimi_model_flag" Enter
+    tmux send-keys -t "$pane_id" "$guard_command kimi $kimi_auto_flag $kimi_model_flag" Enter
     # Poll for the Kimi TUI prompt (its input box draws the same '│ >' as
     # claude's) up to 30s before injecting the seed — a fixed sleep would drop
     # the double-tap submit into a not-yet-ready textarea on a slow/cold spawn,
@@ -455,7 +489,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
       settings_json="$(echo "$settings_json" | jq -c '. + {theme:"formation-bypass"}')"
     fi
     goal_prompt="Session goal: $goal — if you notice your work drifting from this goal, stop and realign, or surface the conflict via 'formation ask'."
-    tmux send-keys -t "$pane_id" "claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
 
     # Wait for claude prompt. Poll up to 30s.
     local i

@@ -5,18 +5,24 @@ on:
     paths:
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
+      - "plugins/harness-core/bin/harness-cross-cli"
+      - "plugins/harness-core/tests/test_cross_cli_guard.sh"
       - "plugins/harness-formation/**"
       - "plugins/harness-kimi/AGENTS.md.template"
       - "plugins/harness-kimi/kimi-wrapper.sh"
+      - "plugins/harness-kimi/install-kimi-wrapper.sh"
       - "plugins/harness-kimi/tests/test_formation_identity.sh"
       - ".github/workflows/harness-formation.yml"
   push:
     paths:
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
+      - "plugins/harness-core/bin/harness-cross-cli"
+      - "plugins/harness-core/tests/test_cross_cli_guard.sh"
       - "plugins/harness-formation/**"
       - "plugins/harness-kimi/AGENTS.md.template"
       - "plugins/harness-kimi/kimi-wrapper.sh"
+      - "plugins/harness-kimi/install-kimi-wrapper.sh"
       - "plugins/harness-kimi/tests/test_formation_identity.sh"
       - ".github/workflows/harness-formation.yml"
 
@@ -35,5 +41,7 @@ jobs:
         run: bash plugins/harness-formation/tests/test_formation_hardening.sh
       - name: Test cross-CLI Formation identity
         run: bash plugins/harness-kimi/tests/test_formation_identity.sh
+      - name: Test cross-CLI launch guard
+        run: bash plugins/harness-core/tests/test_cross_cli_guard.sh
       - name: Check documented CLI dispatch
         run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py

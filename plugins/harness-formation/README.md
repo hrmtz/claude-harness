@@ -28,8 +28,13 @@ The hook fires when any of these high-confidence worker-spawn patterns match the
 ```bash
 # in Claude Code
 /plugin marketplace add github:hrmtz/claude-harness
+/plugin install harness-core@claude-harness
 /plugin install harness-formation@claude-harness
 ```
+
+`harness-core` supplies the cross-CLI identity guard used by every Formation
+worker launch. Install both plugins; Formation fails closed if the guard is
+unavailable.
 
 After install:
 

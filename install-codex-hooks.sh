@@ -39,6 +39,21 @@ BK="$HOME/sanada_backup_persistent/codex_hooks_install_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BK"
 cp "$CODEX_CONFIG" "$BK/config.toml"
 
+# Publish the shared cross-CLI guard on PATH. Preserve a replaced entrypoint in
+# the same persistent backup used for the Codex config.
+CROSS_CLI_SRC="$HARNESS_DIR/plugins/harness-core/bin/harness-cross-cli"
+CROSS_CLI_DST="$HOME/.local/bin/harness-cross-cli"
+mkdir -p "$(dirname "$CROSS_CLI_DST")"
+if [[ -e "$CROSS_CLI_DST" || -L "$CROSS_CLI_DST" ]]; then
+    if [[ "$(readlink -f "$CROSS_CLI_DST" 2>/dev/null || true)" != \
+          "$(readlink -f "$CROSS_CLI_SRC")" ]]; then
+        mv "$CROSS_CLI_DST" "$BK/harness-cross-cli.previous"
+    fi
+fi
+if [[ ! -e "$CROSS_CLI_DST" && ! -L "$CROSS_CLI_DST" ]]; then
+    ln -s "$CROSS_CLI_SRC" "$CROSS_CLI_DST"
+fi
+
 # ---- verify canonical hooks feature ----------------------------------------
 FEATURE_LIST="$(codex features list 2>/dev/null)" || {
     echo "error: unable to query Codex feature support." >&2

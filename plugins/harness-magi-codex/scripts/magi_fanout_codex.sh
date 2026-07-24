@@ -31,6 +31,22 @@ GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
 CONVERGENCE_GATE="$SELF_DIR/magi_convergence_gate.py"
 CANON="$REPO_ROOT/plugins/harness-magi/skills"
+CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    CROSS_CLI_GUARD="$(command -v harness-cross-cli 2>/dev/null || true)"
+fi
+if [ -z "$CROSS_CLI_GUARD" ] && [ -x "$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli" ]; then
+    CROSS_CLI_GUARD="$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli"
+fi
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    for cache_root in "${CODEX_HOME:-$HOME/.codex}/plugins/cache" "$HOME/.claude/plugins/cache"; do
+        [ -d "$cache_root" ] || continue
+        while IFS= read -r candidate; do
+            CROSS_CLI_GUARD="$candidate"
+        done < <(find "$cache_root" -type f \
+            -path '*/harness-core/*/bin/harness-cross-cli' -perm -u+x 2>/dev/null | sort)
+    done
+fi
 
 usage() {
     echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt] [--prior <json|->] [--review-mode full|incremental]" >&2
@@ -93,6 +109,10 @@ fi
 
 command -v codex >/dev/null 2>&1 || { echo "fanout: codex CLI not found" >&2; exit 1; }
 command -v timeout >/dev/null 2>&1 || { echo "fanout: timeout utility not found" >&2; exit 1; }
+[ -x "$CROSS_CLI_GUARD" ] || {
+    echo "fanout: harness-cross-cli is required for provider identity isolation" >&2
+    exit 1
+}
 FANOUT_TIMEOUT_S="${MAGI_FANOUT_TIMEOUT_S:-900}"
 case "$FANOUT_TIMEOUT_S" in
     ''|*[!0-9]*) echo "fanout: MAGI_FANOUT_TIMEOUT_S must be an integer" >&2; exit 64 ;;
@@ -322,8 +342,9 @@ for p in "${PERSONAS[@]}"; do
           eval "exec ${MAGI_LOCK_FD}>&-"
           exec python3 "$SCRUB" --text < "$log_fifo" > "$safe_log"
       ) & log_scrub_pid=$!
-      timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
-        env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
+      "$CROSS_CLI_GUARD" --isolate-tmux -- \
+        timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
+        codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
         --output-schema "$SCHEMA_FILE" \
         -o "$raw_fifo" \

@@ -21,6 +21,10 @@ set -uo pipefail
 HOOK_INPUT=$(cat 2>/dev/null || true)
 SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 
+[ "${HARNESS_TMUX_SELF_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${CODEX_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${HIPPOCAMPUS_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+
 PANE="${TMUX_PANE:-}"
 [ -z "$PANE" ] && exit 0
 command -v tmux >/dev/null 2>&1 || exit 0

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Fan-out regression: raw reviewer bytes travel through FIFOs and only scrubbed artifacts persist.
 set -uo pipefail
+# Model a stale inherited TMUX_PANE without binding the fixture to the
+# developer's current tmux server.
+unset TMUX
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FANOUT="$HERE/../scripts/magi_fanout_codex.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

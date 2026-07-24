@@ -68,8 +68,10 @@ Persona templates are **not** copied — they are read from the canonical `harne
 
 ## Install
 
-Preferred: install the native `harness-magi-codex` plugin from the repository
-Codex marketplace; see [`docs/codex_plugins.md`](../../docs/codex_plugins.md).
+Install both the native `harness-core` and `harness-magi-codex` plugins from the
+repository Codex marketplace; see
+[`docs/codex_plugins.md`](../../docs/codex_plugins.md). `harness-core` supplies
+the mandatory cross-CLI identity guard used for every reviewer launch.
 The legacy `install-codex-skills.sh` symlink flow remains only for migration and
 is removed with `uninstall-codex-skills.sh` after native plugin installation.
 Both commands refuse foreign skill paths: the installer will not replace an

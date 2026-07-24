@@ -12,10 +12,27 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
+CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    CROSS_CLI_GUARD="$(command -v harness-cross-cli 2>/dev/null || true)"
+fi
+if [ -z "$CROSS_CLI_GUARD" ] && [ -x "$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli" ]; then
+    CROSS_CLI_GUARD="$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli"
+fi
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    for cache_root in "${CODEX_HOME:-$HOME/.codex}/plugins/cache" "$HOME/.claude/plugins/cache"; do
+        [ -d "$cache_root" ] || continue
+        while IFS= read -r candidate; do
+            CROSS_CLI_GUARD="$candidate"
+        done < <(find "$cache_root" -type f \
+            -path '*/harness-core/*/bin/harness-cross-cli' -perm -u+x 2>/dev/null | sort)
+    done
+fi
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
 
@@ -108,6 +125,10 @@ case "$REVIEWER" in
     claude) MODEL="${MAGI_XFAMILY_CLAUDE_MODEL:-${MAGI_XFAMILY_MODEL:-claude-fable-5}}" ;;
     grok) MODEL="${MAGI_XFAMILY_GROK_MODEL:-grok-4.5}" ;;
 esac
+[ -x "$CROSS_CLI_GUARD" ] || {
+    echo "magi-xfamily: harness-cross-cli is required for provider identity isolation" >&2
+    exit 2
+}
 FINDINGS_OUT="${OUT_PREFIX}.json"
 META_OUT="${OUT_PREFIX}.meta.json"
 FAILED_OUT="${OUT_PREFIX}.FAILED.json"
@@ -197,7 +218,8 @@ set +e
 if [ "$REVIEWER" = "claude" ]; then
     (
         eval "exec ${MAGI_LOCK_FD}>&-"
-        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
+        exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
+            timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
             --output-format json \
             --json-schema "$(cat "$SCHEMA_FILE")" \
             --model "$MODEL" \
@@ -211,7 +233,8 @@ if [ "$REVIEWER" = "claude" ]; then
 else
     (
         eval "exec ${MAGI_LOCK_FD}>&-"
-        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
+        exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
+            timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
             --prompt-file "$PROMPT_FILE" \
             --cwd "$PWD" \
             --model "$MODEL" \
