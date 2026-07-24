@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "magi-preflight-run/v1"
+    },
+    "runner": {
+      "const": "magi-preflight-codex/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$"
+    },
+    "round": {
+      "const": 1
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "canonical_path": {"type": "string", "minLength": 1},
+        "artifact_id": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "required": ["canonical_path", "artifact_id", "sha256"],
+      "additionalProperties": false
+    },
+    "started_before_output_collection": {
+      "const": true
+    },
+    "allows_second_round": {
+      "const": false
+    },
+    "reviewers": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "reviewer": {
+            "type": "string",
+            "enum": ["MELCHIOR", "BALTHASAR", "CASPAR"]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "prompt_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["reviewer", "path", "sha256", "prompt_sha256"],
+        "additionalProperties": false
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {"reviewer": {"const": "MELCHIOR"}},
+            "required": ["reviewer"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"reviewer": {"const": "BALTHASAR"}},
+            "required": ["reviewer"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {"reviewer": {"const": "CASPAR"}},
+            "required": ["reviewer"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "runner",
+    "run_id",
+    "round",
+    "brief",
+    "started_before_output_collection",
+    "allows_second_round",
+    "reviewers"
+  ],
+  "additionalProperties": false
+}

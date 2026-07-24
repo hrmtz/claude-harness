@@ -22,18 +22,16 @@ import jsonschema
 sys.dont_write_bytecode = True
 
 import magi_campaign_guard as guard
+import magi_convergence_kernel as kernel
 from magi_git import run_git
 from magi_validate_findings import validate as validate_findings
 from magi_verify_round import verify_round
 
 
-BLOCKING = {"REJECT", "CRITICAL", "HIGH"}
-SEVERITY_MASS = {"REJECT": 16, "CRITICAL": 8, "HIGH": 4, "MED": 2, "LOW": 1, "nit": 0}
 PERSONA_SETS = (
     ("melchior", "balthasar", "caspar"),
     ("hornet", "gnat", "wasp"),
 )
-MAX_LOGICAL_CYCLES = 2
 MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_INCREMENTAL_PATHS = 8
 MAX_INCREMENTAL_LOC = 200
@@ -45,6 +43,11 @@ class UnsafeInput(RuntimeError):
 
 class UsageError(ValueError):
     """Invalid invocation (exit 64)."""
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise UsageError(message)
 
 
 def sha256(path: Path) -> str:
@@ -453,76 +456,11 @@ def launch_reviews(
     ]
 
 
-def normalize_root(finding: dict[str, Any]) -> str:
-    explicit = finding.get("root_cause_id")
-    if not explicit:
-        raise UnsafeInput(
-            f"blocking finding lacks stable root_cause_id: {finding.get('finding_id')}"
-        )
-    return str(explicit)
-
-
 def cycle_summary(reviews: list[dict[str, Any]]) -> dict[str, Any]:
-    roots: dict[str, dict[str, Any]] = {}
-    for review in reviews:
-        for finding in review.get("findings") or []:
-            if not isinstance(finding, dict) or finding.get("severity") not in BLOCKING:
-                continue
-            root = normalize_root(finding)
-            current = roots.get(root)
-            if (
-                current is not None
-                and current.get("subsystem")
-                and finding.get("subsystem")
-                and current["subsystem"] != finding["subsystem"]
-            ):
-                raise UnsafeInput(f"root_cause_id {root!r} has contradictory subsystems")
-            if current is None or SEVERITY_MASS[finding["severity"]] > SEVERITY_MASS[
-                current["severity"]
-            ]:
-                roots[root] = finding
-    return {
-        "roots": roots,
-        "mass": sum(SEVERITY_MASS[item["severity"]] for item in roots.values()),
-        "has_regression": any(
-            finding.get("dup_flag") == "regression"
-            or finding.get("relation_to_prior") == "fix-induced-regression"
-            for finding in roots.values()
-        ),
-    }
-
-
-def output(
-    decision: str,
-    reason_code: str,
-    *,
-    next_mode: str | None,
-    used: int,
-    ceiling: int,
-    target_sha: str,
-    blocker_mass: int,
-    cycles: int,
-    new_roots: list[str] | None = None,
-    resolved_roots: list[str] | None = None,
-    next_persona: str | None = None,
-    prior_roots: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "mode": "report-only",
-        "decision": decision,
-        "next_mode": next_mode,
-        "reason_code": reason_code,
-        "usage": used,
-        "ceiling": ceiling,
-        "target_git_sha": target_sha,
-        "blocker_mass": blocker_mass,
-        "logical_cycles": cycles,
-        "new_blocking_roots": new_roots or [],
-        "resolved_blocking_roots": resolved_roots or [],
-        "next_persona": next_persona,
-        "prior_blocking_roots": prior_roots or [],
-        "authorizes_shipping": False,
-    }
+    try:
+        return kernel.summarize_revision(reviews)
+    except kernel.KernelInputError as exc:
+        raise UnsafeInput(str(exc)) from exc
 
 
 def evaluate(manifest_path: Path) -> dict[str, Any]:
@@ -578,7 +516,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
                 if launch.get("status") == "cancellation_in_progress"
                 else "LAUNCH_STILL_RUNNING"
             )
-            return output(
+            return kernel.output(
                 "BLOCKED",
                 reason_code,
                 next_mode=None,
@@ -680,253 +618,35 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         for target_sha in revision_order
     }
     current_target_sha = manifest["target_git_sha"]
-    current_summary = summaries.get(
-        current_target_sha, {"roots": {}, "mass": 0, "has_regression": False}
-    )
-    current_roots = set(current_summary["roots"])
-    previous_roots: set[str] = set()
-    previous_summary: dict[str, Any] | None = None
-    if current_target_sha in revision_order:
-        current_index = revision_order.index(current_target_sha)
-        if current_index > 0:
-            previous_summary = summaries[revision_order[current_index - 1]]
-            previous_roots = set(previous_summary["roots"])
-    elif revision_order:
-        previous_summary = summaries[revision_order[-1]]
-        previous_roots = set(previous_summary["roots"])
-    new_roots = sorted(current_roots - previous_roots)
-    resolved_roots = sorted(previous_roots - current_roots)
     cycles = len(completed_cycle_targets)
-    previous_new_subsystems: set[str] = set()
-    current_new_subsystems = {
-        str(current_summary["roots"][root].get("subsystem"))
-        for root in new_roots
-        if current_summary["roots"][root].get("subsystem")
-    }
-    if previous_summary is not None:
-        previous_index = (
-            revision_order.index(current_target_sha) - 1
-            if current_target_sha in revision_order
-            else len(revision_order) - 1
-        )
-        roots_before_previous: set[str] = set()
-        if previous_index > 0:
-            roots_before_previous = set(
-                summaries[revision_order[previous_index - 1]]["roots"]
-            )
-        previous_new_roots = set(previous_summary["roots"]) - roots_before_previous
-        previous_new_subsystems = {
-            str(previous_summary["roots"][root].get("subsystem"))
-            for root in previous_new_roots
-            if previous_summary["roots"][root].get("subsystem")
-        }
-
-    if deadline_expired:
-        decision = output(
-            "BLOCKED",
-            "WALL_CLOCK_DEADLINE_EXPIRED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif (
+    delta = kernel.revision_delta(revision_order, summaries, current_target_sha)
+    design_invariant_changed = (
         isinstance(manifest.get("incremental_review"), dict)
         and manifest["incremental_review"].get("surface_changes", {}).get(
             "design_invariant"
         )
     ) or any(
         finding.get("changes_design_invariant") is True
-        for finding in current_summary["roots"].values()
-    ):
-        decision = output(
-            "REDESIGN",
-            "DESIGN_INVARIANT_CHANGED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif previous_summary and previous_summary["has_regression"] and current_summary["has_regression"]:
-        decision = output(
-            "REDESIGN",
-            "CONSECUTIVE_FIX_INDUCED_REGRESSIONS",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif current_roots & previous_roots:
-        decision = output(
-            "REDESIGN",
-            "BLOCKING_ROOT_REPEATED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif current_new_subsystems & previous_new_subsystems:
-        decision = output(
-            "REDESIGN",
-            "SAME_SUBSYSTEM_NEW_ROOTS_RECURRED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif transition_blocked:
-        decision = output(
-            "BLOCKED",
-            "RETRY_BUDGET_EXHAUSTED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif cycles >= MAX_LOGICAL_CYCLES and "xfamily" not in current_phases:
-        decision = output(
-            "BLOCKED",
-            "MAX_LOGICAL_CYCLES_REACHED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif not current_phases:
-        phase = "targeted" if incremental_allowed and previous_summary is not None else "fanout"
-        admission = guard.admission_decision(used, ceiling, phase)
-        is_targeted = phase == "targeted"
-        decision = output(
-            "CONTINUE" if admission["affordable"] else "BLOCKED",
-            (
-                "INCREMENTAL_FIX_REVIEW_REQUIRED"
-                if is_targeted and admission["affordable"]
-                else "INITIAL_FULL_REQUIRED"
-                if admission["affordable"]
-                else "NEXT_TARGETED_UNAFFORDABLE"
-                if is_targeted
-                else "NEXT_FANOUT_UNAFFORDABLE"
-            ),
-            next_mode=(
-                "incremental-fix"
-                if is_targeted and admission["affordable"]
-                else "initial-full"
-                if admission["affordable"]
-                else None
-            ),
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=0,
-            cycles=cycles,
-            next_persona=targeted_persona(manifest) if is_targeted else None,
-            prior_roots=sorted(previous_roots) if is_targeted else None,
-        )
-    elif (
-        current_phases & {"fanout", "targeted"}
-        and "xfamily" not in current_phases
-    ):
-        admission = guard.admission_decision(used, ceiling, "xfamily")
-        decision = output(
-            "FINAL_REVIEW_REQUIRED" if admission["affordable"] else "BLOCKED",
-            "FINAL_DIVERSE_RECHECK_REQUIRED"
-            if admission["affordable"]
-            else "FINAL_DIVERSE_RECHECK_UNAFFORDABLE",
-            next_mode="final-full" if admission["affordable"] else None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif not current_roots:
-        decision = output(
-            "BLOCKED",
-            "REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=0,
-            cycles=cycles,
-            resolved_roots=resolved_roots,
-        )
-    elif (
-        len(revision_order) >= 3
-        and summaries[revision_order[-2]]["mass"] >= summaries[revision_order[-3]]["mass"]
-        and summaries[revision_order[-1]]["mass"] >= summaries[revision_order[-2]]["mass"]
-    ):
-        decision = output(
-            "BLOCKED",
-            "BLOCKER_MASS_STALLED",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    elif cycles >= MAX_LOGICAL_CYCLES:
-        decision = output(
-            "BLOCKED",
-            "MAX_LOGICAL_CYCLES_WITH_BLOCKERS",
-            next_mode=None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
-    else:
-        admission = guard.admission_decision(used, ceiling, "fanout")
-        decision = output(
-            "CONTINUE" if admission["affordable"] else "BLOCKED",
-            "FULL_TARGET_FIX_REQUIRED"
-            if admission["affordable"]
-            else "NEXT_FANOUT_UNAFFORDABLE",
-            next_mode="full-target-fix" if admission["affordable"] else None,
-            used=used,
-            ceiling=ceiling,
-            target_sha=manifest["target_git_sha"],
-            blocker_mass=current_summary["mass"],
-            cycles=cycles,
-            new_roots=new_roots,
-            resolved_roots=resolved_roots,
-        )
+        for finding in delta["current_summary"]["roots"].values()
+    )
+    state = {
+        "used": used,
+        "ceiling": ceiling,
+        "target_sha": current_target_sha,
+        "cycles": cycles,
+        "current_phases": current_phases,
+        "delta": delta,
+        "deadline_expired": deadline_expired,
+        "design_invariant_changed": design_invariant_changed,
+        "transition_blocked": transition_blocked,
+        "incremental_allowed": incremental_allowed,
+        "targeted_persona": targeted_persona(manifest),
+        "admissions": {
+            phase: guard.admission_decision(used, ceiling, phase)
+            for phase in ("fanout", "targeted", "xfamily")
+        },
+    }
+    decision = kernel.evaluate_profile("ultramagi-implementation", state)
 
     if ledger_path.is_file() and sha256(ledger_path) != ledger_sha:
         raise UnsafeInput("ledger changed during evaluation")
@@ -935,8 +655,8 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     return decision
 
 
-def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description=__doc__)
+def parser() -> Parser:
+    root = Parser(description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
     evaluate_parser = commands.add_parser("evaluate")
     evaluate_parser.add_argument("manifest")
@@ -944,8 +664,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = parser().parse_args()
     try:
+        args = parser().parse_args()
         result = evaluate(Path(args.manifest))
     except (UsageError, guard.UsageError) as exc:
         print(f"MAGI_CONVERGENCE_USAGE: {exc}", file=sys.stderr)

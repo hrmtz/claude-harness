@@ -2,12 +2,10 @@
 name: magi
 version: 0.1.0
 description: |
-  Three-perspective preflight review for high-stakes changes (long walltime,
-  large DML, irreversible cutover, new infra layer, significant cost). Spawns
-  three parallel Task agents — MELCHIOR (technical), BALTHASAR (operational),
-  CASPAR (commercial) — and synthesizes their verdicts BEFORE the change
-  begins, front-loading "post-hoc optimization" insights that otherwise
-  surface mid-execution as expensive course corrections.
+  Contract mirror for the three-perspective preflight review used before
+  high-stakes changes. This Claude surface is an explicit fail-closed
+  availability boundary until a Claude-native structural runner ships; it
+  must not claim deterministic reviewer independence from prose alone.
 
   USE WHEN any one trigger fires: walltime ≥ 2h, ≥ 100M row DML, hard-to-
   reverse change, new pipeline / service layer, ≥ $10 confirmed spend, single
@@ -84,43 +82,31 @@ Compose a concise description (≤ 200 lines) covering:
 - Reversibility (rollback path + estimated cost)
 - Concurrent tasks that may collide
 
-Save the brief at `docs/magi/<YYYYMMDD>_<change-slug>_brief.md` if a written
-trail is wanted, otherwise keep it in the chat.
+Persist the brief at a canonical, non-symlink path before reviewer launch.
+Compute its canonical path, path-derived artifact ID, and exact byte SHA-256
+centrally and give that identity plus read access to the exact file to every
+reviewer. Chat-only briefs cannot satisfy the mechanical gate.
 
-### 2. Round 1 — three Task agents in parallel
+### 2. Mechanical availability boundary
 
-Spawn three `Task` calls **in a single assistant turn** (so they run
-concurrently, not sequentially). Each agent receives:
+This Claude surface does not ship the provider-specific structural runner
+required to create a truthful `magi-preflight-run/v1` manifest. Do not launch
+native `Task` reviewers and hand-author or relabel a
+`magi-preflight-codex/v1` manifest; that would fabricate independence
+provenance.
 
-1. The change brief
-2. Its persona prompt template (under `templates/`)
+Until a Claude-native runner is shipped, stop fail-closed with `ABORT` and
+record `FAMILY_ROUTING` with missing phase `claude-preflight-runner`. Prose
+synthesis is not an equivalent fallback. The templates remain lane definitions
+for a future runner, not an executable deterministic gate on this surface.
 
-Persona templates in this skill:
+Use the emitted `PROCEED`, `PIVOT`, or `ABORT`. A grounded minority
+`CRITICAL`, security, data-loss, or irreversibility finding is a veto.
+Corroborated ordinary roots affect the decision; unsupported minority roots
+remain explicit `questions`.
 
-- `templates/melchior_prompt.md` — technical
-- `templates/balthasar_prompt.md` — operational
-- `templates/caspar_prompt.md` — commercial
-
-Each persona returns a 600 - 900 word report.
-
-### 3. Synthesize
-
-Read all three reports. Produce a synthesis with:
-
-- **Convergent concerns** (all three flagged → high confidence)
-- **Persona-specific concerns** (single flagged → review for persona bias)
-- **Suggested mitigations** / alternative paths
-- **Verdict**: PROCEED / PIVOT / ABORT
-- If **PIVOT**: propose the alternative; if non-trivial, re-run Round 1 on
-  the new plan
-
-### 4. Round 2+ (optional, strategic-layer only)
-
-Reserved for architecture-class decisions where Round 1 is inconclusive or
-the change touches multiple layers. Re-prompt each persona with refined
-context based on Round 1 findings — ADR-style depth.
-
-**Most pre-flights end at Round 1.**
+Magi is exactly one round on a surface with a structural runner. `PIVOT`
+narrows the implementation plan; it never authorizes a second Magi round.
 
 ## Output format
 
@@ -170,6 +156,7 @@ Otherwise stay in chat.
   synthesis. Pre-flight only.
 - **Over-trusting any one persona** — each has its own bias. Synthesis is
   where signal emerges from triangulation.
+- **Re-running after PIVOT** — turns pre-flight into an unbounded review loop.
 - **Magi for trivial changes** — debug / fix / 1-line edits don't need this.
   Don't dilute the protocol.
 

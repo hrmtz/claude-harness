@@ -1,16 +1,24 @@
 # harness-magi
 
-Three-perspective preflight review for Claude Code. Surfaces architectural / operational / commercial blind spots **before** you commit walltime, cost, or destructive state — front-loading the *"what if you DROP→rebuild instead?"* conversation that otherwise happens mid-execution as an expensive course correction.
+Contract mirror for a three-perspective preflight review. This Claude surface
+documents the protocol but deliberately fails closed until a Claude-native
+structural runner can prove reviewer independence and artifact provenance.
+Use the `harness-magi-codex` companion for the working runner.
 
 ## Why "Magi"?
 
-Named after Evangelion's Magi supercomputer system: three personalities (Melchior, Balthasar, Caspar) decide together. Here, three parallel `Task` agents — each with a distinct perspective — independently review the change and surface divergent observations.
+Named after Evangelion's Magi supercomputer system: three personalities
+(Melchior, Balthasar, Caspar) decide together. The contract defines three
+independent perspectives; prose-only `Task` dispatch is not accepted as proof
+that they ran independently.
 
 - **MELCHIOR** (technical): silent failure modes, per-unit cost reality, alternative idioms
 - **BALTHASAR** (operational): recovery cost, monitoring blind spots, peak resource envelope, concurrent-task collisions
 - **CASPAR** (commercial): walltime / cost vs alternative, ROI-driven pivots, pre-commit cut lines
 
-Convergent findings (all three flagged) carry the most weight. Divergent (single-persona) findings deserve a second look but may be persona-specific noise.
+Corroborated findings carry the most weight. Unsupported single-persona
+findings remain explicit questions. A grounded minority CRITICAL, security,
+data-loss, or irreversibility finding retains veto power.
 
 ## When to invoke
 
@@ -46,37 +54,16 @@ skills/magi/
     └── caspar_prompt.md              commercial persona prompt
 ```
 
-The persona prompts are kept in `templates/` so you can review and adapt them. Each is ~80 lines, ~600-900 word output target.
+The persona prompts define the three lanes. `references/review-contract.md`
+defines the structured artifact consumed by the deterministic companion gate.
 
 **Sibling skills in this plugin:** `dual-magi-review` (per-round design review), `ultramagi` (the full design→review→build→review→ship loop), `bug-hunt` (adversarial review of an implementation diff), and `magi-battle` (red-vs-blue team battle that runs between plateau and ship — replaces the review convergence漸近 tail with a scored verdict on attack chains). See each skill's `SKILL.md`.
 
 ## Output
 
-A single markdown synthesis:
-
-```
-# Magi pre-flight: <change name>
-
-## Trigger that fired
-- <which threshold(s)>
-
-## Persona summaries
-### MELCHIOR (technical)
-### BALTHASAR (operational)
-### CASPAR (commercial)
-
-## Synthesis
-**Convergent**: ...
-**Divergent**: ...
-
-## Verdict
-PROCEED / PIVOT / ABORT — <one-line reason>
-
-## Next action
-<concrete step>
-```
-
-Save under `docs/magi/<YYYYMMDD>_<change-slug>.md` for written ADR-style trail, or stay in chat for lightweight reviews.
+The deterministic gate requires a provider-specific structural runner. The
+Codex companion currently ships that runner; this Claude surface remains
+fail-closed until a Claude-native runner can produce truthful provenance.
 
 ## Anti-patterns
 

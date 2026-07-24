@@ -30,18 +30,32 @@ command -v claude >/dev/null 2>&1 || {
     echo "                     fail closed (exit 2) and NO plateau can be granted." >&2
 }
 command -v flock >/dev/null 2>&1 || { echo "[harness-magi-codex] error: flock(1) required" >&2; exit 1; }
+command -v bwrap >/dev/null 2>&1 || { echo "[harness-magi-codex] error: bubblewrap required" >&2; exit 1; }
 
 mkdir -p "$TARGET"
 
-for skill in dual-magi-review ultramagi; do
+for skill in magi dual-magi-review ultramagi; do
     src="$HERE/skills/$skill"
     dst="$TARGET/$skill"
     [ -d "$src" ] || { echo "error: source skill not found: $src" >&2; exit 1; }
 
-    # Only ever replace what we own: a symlink we made, or a dir we previously copied.
-    # (`rm -rf` on a symlink-to-dir with no trailing slash removes the link, not the target.)
-    if [ -L "$dst" ] || [ -d "$dst" ]; then
-        rm -rf "$dst"
+    # Only ever replace what we own: our exact symlink or a copy with our exact marker.
+    if [ -L "$dst" ]; then
+        if [ "$(readlink -f "$dst")" = "$(readlink -f "$src")" ]; then
+            rm -f "$dst"
+        else
+            echo "[harness-magi-codex] error: refusing foreign symlink $dst" >&2
+            exit 1
+        fi
+    elif [ -d "$dst" ]; then
+        marker="$dst/.harness-magi-codex"
+        expected_marker="installed by harness-magi-codex from $src"
+        if [ -f "$marker" ] && [ "$(cat "$marker")" = "$expected_marker" ]; then
+            rm -rf "$dst"
+        else
+            echo "[harness-magi-codex] error: refusing foreign skill directory $dst" >&2
+            exit 1
+        fi
     elif [ -e "$dst" ]; then
         echo "[harness-magi-codex] error: $dst exists and is not a skill dir or symlink" >&2
         exit 1
@@ -61,12 +75,15 @@ for skill in dual-magi-review ultramagi; do
         # Ownership marker: uninstall removes a copied dir ONLY if it finds this. Without it,
         # a user's own hand-written skill of the same name is indistinguishable from ours and
         # would be rm -rf'd.
-        printf 'installed by harness-magi-codex from %s\n' "$src" > "$dst/.harness-magi-codex"
+        printf 'installed by harness-magi-codex from %s\n' "$src" \
+            > "$dst/.harness-magi-codex" || {
+                echo "[harness-magi-codex] error: ownership marker write failed" >&2
+                exit 1
+            }
         echo "[harness-magi-codex] copied $dst"
     fi
 done
 
-chmod +x "$HERE"/scripts/*.sh "$HERE"/scripts/*.py "$HERE"/tests/*.sh "$HERE"/tests/*.py 2>/dev/null || true
 echo "[harness-magi-codex] done. Restart Codex sessions to discover the skills."
 echo "[harness-magi-codex] note: the plateau gate detects accidental skips (T1), NOT an"
 echo "                     adversarial same-user process (T2). It is not forgery-resistant."

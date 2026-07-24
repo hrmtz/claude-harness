@@ -5,7 +5,7 @@ The repository marketplace is `.agents/plugins/marketplace.json`. It exposes:
 - `harness-core`: lifecycle safety hooks, including Codex self-naming
 - `harness-rails`: operational hooks and the versioning skill
 - `harness-formation`: Formation suggestion hook and worker skill
-- `harness-magi-codex`: Codex-orchestrated dual-Magi and ultramagi skills
+- `harness-magi-codex`: one-shot Magi plus bounded dual-Magi and ultramagi skills
 
 ## Install
 
@@ -46,7 +46,9 @@ The hook uninstaller takes a Sanada backup and preserves third-party hooks,
 `[hooks.state]`, profiles, and all non-harness config. It refuses ambiguous or
 duplicate managed markers. The Magi command removes only legacy skill links or
 copies carrying its ownership marker; native plugin skills remain in the plugin
-cache.
+cache. The legacy Magi installer also refuses to overwrite a foreign directory
+or symlink at a managed skill path. Resolve that ownership conflict explicitly
+instead of deleting the foreign entry through the harness installer.
 
 ## Update
 

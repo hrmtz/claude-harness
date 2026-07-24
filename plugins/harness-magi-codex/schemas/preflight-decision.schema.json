@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "magi-preflight-decision/v1"
+    },
+    "mode": {
+      "const": "report-only"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["PROCEED", "PIVOT", "ABORT"]
+    },
+    "reason_code": {
+      "type": "string",
+      "enum": [
+        "GROUNDED_ABORT_VETO",
+        "CORROBORATED_ABORT",
+        "GROUNDED_PIVOT_VETO",
+        "CORROBORATED_PIVOT",
+        "NO_BLOCKING_CONCERN",
+        "UNSAFE_OR_INCOMPLETE_INPUT"
+      ]
+    },
+    "brief": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "canonical_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "artifact_id": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{16}$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": ["canonical_path", "artifact_id", "sha256"],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rounds_consumed": {
+      "const": 1
+    },
+    "allows_second_round": {
+      "const": false
+    },
+    "authorizes_shipping": {
+      "const": false
+    },
+    "source_artifacts": {
+      "type": "array",
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "reviewer": {
+            "type": "string",
+            "enum": ["MELCHIOR", "BALTHASAR", "CASPAR"]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["reviewer", "path", "sha256"],
+        "additionalProperties": false
+      }
+    },
+    "vetoes": {
+      "type": "array",
+      "maxItems": 192,
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "root_cause_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision": {
+            "type": "string",
+            "enum": ["PIVOT", "ABORT"]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "security",
+              "data-loss",
+              "irreversibility"
+            ]
+          }
+        },
+        "required": ["source_ref", "root_cause_id", "decision", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "corroborated_roots": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "properties": {
+          "root_cause_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reviewers": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["MELCHIOR", "BALTHASAR", "CASPAR"]
+            }
+          },
+          "source_refs": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "decision": {
+            "type": "string",
+            "enum": ["PIVOT", "ABORT"]
+          }
+        },
+        "required": ["root_cause_id", "reviewers", "source_refs", "decision"],
+        "additionalProperties": false
+      }
+    },
+    "questions": {
+      "type": "array",
+      "maxItems": 192,
+      "items": {
+        "type": "object",
+        "properties": {
+          "root_cause_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["root_cause_id", "source_ref", "question"],
+        "additionalProperties": false
+      }
+    },
+    "detail": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "mode",
+    "decision",
+    "reason_code",
+    "brief",
+    "rounds_consumed",
+    "allows_second_round",
+    "authorizes_shipping",
+    "source_artifacts",
+    "vetoes",
+    "corroborated_roots",
+    "questions",
+    "detail"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "reason_code": {
+            "const": "UNSAFE_OR_INCOMPLETE_INPUT"
+          }
+        },
+        "required": ["reason_code"]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "const": "ABORT"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "brief": {
+            "type": "object"
+          },
+          "source_artifacts": {
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"reason_code": {"const": "GROUNDED_ABORT_VETO"}},
+        "required": ["reason_code"]
+      },
+      "then": {"properties": {"decision": {"const": "ABORT"}}}
+    },
+    {
+      "if": {
+        "properties": {"reason_code": {"const": "CORROBORATED_ABORT"}},
+        "required": ["reason_code"]
+      },
+      "then": {"properties": {"decision": {"const": "ABORT"}}}
+    },
+    {
+      "if": {
+        "properties": {"reason_code": {"const": "GROUNDED_PIVOT_VETO"}},
+        "required": ["reason_code"]
+      },
+      "then": {"properties": {"decision": {"const": "PIVOT"}}}
+    },
+    {
+      "if": {
+        "properties": {"reason_code": {"const": "CORROBORATED_PIVOT"}},
+        "required": ["reason_code"]
+      },
+      "then": {"properties": {"decision": {"const": "PIVOT"}}}
+    },
+    {
+      "if": {
+        "properties": {"reason_code": {"const": "NO_BLOCKING_CONCERN"}},
+        "required": ["reason_code"]
+      },
+      "then": {"properties": {"decision": {"const": "PROCEED"}}}
+    },
+    {
+      "if": {
+        "not": {
+          "properties": {
+            "reason_code": {"const": "UNSAFE_OR_INCOMPLETE_INPUT"}
+          },
+          "required": ["reason_code"]
+        }
+      },
+      "then": {
+        "properties": {
+          "source_artifacts": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {"reviewer": {"const": "MELCHIOR"}},
+                  "required": ["reviewer"]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {"reviewer": {"const": "BALTHASAR"}},
+                  "required": ["reviewer"]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {"reviewer": {"const": "CASPAR"}},
+                  "required": ["reviewer"]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}
