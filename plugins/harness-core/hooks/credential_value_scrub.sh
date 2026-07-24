@@ -27,6 +27,7 @@ PATTERNS=(
     'tskey-[a-zA-Z0-9_-]{20,}|tskey-<REDACTED>'
     'AKIA[0-9A-Z]{16}|AKIA<REDACTED>'
     'cfut_[A-Za-z0-9_-]{20,}|cfut_<REDACTED>'
+    'cfat_[A-Za-z0-9]{20,}|cfat_<REDACTED>'
     'ghp_[a-zA-Z0-9]{30,}|ghp_<REDACTED>'
     'ghs_[a-zA-Z0-9]{30,}|ghs_<REDACTED>'
     'postgresql://[^:/@[:space:]]+:[^@[:space:]]+@|postgresql://<REDACTED>:<REDACTED>@'
