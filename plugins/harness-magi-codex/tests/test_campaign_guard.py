@@ -43,6 +43,20 @@ def finding(
 ) -> dict[str, object]:
     artifact_id = hashlib.sha256(str(doc.resolve()).encode()).hexdigest()[:16] if doc else "0" * 16
     artifact_sha = hashlib.sha256(doc.read_bytes()).hexdigest() if doc else "0" * 64
+    finding_payload = {
+        "finding_id": "TEST-1",
+        "severity": severity,
+        "title": "test",
+        "location": "section 1",
+        "rationale": "test",
+        "required_fix": "test",
+        "confidence": "high",
+        "dup_flag": dup_flag,
+        "missed_angle": "test",
+    }
+    if severity in {"REJECT", "CRITICAL", "HIGH"}:
+        finding_payload["subsystem"] = "orchestration"
+        finding_payload["root_cause_id"] = "test.root"
     return {
         "reviewer": "TEST",
         "round": round_no,
@@ -53,19 +67,7 @@ def finding(
         "verify_commands_executed": ["rg contract doc"],
         "source_artifacts": [],
         "dispositions": [],
-        "findings": [
-            {
-                "finding_id": "TEST-1",
-                "severity": severity,
-                "title": "test",
-                "location": "section 1",
-                "rationale": "test",
-                "required_fix": "test",
-                "confidence": "high",
-                "dup_flag": dup_flag,
-                "missed_angle": "test",
-            }
-        ],
+        "findings": [finding_payload],
     }
 
 
@@ -710,6 +712,16 @@ class CampaignGuardTest(unittest.TestCase):
 
 
 class FindingSchemaTest(unittest.TestCase):
+    def test_blocking_finding_requires_convergence_identity(self) -> None:
+        for missing in ("root_cause_id", "subsystem"):
+            payload = finding("new", "HIGH")
+            del payload["findings"][0][missing]
+            with self.assertRaises(jsonschema.ValidationError):
+                validate_findings(payload, SCHEMA)
+
+        payload = finding("new", "MED")
+        validate_findings(payload, SCHEMA)
+
     def test_classification_and_severity_contract(self) -> None:
         for flag, severity in (
             ("new", "HIGH"),

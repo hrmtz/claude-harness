@@ -11,7 +11,7 @@ Operational harness for [Claude Code](https://claude.com/claude-code), distilled
 | Plugin | What it does | Trigger |
 |---|---|---|
 | **harness-core** | Defense-in-depth hook set (`hooks/hooks.json` is authoritative). Flagship trio: credential value scrub (PostToolUse) + dangerous bash guard (PreToolUse) + admission-keyword workflow reminder (UserPromptSubmit); plus branch-policy / rotation-propagation / 真田 auto-backup guards, session-context rails, and a Stop/SubagentStop security-review depth gate. | Every Bash call, user prompt, and session stop |
-| **harness-magi** | Multi-perspective preflight review skill. v0.6.0+: spawns 3 same-family agents (MELCHIOR/BALTHASAR/CASPAR) **plus** a mandatory cross-family reviewer (Codex by default) to cancel shared training-data bias. Synthesizes REJECT/REVISE findings before high-stakes changes execute. | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
+| **harness-magi** | Claude-side contract mirror for multi-perspective preflight. It fails closed until a Claude-native structural runner ships; use the working `harness-magi-codex` companion for MELCHIOR/BALTHASAR/CASPAR fan-out and cross-family review. | Walltime ≥ 2h, ≥ 100M row DML, non-reversible cutover, new pipeline layer, ≥ $10 spend, or long-poll scripts |
 | **harness-rails** | Operational safety rails for long-running ops: pre-flight algorithm fitness CLI (working set vs RAM), in-flight heartbeat + cron watcher (stale + ETA overrun), Discord notify, and opt-in gh issue emit. Human-in-loop only — no auto-kill. | Long-running operations (> 1h walltime); watcher runs via cron `*/1 * * * *` |
 | **harness-formation** | Spawn and coordinate long-running peer AI agent panes (claude or codex) in sibling tmux panes. Append-only jsonl mailbox with session-scoped identity, auto-relay daemon, credential-safe body guard. | Tasks that justify hours of wall time and need live observability or mid-flight redirection |
 | **harness-craft** | Behavioral craft skills distilled from [obra/superpowers](https://github.com/obra/superpowers) (MIT): `skill-tdd` (author skills via RED-GREEN-REFACTOR pressure testing, structural-first entry gate), `atomized-briefing` (context-free 2-5 min task plans for formation workers / subagent dispatch), `root-cause-debugging` (Iron Law + 3-failed-fixes escalation to dual-magi-review). Superpowers teaches, harness enforces — this is the explicitly-behavioral annex, wired into the enforcing half. | Authoring a SKILL.md, briefing a formation worker / subagent plan, or any debugging session |
@@ -66,7 +66,7 @@ Read that first if you want to understand *why* these hooks exist before install
 ## Status
 
 - ✅ `harness-core` — production-tested locally
-- ✅ `harness-magi` — v0.6.0: cross-family (Codex) round mandatory; plateau CONFIRM requires cross-family pass
+- ⚠️ `harness-magi` — Claude contract mirror; fail-closed until a Claude-native structural runner ships. Use `harness-magi-codex` for the working protocol.
 - ✅ `harness-rails` — production-tested locally on 165M-row HNSW build (see [docs/INCIDENT_23H_HNSW.md](./docs/INCIDENT_23H_HNSW.md))
 - ✅ `harness-formation` — `formation` skill + CLI for claude/codex peer workers, session-scoped mailbox identity
 - ✅ `harness-kimi` — native-hook port for Kimi Code CLI >= 0.28 (BASH_ENV layer deprecated); see [plugins/harness-kimi/README.md](./plugins/harness-kimi/README.md)

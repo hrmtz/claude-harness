@@ -81,7 +81,7 @@ The lesson from the 23h HNSW incident ([INCIDENT_23H_HNSW.md](./INCIDENT_23H_HNS
 | Plugin | Version | Components | Real-world validation |
 |---|---|---|---|
 | **harness-core** | v1.0 | 3 hooks (bash_command_guard, credential_value_scrub, admission_reminder) | 6+ months daily use; 8+ credential leak incidents prevented; one false-positive (issue #1) caught and fixed before public release |
-| **harness-magi** | v0.1 | 1 skill, 3 persona templates | Pure-prompt skill; production trigger conditions ported from `feedback_magi_preflight_for_major_updates` memory |
+| **harness-magi** | v0.1 | 1 contract-mirror skill, 3 persona templates | Fail-closed on Claude until a Claude-native structural runner ships; working runner is in `harness-magi-codex` |
 | **harness-rails** | v1.0 | 4 components (preflight CLI, heartbeat helper, cron watcher, preflight_gate hook) | 165M-row HNSW build prevented re-occurrence of 23h incident; 12-bug cascade incident motivated 5 trigger patterns in preflight_gate |
 
 ### Bundled Runtime Plugins
