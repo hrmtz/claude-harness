@@ -147,6 +147,17 @@ class TestInstaller(unittest.TestCase):
             self.assertLessEqual(set(h), {"event", "matcher", "command", "timeout"})
             self.assertIn("event", h)
             self.assertIn("command", h)
+        # hooks.json uses a cache-safe dispatcher command for this hook. The
+        # installer must still resolve its authoritative event/matcher/timeout.
+        sanada = [
+            h for h in hooks
+            if h["command"].endswith("/harness-core/hooks/sanada_autobackup.sh")
+        ]
+        self.assertEqual(len(sanada), 1)
+        self.assertEqual(
+            {k: sanada[0][k] for k in ("event", "matcher", "timeout")},
+            {"event": "PreToolUse", "matcher": "Bash", "timeout": 12},
+        )
         # lifecycle events carry no matcher
         for h in hooks:
             if h["event"] == "UserPromptSubmit":
@@ -161,6 +172,77 @@ class TestInstaller(unittest.TestCase):
         self.assertIn('default_model = "kimi-code/k3"', text)
         import tomllib
         tomllib.loads(text)  # still valid TOML
+
+    def test_dispatcher_trailing_args_do_not_enter_hook_name(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        shutil.copy2(INSTALLER, repo / "install-kimi-hooks.sh")
+        plugins = repo / "plugins"
+        plugins.mkdir(parents=True)
+        shutil.copy2(
+            REPO / "plugins" / "cross_cli_hooks.json",
+            plugins / "cross_cli_hooks.json",
+        )
+        overlay_path = plugins / "cross_cli_hooks.json"
+        overlay = json.loads(overlay_path.read_text())
+        overlay["kimi"]["hooks"] = [
+            (
+                hook + " --snapshot 2>/dev/null || exit 0"
+                if hook == "harness-core/hooks/sanada_autobackup.sh"
+                else hook
+            )
+            for hook in overlay["kimi"]["hooks"]
+        ]
+        overlay_path.write_text(json.dumps(overlay))
+        for plugin in ("harness-core", "harness-rails"):
+            hooks_dir = plugins / plugin / "hooks"
+            hooks_dir.mkdir(parents=True)
+            shutil.copy2(
+                REPO / "plugins" / plugin / "hooks" / "hooks.json",
+                hooks_dir / "hooks.json",
+            )
+
+        core_hooks_path = plugins / "harness-core" / "hooks" / "hooks.json"
+        core_hooks = json.loads(core_hooks_path.read_text())
+        for block in core_hooks["hooks"]["PreToolUse"]:
+            for hook in block["hooks"]:
+                if "hooks/sanada_autobackup.sh" in hook["command"]:
+                    hook["command"] += (
+                        " --config /tmp/hooks/config.json"
+                        " --snapshot 2>/dev/null || exit 0"
+                    )
+        core_hooks_path.write_text(json.dumps(core_hooks))
+
+        kimi_home = self.tmp / "trailing-args-kimi-home"
+        kimi_home.mkdir()
+        env = dict(
+            self.env,
+            HOME=str(self.tmp / "home"),
+            KIMI_CODE_HOME=str(kimi_home),
+        )
+        r = subprocess.run(
+            ["bash", str(repo / "install-kimi-hooks.sh")],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        import tomllib
+        hooks = tomllib.loads((kimi_home / "config.toml").read_text())["hooks"]
+        sanada = [
+            hook for hook in hooks
+            if (
+                "/harness-core/hooks/sanada_autobackup.sh --snapshot "
+                "2>/dev/null || exit 0"
+            ) in hook["command"]
+        ]
+        self.assertEqual(len(sanada), 1)
+        self.assertEqual(
+            {key: sanada[0][key] for key in ("event", "matcher", "timeout")},
+            {"event": "PreToolUse", "matcher": "Bash", "timeout": 12},
+        )
 
 
 if __name__ == "__main__":
