@@ -96,6 +96,10 @@ subset from masquerading as the round synthesis.
 
 The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3 and
 cross-family costs 1, permitting four pairs without retries.
+Fan-out admission also preserves one weighted launch for the immediately following mandatory
+cross-family review. If that reserve cannot be preserved, the campaign is blocked before any
+provider starts; denial is never permission to ship. Cross-family admission charges only its real
+weight, so the reserve is not charged twice.
 Both reviewer adapters append to a canonical document-scoped campaign ledger before launching a
 model. Retries consume budget; a fresh state directory or repeated round 1 cannot reset it. Exit `4`
 means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive

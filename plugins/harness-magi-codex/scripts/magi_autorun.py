@@ -12,10 +12,10 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from magi_campaign_guard import StateError, campaign_admission_status
+
 
 MAX_NO_PROGRESS_STOPS = 2
-DEFAULT_GLOBAL_CEILING = 16
-PHASE_WEIGHT = {"fanout": 3, "xfamily": 1}
 
 
 def now() -> str:
@@ -142,32 +142,6 @@ def plateau_exists(doc: Path) -> bool:
     return (doc.parent / ".dual-magi" / f"PLATEAU.{document_id(doc)}.{prefix}").is_file()
 
 
-def ledger_state(doc: Path) -> tuple[str, int, int]:
-    ledger = doc.parent / ".dual-magi" / f"CAMPAIGN.{document_id(doc)}.json"
-    if not ledger.is_file():
-        return "no-ledger", 0, 3
-    payload = json.loads(ledger.read_text(encoding="utf-8"))
-    launches = [
-        launch
-        for campaign in payload.get("campaigns", [])
-        for launch in campaign.get("launches", [])
-        if isinstance(launch, dict)
-    ]
-    used = sum(
-        launch.get("model_launches", PHASE_WEIGHT.get(str(launch.get("phase")), 0))
-        for launch in launches
-    )
-    if not launches:
-        next_weight = 3
-    else:
-        last = launches[-1]
-        if last.get("status") in {"failed", "abandoned", "running"}:
-            next_weight = PHASE_WEIGHT.get(str(last.get("phase")), 3)
-        else:
-            next_weight = 1 if last.get("phase") == "fanout" else 3
-    return file_sha(ledger), int(used), next_weight
-
-
 def hook() -> int:
     try:
         hook_input = json.load(sys.stdin)
@@ -184,19 +158,20 @@ def hook() -> int:
             persist(payload)
             print(json.dumps({"systemMessage": "Magi autorun complete: exact-revision plateau passed."}))
             return 0
-        ledger_sha, used, next_weight = ledger_state(doc)
-        ceiling_raw = os.environ.get("MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES", "16")
-        ceiling = min(DEFAULT_GLOBAL_CEILING, max(1, int(ceiling_raw)))
-        if used + next_weight > ceiling:
+        campaign = campaign_admission_status(doc)
+        ledger_sha = str(campaign["ledger_sha"])
+        used = int(campaign["used"])
+        if campaign["kind"] in {"budget-blocked", "transition-blocked"}:
             payload["status"] = "blocked"
-            payload["reason"] = (
-                f"fixed global fuse cannot fund the next phase: {used}+{next_weight}>{ceiling}"
-            )
+            payload["reason"] = str(campaign["reason"])
             persist(payload)
             print(json.dumps({"systemMessage": "Magi autorun reached a definitive NOT PLATEAU blocked state; no acknowledgement is requested."}))
             return 0
         fingerprint = hashlib.sha256(
-            f"{file_sha(doc)}:{ledger_sha}:{used}:{next_weight}".encode()
+            (
+                f"{file_sha(doc)}:{ledger_sha}:{used}:{campaign['kind']}:"
+                f"{campaign.get('round')}:{campaign.get('phase')}:{campaign.get('attempt')}"
+            ).encode()
         ).hexdigest()
         if payload.get("last_fingerprint") == fingerprint:
             payload["no_progress_stops"] = int(payload.get("no_progress_stops", 0)) + 1
@@ -216,7 +191,7 @@ def hook() -> int:
             "and stop only after exact-revision PLATEAU or a definitive fixed-fuse BLOCKED state."
         )
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, StateError):
         # Stop hooks must fail open. The campaign guard still prevents unbounded provider spend.
         return 0
     return 0

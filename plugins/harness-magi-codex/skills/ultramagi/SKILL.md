@@ -126,6 +126,9 @@ If a reviewer script exits `4`, the autonomous campaign budget is exhausted. Thi
 plateau: autonomously reduce scope, replace the primitive, or record an explicit limitation, then
 restart at round 1. A changed document/protocol rolls over automatically within the fixed global
 allowance of 16 weighted model launches across all revision campaigns, without acknowledgement.
+Fan-out admission preserves one weighted launch for its immediately following mandatory
+cross-family review. Reserve denial is a definitive blocked state, never permission to ship; the
+cross-family claim still passes the normal transition and budget guards and is not double-charged.
 At global exhaustion, emit a definitive blocked result. Do not keep
 rerolling until a model happens to say GO and do not pause for user acknowledgement.
 
