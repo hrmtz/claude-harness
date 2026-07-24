@@ -139,6 +139,7 @@ artifact_label() {
 # Prompts hold the FULL document. Track them so no copy is left in TMPDIR on any exit path.
 PROMPTS=()
 PIDS=()
+PUBLISHED=()
 CLAIM_ID=""
 CLAIM_FINISHED=0
 STAGE_DIR=""
@@ -160,12 +161,18 @@ _cleanup_stage() {
     rmdir -- "$STAGE_DIR" 2>/dev/null || true
 }
 _cleanup() {
-    local pid
+    local pid status
     for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
     for pid in "${PIDS[@]:-}"; do wait "$pid" 2>/dev/null || true; done
     [ ${#PROMPTS[@]} -gt 0 ] && rm -f "${PROMPTS[@]}"
     if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
-        python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+        status="$(python3 "$GUARD" claim-status "$DOC_PATH" "$CLAIM_ID" 2>/dev/null || true)"
+        if [ "$status" = "success" ]; then
+            CLAIM_FINISHED=1
+        else
+            [ ${#PUBLISHED[@]} -gt 0 ] && rm -f -- "${PUBLISHED[@]}"
+            python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+        fi
     fi
     _cleanup_stage
     return 0
@@ -388,18 +395,26 @@ PY
     fi
 fi
 
-# The guard is the cancellation/requirement-revision authority. Only a claim that is still live
-# for this exact artifact may finish successfully; supersession makes this command fail and the
-# EXIT trap removes staging before any canonical pathname is touched.
-python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
-CLAIM_FINISHED=1
+# Publish first while the ledger remains non-authoritative. If cancellation wins or any move/finish
+# fails, the EXIT trap removes every exact canonical path already moved. The final guard transition
+# is the commit point. A signal immediately after that transition re-reads claim-status and keeps
+# the now-authoritative complete publication.
 for p in "${PERSONAS[@]}"; do
     label="$(artifact_label "$p")"
-    mv -- "$STAGE_DIR/round_${ROUND}_${label}.json" "$OUT_DIR/round_${ROUND}_${label}.json"
-    mv -- "$STAGE_DIR/round_${ROUND}_${label}.log" "$OUT_DIR/round_${ROUND}_${label}.log"
+    published_json="$OUT_DIR/round_${ROUND}_${label}.json"
+    published_log="$OUT_DIR/round_${ROUND}_${label}.log"
+    PUBLISHED+=("$published_json")
+    PUBLISHED+=("$published_log")
+    mv -- "$STAGE_DIR/round_${ROUND}_${label}.json" "$published_json"
+    mv -- "$STAGE_DIR/round_${ROUND}_${label}.log" "$published_log"
 done
 if [ "$REVIEW_MODE" = "incremental" ]; then
-    mv -- "$STAGE_DIR/round_${ROUND}_codex.json" "$OUT_DIR/round_${ROUND}_codex.json"
+    published_synthesis="$OUT_DIR/round_${ROUND}_codex.json"
+    PUBLISHED+=("$published_synthesis")
+    mv -- "$STAGE_DIR/round_${ROUND}_codex.json" "$published_synthesis"
 fi
+python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
+CLAIM_FINISHED=1
+PUBLISHED=()
 _cleanup_stage
 echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

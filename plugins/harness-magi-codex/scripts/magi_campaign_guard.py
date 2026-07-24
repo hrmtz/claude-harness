@@ -599,6 +599,8 @@ def may_rollover(
         return False
     if last.get("status") == "superseded-by-requirement-revision":
         return phase == "fanout" and last.get("artifact_sha") != file_sha(doc)
+    if phase == "targeted":
+        return last.get("artifact_sha") != file_sha(doc)
     return (
         last.get("artifact_sha") != file_sha(doc)
         or last.get("protocol_sha") != protocol_sha()
@@ -750,6 +752,22 @@ def finish(doc_raw: str, claim_id: str, status: str) -> None:
         launch["finished_at"] = now()
         atomic_json(ledger_path(doc), ledger)
     print(f"CAMPAIGN FINISHED: CLAIM_ID={claim_id} status={status}")
+
+
+def claim_status(doc_raw: str, claim_id: str) -> None:
+    doc = canonical_doc(doc_raw)
+    with document_lock(doc):
+        ledger = load_ledger(doc, create=False)
+        matches = [
+            launch
+            for campaign in ledger["campaigns"]  # type: ignore[index]
+            if isinstance(campaign, dict)
+            for launch in campaign.get("launches", [])
+            if isinstance(launch, dict) and launch.get("claim_id") == claim_id
+        ]
+        if len(matches) != 1:
+            raise UsageError(f"claim_id resolves to {len(matches)} launches")
+        print(str(matches[0]["status"]))
 
 
 def review_lock_available(doc: Path) -> bool:
@@ -998,6 +1016,9 @@ def parser() -> argparse.ArgumentParser:
     finish_parser.add_argument("doc")
     finish_parser.add_argument("claim_id")
     finish_parser.add_argument("status", choices=("success", "failed"))
+    status_parser = commands.add_parser("claim-status")
+    status_parser.add_argument("doc")
+    status_parser.add_argument("claim_id")
     cancel_parser = commands.add_parser("cancel-revision")
     cancel_parser.add_argument("doc")
     cancel_parser.add_argument("--expected-artifact-sha", required=True)
@@ -1026,6 +1047,8 @@ def main() -> int:
             )
         elif args.command == "finish":
             finish(args.doc, args.claim_id, args.status)
+        elif args.command == "claim-status":
+            claim_status(args.doc, args.claim_id)
         elif args.command == "cancel-revision":
             cancel_revision(
                 args.doc,
