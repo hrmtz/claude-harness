@@ -2,14 +2,15 @@
 name: magi
 version: 0.1.0-kimi
 description: |
-  高リスク変更前の 3 視点 pre-flight レビュー。技術（MELCHIOR）、運用（BALTHASAR）、商業（CASPAR）の 3 人のレビューアを並列で起動し、実行前に計画の盲点を洗い出す。
-  walltime ≥ 2h、大規模 DML、不可逆な変更、新しいインフラレイヤー、確実な金銭消費、長時間の sleep/poll ループなどの高リスクタスクで発動。
+  3 視点 pre-flight review の Kimi 契約 mirror。Kimi-native structural
+  runner が ship されるまでは明示的な fail-closed availability boundary
+  であり、prose だけで reviewer independence を成立済みと扱わない。
 type: prompt
 whenToUse: |
   高リスクな変更を kick する前。特に walltime ≥ 2h、≥ 100M 行 DML、不可逆な cutover、新しいパイプライン/サービスレイヤー、≥ $10 確実消費、1h 以上の sleep/poll を含むスクリプト、など。
 arguments:
   - brief
-disableModelInvocation: false
+disableModelInvocation: true
 ---
 
 # magi — three-perspective preflight review (Kimi 移植版)
@@ -45,76 +46,24 @@ Claude harness の `magi` skill を Kimi 用に移植したもの。Claude/Codex
 - 可逆性（rollback 経路と推定コスト）
 - 同時に走る可能性のある他タスクとの衝突
 
-brief は 200 行以内に収める。書きたい場合は `docs/magi/<YYYYMMDD>_<change-slug>_brief.md` に保存してもよい。
+brief は 200 行以内で canonical non-symlink file に必ず保存する。canonical
+path、path-derived artifact ID、exact byte SHA-256 を中央で計算し、その identity
+と exact file への read access を全 reviewer に渡す。chat-only brief は gate
+入力として禁止する。
 
-### 2. 3 人のレビューアを並列起動する
+### 2. Mechanical availability boundary
 
-`AgentSwarm` を使って、次の 3 つの sub-agent を同時に起動する：
+Kimi surface は truthful な `magi-preflight-run/v1` provenance を生成する
+provider-specific structural runner をまだ ship していない。`AgentSwarm` output
+から `magi-preflight-codex/v1` manifest を手作業で作ることは禁止する。
 
-- `melchior` — technical
-- `balthasar` — operational
-- `caspar` — commercial
+Kimi-native runner が ship されるまでは fail-closed `ABORT` とし、
+`FAMILY_ROUTING` に missing phase `kimi-preflight-runner` を記録する。prose
+synthesis への fallback も禁止する。templates / review contract は future
+runner の lane/schema 定義であり、この surface の executable gate ではない。
 
-各 sub-agent へのプロンプトは以下のテンプレートで構成する：
-
-```
-You are the {{item}} reviewer in a Magi pre-flight review.
-Read the persona template at ~/.kimi-code/skills/magi/templates/{{item}}_prompt.md.
-Then review the following change brief and produce the output requested by that template.
-
-Stay strictly in your lane. Do not cover the other reviewers' perspectives.
-
-Change brief:
----
-<BRIEF>
----
-
-Return your review in the exact output format specified in the template.
-```
-
-`<BRIEF>` にはステップ 1 で用意した full brief をそのまま挿入する。
-
-### 3. 結果を統合する
-
-3 人の出力を受け取ったら、以下の構造で synthesis を作成する：
-
-```markdown
-# Magi pre-flight: <change name>
-
-## Trigger that fired
-- <どの閾値に該当したか>
-
-## Persona summaries
-
-### MELCHIOR (technical)
-<要約>
-
-### BALTHASAR (operational)
-<要約>
-
-### CASPAR (commercial)
-<要約>
-
-## Synthesis
-
-**Convergent** (2 人以上が指摘した高信頼度の懸念):
-- ...
-
-**Divergent** (1 人だけの指摘 — ペルソナバイアスの可能性を考慮):
-- ...
-
-## Verdict
-**PROCEED** / **PIVOT** / **ABORT** — <1 行の理由>
-
-- PROCEED: 大きな懸念なし、実行可能
-- PIVOT: より小さく / 安く / 速い path がある場合はそちらを提案
-- ABORT: 今はどの形でも価値がない、延期 or 中止
-
-## Next action
-<具体的な次のステップ>
-```
-
-必要なら `docs/magi/<YYYYMMDD>_<change-slug>.md` に保存する。
+structural runner のある surface でも Magi は一回限りで、`PIVOT` 後に Round 2
+を起動しない。shipping / plateau authority は持たない。
 
 ## Anti-patterns
 
@@ -122,3 +71,4 @@ Return your review in the exact output format specified in the template.
 - 変更を始めてから Magi を回さない。沈没コストが synthesis を歪める。
 - 些細な修正で発動しない。コストに見合わない。
 - どの persona も見ていない領域は「未審査」として明示する。
+- PIVOT 後に Magi を再実行しない。pre-flight を review loop に変えない。

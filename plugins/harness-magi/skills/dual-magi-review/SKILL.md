@@ -62,7 +62,7 @@ Fallback when a family is unavailable:
 1. independent multi-perspective critique (= N sub-agents、 perspectives 直交)
 2. cross-family bias cancellation (= 異 model、 optional adapter)
 3. iterative reroll (= round 毎に prior findings 反映 + 新 catch)
-4. synthesis-driven convergence (= duplicate rate + severity で stop)
+4. `magi_design_convergence_gate.py` の bounded decision で stop / next action を決める
 ```
 
 Variant detail (= adjustable):
@@ -460,6 +460,16 @@ skill 内動作:
 S3 = fail-closed (= exit 非 0)。 「止める」 より先に 「plateau を名乗らせない」。 行動を壊さずに不変条件を回復する。
 
 構造 rail (= 文ではなく script) は `plugins/harness-magi-codex/scripts/magi_plateau_gate.sh` に実装済 (= G1-G9)。
+
+Design convergence は separately installed `harness-magi-codex` companion
+の report-only rail `magi_design_convergence_gate.py` が担当する。ただし
+Claude-native workflow の state だけを evaluator に渡してはならない。companion
+の campaign guard / fanout / xfamily adapters が同じ ledger と artifact topology
+を所有する campaign 全体でのみ実行する。各 phase 後に `evaluate <doc>` を実行する。同じ HIGH+
+root の再発、同 subsystem の新 HIGH+ root 再発、3 revision の blocker mass
+停滞、2 logical cycle、または reserved xfamily を含む unaffordable transition
+で bounded terminal decision を返す。`PLATEAU_CANDIDATE` は G1-G9 gate へ渡せる
+という意味だけで、plateau marker や shipping authority ではない。
 原典側にも同等の gate を入れるのが S2/S3 の作業 (= 原典は現在 provenance を一切記録していない)。
 Codex 側 provenance は実在する: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` の
 `session_meta` + `turn_context.model` (= 実測、 380 files)。

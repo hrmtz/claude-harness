@@ -46,7 +46,7 @@ class CodexPluginManifestTest(unittest.TestCase):
                 self.assertTrue((root / "hooks/hooks.json").is_file())
 
     def test_codex_magi_routes_to_bundled_root(self):
-        for skill in ("dual-magi-review", "ultramagi"):
+        for skill in ("magi", "dual-magi-review", "ultramagi"):
             text = (ROOT / "plugins/harness-magi-codex/skills" / skill / "SKILL.md").read_text()
             self.assertIn("`harness-magi-codex` plugin root", text)
 

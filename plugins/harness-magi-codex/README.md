@@ -34,6 +34,10 @@ same-family reviewers read the same text and found none of them.
 schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
 schemas/implementation-convergence.schema.json
                               opt-in report-only implementation manifest
+schemas/preflight-{review,decision}.schema.json
+                              one-shot Magi evidence and decision contracts
+schemas/preflight-run.schema.json
+                              structural three-reviewer run binding
 scripts/
   magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
@@ -45,11 +49,16 @@ scripts/
   magi_git.py                 ambient-config-free Git object reads
   magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
   magi_convergence_gate.py    report-only implementation convergence evaluator
+  magi_convergence_kernel.py  pure normalization, delta, affordability, profile policy
+  magi_design_convergence_gate.py
+                              report-only Dual-Magi design convergence adapter
+  magi_preflight.py           deterministic one-round Magi aggregation/veto
+  magi_preflight_codex.sh     exactly-three structural pre-flight fanout
   magi_plateau_gate.sh        the ONLY thing that may write a plateau marker
   magi_lock.sh                flock(2) helper (recursion + concurrency guard)
   magi_scrub.py               redacts credential-shaped strings before anything hits disk
 hooks/magi_autorun_hook.sh    Stop hook; continues armed campaigns to plateau/blocked
-skills/{dual-magi-review,ultramagi}/SKILL.md
+skills/{magi,dual-magi-review,ultramagi}/SKILL.md
 tests/                        exit codes, G-asserts, lock semantics, read-only rail, doc-drift
 ```
 
@@ -63,17 +72,36 @@ Codex marketplace; see [`docs/codex_plugins.md`](../../docs/codex_plugins.md).
 The legacy `install-codex-skills.sh` symlink flow remains only for migration and
 is removed with `uninstall-codex-skills.sh` after native plugin installation.
 
-Requires `codex`, `flock`, Python 3 with `jsonschema`, and the selected reviewer CLI (`claude` or
-`grok`). A missing selected CLI fails closed (exit `2`). There is no automatic provider fallback:
-the caller must explicitly choose Grok so provenance and routing remain auditable.
+Requires `codex`, `flock`, `bubblewrap`, Python 3 with `jsonschema`, and the
+selected reviewer CLI (`claude` or `grok`). Magi pre-flight uses a private
+mount/PID namespace per reviewer to hide sibling staging artifacts (Codex's
+state directory remains available to the CLI) and fails closed if `bubblewrap`
+is absent.
+A missing selected CLI fails closed (exit `2`). There is no automatic provider
+fallback: the caller must explicitly choose Grok so provenance and routing
+remain auditable.
 
 ## Use
+
+One-shot pre-flight consumes exactly three independent artifacts bound to the
+same brief and never launches a second round:
+
+```bash
+scripts/magi_preflight_codex.sh /absolute/path/to/brief.md \
+  /absolute/path/to/output-directory
+```
+
+The result is only `PROCEED`, `PIVOT`, or `ABORT`; unsupported minority roots
+remain explicit questions, while grounded minority CRITICAL/security/data-loss/
+irreversibility findings retain veto power. Every result is report-only and
+sets `authorizes_shipping: false`.
 
 ```bash
 D=docs/designs/MY_DESIGN.md; S=docs/designs/.dual-magi; mkdir -p "$S"
 
 python3 scripts/magi_autorun.py arm "$D"                              # once per campaign
 scripts/magi_fanout_codex.sh      "$D" 1 "$S" --persona-set magi     # same-family ×3
+python3 scripts/magi_design_convergence_gate.py evaluate "$D"
 # Synthesize the three outputs into $S/round_1_codex.json, then:
 scripts/magi_xfamily.sh --reviewer claude \
   "$D" 2 "$S/round_1_codex.json" "$S/round_2_xfamily"
@@ -85,7 +113,9 @@ scripts/magi_xfamily.sh --reviewer grok \
 scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family grok
 ```
 
-Revise the doc with the findings and re-run. `--persona-set bug-hunt` swaps the personas to review
+Follow the design evaluator's bounded next action before revising. A
+`PLATEAU_CANDIDATE` still requires `magi_plateau_gate.sh`; it is not plateau.
+`--persona-set bug-hunt` swaps the personas to review
 an *implementation* instead of a design (ultramagi gate [4]).
 
 For implementation campaigns, create an untracked exact-SHA packet at one stable path, review

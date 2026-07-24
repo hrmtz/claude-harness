@@ -72,6 +72,8 @@ before invoking a bundled script.
 2. synthesize read the three round_<N>_<persona>.json; write round_<N>_codex.json with
               reviewer=SYNTHESIS, exact source_artifacts digests, and one disposition for every
               source finding
+2b. converge  python3 scripts/magi_design_convergence_gate.py evaluate <doc>
+              -> bounded next action; stop on REDESIGN, SCOPE_SPLIT, or BLOCKED
 3. cross-family (MANDATORY before any plateau claim)
               scripts/magi_xfamily.sh --reviewer claude|grok <doc> <round> <prior.json|-> <state-dir>/round_<N+1>_xfamily
 4. gate       scripts/magi_plateau_gate.sh <doc> <state-dir>/round_<N+1>_xfamily
@@ -133,6 +135,17 @@ Conversely, refusing to ever converge is its own failure mode: when discovery ha
 doc is honest about its limits, ship it.
 
 ## Campaign convergence guard
+
+After each successful fan-out or cross-family phase, run the report-only design
+convergence evaluator. It stops mechanically on a repeated HIGH+ root,
+recurring new HIGH+ roots in one subsystem, non-decreasing blocker mass across
+three revisions, two logical correction cycles, or an unaffordable transition
+that must preserve the final cross-family launch.
+
+`PLATEAU_CANDIDATE` means only that the current exact revision has zero HIGH+
+roots and a verified cross-family artifact. It never creates a marker and never
+authorizes implementation. Only `magi_plateau_gate.sh` may establish plateau
+after G1-G9.
 
 Plateau safety and autonomous-loop safety are separate. Before launching any reviewer, both
 adapters claim from a canonical document-scoped ledger through `scripts/magi_campaign_guard.py`.
