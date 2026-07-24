@@ -148,6 +148,21 @@ changed, the guard automatically rolls over without user acknowledgement. Every 
 shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
 result; never pause for an acknowledgement and never reset history through a fresh state directory.
 
+If requirements change while a claim is live, do not start another adapter, edit the document, or
+abandon the ledger entry implicitly. First run:
+
+```bash
+python3 scripts/magi_campaign_guard.py cancel-revision "$DOC" \
+  --expected-artifact-sha "$(sha256sum "$DOC" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+Cancellation is exact-artifact and fail-closed: the charged launch becomes
+`superseded-by-requirement-revision` only after the verified adapter process tree is gone and the
+canonical review lock is available. A cleanup-blocked result is terminal until the same command
+can finish cleanup. Change the document content before invoking replacement round 1; a protocol
+change alone cannot restart a superseded revision.
+
 For every finding, `dup_flag` is schema-bounded to `new`, `duplicate`, `regression`,
 `readiness-gap`, or `scope-expansion`. After round 2, freeze committed scope. Missing evidence
 explicitly scheduled for later is a readiness gap; an optional stronger guarantee or new subsystem

@@ -92,8 +92,24 @@ mkdir -p "$DOC_CONTROL_DIR"
 
 # Prompts hold the FULL document. Track them so no copy is left in TMPDIR on any exit path.
 PROMPTS=()
+PIDS=()
 CLAIM_ID=""
 CLAIM_FINISHED=0
+STAGE_DIR=""
+_cleanup_stage() {
+    local p
+    [ -n "$STAGE_DIR" ] || return 0
+    for p in "${PERSONAS[@]}"; do
+        rm -f -- \
+            "$STAGE_DIR/round_${ROUND}_${p}.json" \
+            "$STAGE_DIR/round_${ROUND}_${p}.log" \
+            "$STAGE_DIR/.round_${ROUND}_${p}.raw.fifo" \
+            "$STAGE_DIR/.round_${ROUND}_${p}.log.fifo" \
+            "$STAGE_DIR"/.round_"${ROUND}_${p}".safe.* \
+            "$STAGE_DIR"/.round_"${ROUND}_${p}".log.safe.*
+    done
+    rmdir -- "$STAGE_DIR" 2>/dev/null || true
+}
 _cleanup() {
     local pid
     for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
@@ -102,6 +118,7 @@ _cleanup() {
     if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
         python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
     fi
+    _cleanup_stage
     return 0
 }
 trap _cleanup EXIT
@@ -137,12 +154,19 @@ done
 
 # Claim only after validation, capability checks, and the execution lock, but before any provider
 # process starts. A crash after this boundary is conservatively charged; preflight refusal is not.
-claim_line="$(python3 "$GUARD" claim "$DOC_PATH" "$ROUND" fanout "$OUT_DIR")" || exit $?
+claim_line="$(
+    python3 "$GUARD" claim "$DOC_PATH" "$ROUND" fanout "$OUT_DIR" \
+        --owner-pid "$$" --adapter-kind fanout
+)" || exit $?
 echo "$claim_line"
 CLAIM_ID="${claim_line##*CLAIM_ID=}"
-[ -n "$CLAIM_ID" ] || { echo "fanout: campaign guard returned no claim id" >&2; exit 1; }
+[[ "$CLAIM_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+    echo "fanout: campaign guard returned an invalid claim id" >&2
+    exit 1
+}
+STAGE_DIR="$OUT_DIR/.claim-$CLAIM_ID"
+mkdir -m 700 "$STAGE_DIR"
 
-PIDS=()
 for p in "${PERSONAS[@]}"; do
     tmpl="$TEMPLATE_DIR/${p}_prompt.md"
     prompt="$(mktemp)"
@@ -180,7 +204,10 @@ for p in "${PERSONAS[@]}"; do
             "$ROUND" "$DOC_PATH" "$ARTIFACT_ID" "$ARTIFACT_SHA"
         if [ "$PRIOR" != "-" ]; then
             printf 'PRIOR SYNTHESIS (check resolution and classify relationships; do not repeat):\n---\n'
-            python3 "$SCRUB" < "$PRIOR"
+            (
+                eval "exec ${MAGI_LOCK_FD}>&-"
+                exec python3 "$SCRUB" < "$PRIOR"
+            )
             printf '\n---\n\n'
         fi
         printf 'DOCUMENT:\n---\n'
@@ -200,19 +227,30 @@ for p in "${PERSONAS[@]}"; do
           [ -n "$codex_pid" ] && kill -TERM "$codex_pid" 2>/dev/null || true
           [ -n "$raw_scrub_pid" ] && kill -TERM "$raw_scrub_pid" 2>/dev/null || true
           [ -n "$log_scrub_pid" ] && kill -TERM "$log_scrub_pid" 2>/dev/null || true
+          [ -n "$codex_pid" ] && wait "$codex_pid" 2>/dev/null || true
+          [ -n "$raw_scrub_pid" ] && wait "$raw_scrub_pid" 2>/dev/null || true
+          [ -n "$log_scrub_pid" ] && wait "$log_scrub_pid" 2>/dev/null || true
       }
       trap child_cleanup INT TERM EXIT
-      raw_fifo="$OUT_DIR/.round_${ROUND}_${p}.raw.fifo"
-      log_fifo="$OUT_DIR/.round_${ROUND}_${p}.log.fifo"
-      safe_out="$(mktemp "$OUT_DIR/.round_${ROUND}_${p}.safe.XXXXXX")"
-      safe_log="$(mktemp "$OUT_DIR/.round_${ROUND}_${p}.log.safe.XXXXXX")"
+      raw_fifo="$STAGE_DIR/.round_${ROUND}_${p}.raw.fifo"
+      log_fifo="$STAGE_DIR/.round_${ROUND}_${p}.log.fifo"
+      safe_out="$(mktemp "$STAGE_DIR/.round_${ROUND}_${p}.safe.XXXXXX")"
+      safe_log="$(mktemp "$STAGE_DIR/.round_${ROUND}_${p}.log.safe.XXXXXX")"
       rm -f "$raw_fifo" "$log_fifo"
       mkfifo "$raw_fifo" "$log_fifo"
       # Keep a writer open until codex returns so either scrubber receives EOF even when codex
       # fails before opening its sink. Bytes travel through FIFOs; only scrubbed bytes hit disk.
       exec 7<>"$raw_fifo" 8<>"$log_fifo"
-      ( exec 7>&- 8>&-; python3 "$SCRUB" < "$raw_fifo" > "$safe_out" ) & raw_scrub_pid=$!
-      ( exec 7>&- 8>&-; python3 "$SCRUB" --text < "$log_fifo" > "$safe_log" ) & log_scrub_pid=$!
+      (
+          exec 7>&- 8>&-
+          eval "exec ${MAGI_LOCK_FD}>&-"
+          exec python3 "$SCRUB" < "$raw_fifo" > "$safe_out"
+      ) & raw_scrub_pid=$!
+      (
+          exec 7>&- 8>&-
+          eval "exec ${MAGI_LOCK_FD}>&-"
+          exec python3 "$SCRUB" --text < "$log_fifo" > "$safe_log"
+      ) & log_scrub_pid=$!
       timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
         env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
         -C "$REPO_ROOT" \
@@ -227,8 +265,8 @@ for p in "${PERSONAS[@]}"; do
       rm -f "$prompt" "$raw_fifo" "$log_fifo"
       trap - INT TERM EXIT
       if [ "$s" -eq 0 ] && [ "$scrub_rc" -eq 0 ]; then
-          mv "$safe_out" "$OUT_DIR/round_${ROUND}_${p}.json"
-          mv "$safe_log" "$OUT_DIR/round_${ROUND}_${p}.log"
+          mv "$safe_out" "$STAGE_DIR/round_${ROUND}_${p}.json"
+          mv "$safe_log" "$STAGE_DIR/round_${ROUND}_${p}.log"
       else
           rm -f "$safe_out" "$safe_log"
           s=1
@@ -243,7 +281,7 @@ for pid in "${PIDS[@]}"; do
 done
 
 for p in "${PERSONAS[@]}"; do
-    out="$OUT_DIR/round_${ROUND}_${p}.json"
+    out="$STAGE_DIR/round_${ROUND}_${p}.json"
     if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" --doc "$DOC_PATH" 2>/dev/null
     then
         echo "fanout: reviewer $p produced no schema-valid output" >&2
@@ -253,14 +291,18 @@ for p in "${PERSONAS[@]}"; do
 done
 
 if [ $rc -ne 0 ]; then
-    # Remove this run's partial outputs. We hold the round lock, so these files are ours.
-    # Leaving them behind would make the INV-3 sibling check reject every subsequent retry
-    # (exit 5) forever -- a permanent dead-end after one transient codex timeout.
-    echo "fanout: clearing partial round-$ROUND outputs so a retry is possible" >&2
-    for p in "${PERSONAS[@]}"; do rm -f "$OUT_DIR/round_${ROUND}_${p}.json"; done
+    echo "fanout: clearing claim-scoped staging for failed round $ROUND" >&2
     exit $rc
 fi
 
+# The guard is the cancellation/requirement-revision authority. Only a claim that is still live
+# for this exact artifact may finish successfully; supersession makes this command fail and the
+# EXIT trap removes staging before any canonical pathname is touched.
 python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
 CLAIM_FINISHED=1
+for p in "${PERSONAS[@]}"; do
+    mv -- "$STAGE_DIR/round_${ROUND}_${p}.json" "$OUT_DIR/round_${ROUND}_${p}.json"
+    mv -- "$STAGE_DIR/round_${ROUND}_${p}.log" "$OUT_DIR/round_${ROUND}_${p}.log"
+done
+_cleanup_stage
 echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

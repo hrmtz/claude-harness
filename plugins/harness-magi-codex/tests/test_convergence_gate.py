@@ -742,6 +742,36 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(payload["decision"], "CONTINUE")
         self.assertEqual(payload["next_mode"], "initial-full")
 
+    def test_cancellation_in_progress_blocks_evaluation_and_stays_charged(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(
+            1,
+            "fanout",
+            artifact,
+            status="cancellation_in_progress",
+        )
+        self.launches[-1]["cancellation"] = {
+            "expected_artifact_sha": artifact,
+            "reason": "fixture requirement revision",
+            "requested_at": "2026-07-24T00:01:00+00:00",
+            "term_timeout_s": 1,
+            "kill_timeout_s": 1,
+            "inventory": [],
+            "cleanup": "pending",
+            "cleanup_detail": "fixture cleanup pending",
+        }
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "BLOCKED")
+        self.assertEqual(
+            payload["reason_code"],
+            "REQUIREMENT_REVISION_CANCELLATION_IN_PROGRESS",
+        )
+        self.assertEqual(payload["usage"], 3)
+
     def test_fanout_retry_exhaustion_is_terminal(self) -> None:
         artifact = file_sha(self.manifest)
         self.add_launch(1, "fanout", artifact, status="failed")

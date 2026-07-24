@@ -28,6 +28,11 @@ SID="11111111-2222-4333-8444-555555555555"
 cat > "$TMP/bin/grok" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "$TMP/grok_args"
+if [ -e "/proc/\$\$/fd/9" ]; then
+  printf 'present\n' > "$TMP/grok_fd9"
+else
+  printf 'absent\n' > "$TMP/grok_fd9"
+fi
 mkdir -p "$TMP/home/.grok/sessions/workspace/$SID"
 cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
 {"type":"assistant","content":"reviewing","model_id":"grok-4.5","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
@@ -53,6 +58,14 @@ PATH="$TMP/bin:$PATH" HOME="$TMP/home" "$ADAPTER" --reviewer grok \
     "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "Grok adapter completes" || bad "Grok adapter rc=$rc"
+[ "$(cat "$TMP/grok_fd9" 2>/dev/null)" = absent ] \
+    && ok "Grok provider does not inherit review-lock FD9" \
+    || bad "Grok provider inherited review-lock FD9"
+if find "$STATE" -maxdepth 1 -name '.round_2_xfamily.claim-*' | grep -q .; then
+  bad "Grok adapter left claim-scoped staging files"
+else
+  ok "Grok claim-scoped staging is removed after promotion"
+fi
 
 grep -qx -- '--sandbox' "$TMP/grok_args" && grep -qx -- 'read-only' "$TMP/grok_args" \
     && grep -qx -- '--tools' "$TMP/grok_args" \

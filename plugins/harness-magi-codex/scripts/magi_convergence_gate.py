@@ -484,10 +484,15 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
             raise UnsafeInput("ledger contains an invalid phase")
         if launch.get("model_launches") != guard.PHASE_WEIGHT[phase]:
             raise UnsafeInput("ledger contains an invalid phase weight")
-        if launch.get("status") == "running":
+        if launch.get("status") in guard.NONTERMINAL_STATUSES:
+            reason_code = (
+                "REQUIREMENT_REVISION_CANCELLATION_IN_PROGRESS"
+                if launch.get("status") == "cancellation_in_progress"
+                else "LAUNCH_STILL_RUNNING"
+            )
             return output(
                 "BLOCKED",
-                "LAUNCH_STILL_RUNNING",
+                reason_code,
                 next_mode=None,
                 used=used,
                 ceiling=ceiling,

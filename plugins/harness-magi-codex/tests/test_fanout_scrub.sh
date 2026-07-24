@@ -28,6 +28,9 @@ marker="${marker}AAAAAAAAAAAA"
 printf '{"reviewer":"STUB","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
   "$artifact_id" "$artifact_sha" "$marker" > "$out"
 printf '%s\n' "$marker"
+if [ -n "${STUB_CANCEL:-}" ] && printf '%s\n' "$prompt" | grep -q 'You are the CASPAR reviewer'; then
+  sleep 60
+fi
 STUB
 chmod +x "$TMP/bin/codex"
 
@@ -39,6 +42,20 @@ STUB_TMUX_LOG="$TMP/tmux-env" TMUX_PANE="%57" \
   PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "stub fan-out completes" || bad "stub fan-out rc=$rc"
+ledger="$(find "$TMP/.dual-magi" -maxdepth 1 -name 'CAMPAIGN.*.json' -type f | head -n 1)"
+if python3 - "$ledger" <<'PY'
+import json, sys
+launch = json.load(open(sys.argv[1]))["campaigns"][-1]["launches"][-1]
+owner = launch.get("owner") or {}
+raise SystemExit(
+    0 if owner.get("adapter_kind") == "fanout" and type(owner.get("pid")) is int else 1
+)
+PY
+then
+  ok "fan-out claim records adapter ownership"
+else
+  bad "fan-out claim did not record adapter ownership"
+fi
 if [ "$(sort -u "$TMP/tmux-env")" = "unset" ] && [ "$(wc -l < "$TMP/tmux-env")" -eq 3 ]; then
   ok "non-interactive reviewers do not inherit the parent TMUX_PANE"
 else
@@ -58,10 +75,12 @@ else
   bad "scrub marker missing from durable artifacts"
 fi
 
-if find "$TMP/out" -maxdepth 1 \( -name '*.fifo' -o -name '*.safe.*' \) | grep -q .; then
-  bad "fan-out left FIFO or safe-temp residue"
+if find "$TMP/out" -maxdepth 1 \( -name '*.fifo' -o -name '*.safe.*' -o -name '.claim-*' \) \
+    | grep -q .
+then
+  bad "fan-out left FIFO, safe-temp, or claim-staging residue"
 else
-  ok "fan-out leaves no FIFO or safe-temp residue"
+  ok "fan-out leaves no FIFO, safe-temp, or claim-staging residue"
 fi
 
 PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
@@ -91,6 +110,56 @@ fi
 PATH="$TMP/bin:$PATH" "$FANOUT" "$HANG_DOC" 1 "$TMP/hang" >/dev/null 2>&1
 [ $? -eq 0 ] && ok "timeout releases the document lock and leaves a retryable failed claim" \
               || bad "fan-out could not recover after timeout"
+
+# A requirement revision may supersede the claim after some personas have produced valid staged
+# bytes. Those bytes must never be promoted to the canonical round paths.
+CANCEL_OUT="$TMP/cancel"; mkdir -p "$CANCEL_OUT"
+CANCEL_DOC="$TMP/cancel-design.md"; printf '%s\n' 'a revised requirement fixture' > "$CANCEL_DOC"
+CANCEL_LOG="$TMP/cancel.log"
+STUB_CANCEL=1 PATH="$TMP/bin:$PATH" setsid "$FANOUT" \
+    "$CANCEL_DOC" 1 "$CANCEL_OUT" >"$CANCEL_LOG" 2>&1 &
+cancel_adapter_pid=$!
+cancel_ready=0
+for _ in $(seq 1 100); do
+  staged_count="$(
+    find "$CANCEL_OUT" -mindepth 2 -maxdepth 2 -path '*/.claim-*/*' \
+      -name 'round_1_*.json' -type f 2>/dev/null | wc -l
+  )"
+  if [ "$staged_count" -ge 2 ]; then cancel_ready=1; break; fi
+  if ! kill -0 "$cancel_adapter_pid" 2>/dev/null; then break; fi
+  sleep 0.05
+done
+cancel_sha="$(sha256sum "$CANCEL_DOC" | cut -d' ' -f1)"
+cancel_rc=1
+if [ "$cancel_ready" -eq 1 ]; then
+  python3 "$HERE/../scripts/magi_campaign_guard.py" cancel-revision "$CANCEL_DOC" \
+      --expected-artifact-sha "$cancel_sha" --reason "focused staged-output fixture" \
+      --term-timeout-s 1 --kill-timeout-s 1 >/dev/null 2>&1
+  cancel_rc=$?
+fi
+if [ "$cancel_ready" -ne 1 ] || [ "$cancel_rc" -ne 0 ]; then
+  kill -TERM "$cancel_adapter_pid" 2>/dev/null
+fi
+wait "$cancel_adapter_pid" 2>/dev/null
+cancel_status="$(
+  python3 - "$CANCEL_DOC" <<'PY'
+import hashlib, json, pathlib, sys
+doc = pathlib.Path(sys.argv[1]).resolve()
+doc_id = hashlib.sha256(str(doc).encode()).hexdigest()[:16]
+ledger = json.loads((doc.parent / ".dual-magi" / f"CAMPAIGN.{doc_id}.json").read_text())
+print(ledger["campaigns"][-1]["launches"][-1]["status"])
+PY
+)"
+if [ "$cancel_ready" -eq 1 ] && [ "$cancel_rc" -eq 0 ] \
+    && [ "$cancel_status" = "superseded-by-requirement-revision" ] \
+    && ! find "$CANCEL_OUT" -maxdepth 1 -name 'round_1_*.json' -type f | grep -q . \
+    && ! find "$CANCEL_OUT" -maxdepth 1 -name 'round_1_*.log' -type f | grep -q . \
+    && ! find "$CANCEL_OUT" -maxdepth 1 -name '.claim-*' -type d | grep -q .
+then
+  ok "superseded claim cannot promote staged persona output"
+else
+  bad "superseded staged output escaped cleanup (ready=$cancel_ready cancel_rc=$cancel_rc status=$cancel_status)"
+fi
 
 # Optional real-CLI interface probe: codex -o must support a FIFO sink. The stub above keeps the
 # regression deterministic; this arm measures the external CLI assumption when explicitly enabled.

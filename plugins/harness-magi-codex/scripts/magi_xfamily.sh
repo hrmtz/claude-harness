@@ -73,11 +73,20 @@ DOC_CONTROL_DIR="$(dirname "$DOC_REAL")/.dual-magi"
 
 PROMPT_FILE=""
 RAW_FILE=""
+STAGING_FINDINGS=""
+STAGING_META=""
+PROVIDER_PID=""
 CLAIM_ID=""
 CLAIM_FINISHED=0
 _cleanup() {
+    if [ -n "$PROVIDER_PID" ]; then
+        kill -TERM "$PROVIDER_PID" 2>/dev/null || true
+        wait "$PROVIDER_PID" 2>/dev/null || true
+    fi
     [ -n "$PROMPT_FILE" ] && rm -f "$PROMPT_FILE"
     [ -n "$RAW_FILE" ] && rm -f "$RAW_FILE" "${RAW_FILE}.err"
+    [ -n "$STAGING_FINDINGS" ] && rm -f "$STAGING_FINDINGS"
+    [ -n "$STAGING_META" ] && rm -f "$STAGING_META"
     if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
         python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
     fi
@@ -102,7 +111,7 @@ esac
 FINDINGS_OUT="${OUT_PREFIX}.json"
 META_OUT="${OUT_PREFIX}.meta.json"
 FAILED_OUT="${OUT_PREFIX}.FAILED.json"
-rm -f "$FINDINGS_OUT" "$META_OUT" "$FAILED_OUT"
+rm -f "$FAILED_OUT"
 
 ARTIFACT_SHA="$(sha256sum "$DOC_PATH" | cut -d' ' -f1)"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -124,10 +133,19 @@ command -v "$REVIEWER" >/dev/null 2>&1 || _fail_closed "$REVIEWER CLI not found"
 
 # The execution lock and provider capability check precede accounting. From this point onward a
 # failed/abandoned provider attempt remains charged, including timeout or process crash.
-claim_line="$(python3 "$GUARD" claim "$DOC_PATH" "$ROUND" xfamily "$STATE_DIR")" || exit $?
+claim_line="$(
+    python3 "$GUARD" claim "$DOC_PATH" "$ROUND" xfamily "$STATE_DIR" \
+        --owner-pid "$$" --adapter-kind xfamily
+)" || exit $?
 echo "$claim_line"
 CLAIM_ID="${claim_line##*CLAIM_ID=}"
 [ -n "$CLAIM_ID" ] || _fail_closed "campaign guard returned no claim id"
+# Once this attempt is durably charged, stale canonical output from an earlier attempt must not
+# masquerade as its result. New bytes remain claim-scoped until successful finish and promotion.
+rm -f "$FINDINGS_OUT" "$META_OUT" "$FAILED_OUT"
+STAGING_PREFIX="$STATE_DIR/.$(basename "$OUT_PREFIX").claim-${CLAIM_ID}"
+STAGING_FINDINGS="${STAGING_PREFIX}.json"
+STAGING_META="${STAGING_PREFIX}.meta.json"
 
 PROMPT_FILE="$(mktemp)"
 {
@@ -174,43 +192,49 @@ HDR
 RAW_FILE="$(mktemp)"
 set +e
 if [ "$REVIEWER" = "claude" ]; then
-    timeout "$TIMEOUT_S" claude -p \
-        --output-format json \
-        --json-schema "$(cat "$SCHEMA_FILE")" \
-        --model "$MODEL" \
-        --safe-mode \
-        --strict-mcp-config \
-        --tools 'Read,Grep,Glob' \
-        --permission-mode dontAsk \
-        --allowedTools 'Read' 'Grep' 'Glob' \
-        --disallowedTools 'Agent' 'Task' 'Edit' 'Write' 'NotebookEdit' 'Bash' \
-        < "$PROMPT_FILE" > "$RAW_FILE" 2>"${RAW_FILE}.err"
-    rc=$?
+    (
+        eval "exec ${MAGI_LOCK_FD}>&-"
+        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
+            --output-format json \
+            --json-schema "$(cat "$SCHEMA_FILE")" \
+            --model "$MODEL" \
+            --safe-mode \
+            --strict-mcp-config \
+            --tools 'Read,Grep,Glob' \
+            --permission-mode dontAsk \
+            --allowedTools 'Read' 'Grep' 'Glob' \
+            --disallowedTools 'Agent' 'Task' 'Edit' 'Write' 'NotebookEdit' 'Bash'
+    ) < "$PROMPT_FILE" > "$RAW_FILE" 2>"${RAW_FILE}.err" &
 else
-    timeout "$TIMEOUT_S" grok \
-        --prompt-file "$PROMPT_FILE" \
-        --cwd "$PWD" \
-        --model "$MODEL" \
-        --effort high \
-        --max-turns 40 \
-        --no-memory \
-        --no-subagents \
-        --disable-web-search \
-        --tools 'read_file,grep,list_dir' \
-        --disallowed-tools 'search_tool,use_tool,Agent' \
-        --deny 'MCPTool' \
-        --sandbox read-only \
-        --output-format json \
-        --json-schema "$(cat "$SCHEMA_FILE")" \
-        > "$RAW_FILE" 2>"${RAW_FILE}.err"
-    rc=$?
+    (
+        eval "exec ${MAGI_LOCK_FD}>&-"
+        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
+            --prompt-file "$PROMPT_FILE" \
+            --cwd "$PWD" \
+            --model "$MODEL" \
+            --effort high \
+            --max-turns 40 \
+            --no-memory \
+            --no-subagents \
+            --disable-web-search \
+            --tools 'read_file,grep,list_dir' \
+            --disallowed-tools 'search_tool,use_tool,Agent' \
+            --deny 'MCPTool' \
+            --sandbox read-only \
+            --output-format json \
+            --json-schema "$(cat "$SCHEMA_FILE")"
+    ) > "$RAW_FILE" 2>"${RAW_FILE}.err" &
 fi
+PROVIDER_PID=$!
+wait "$PROVIDER_PID"
+rc=$?
+PROVIDER_PID=""
 set -e
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 [ $rc -eq 0 ] || _fail_closed "$REVIEWER exited $rc (timeout=${TIMEOUT_S}s)"
 
-if ! python3 - "$RAW_FILE" "$FINDINGS_OUT" "$META_OUT" "$ARTIFACT_SHA" \
+if ! python3 - "$RAW_FILE" "$STAGING_FINDINGS" "$STAGING_META" "$ARTIFACT_SHA" \
         "$STARTED_AT" "$FINISHED_AT" "$SCRUB" "$REVIEWER" "$MODEL" <<'PY'
 import glob, hashlib, json, os, re, subprocess, sys
 
@@ -316,15 +340,20 @@ print(f"magi-xfamily[{reviewer}]: verdict={obj.get('verdict')} "
       f"model={model_id}")
 PY
 then
-    rm -f "$FINDINGS_OUT" "$META_OUT"
     _fail_closed "unparseable reviewer output"
 fi
 
-if ! python3 "$VALIDATOR" "$FINDINGS_OUT" "$SCHEMA_FILE" --doc "$DOC_PATH"; then
-    rm -f "$FINDINGS_OUT" "$META_OUT"
+if ! python3 "$VALIDATOR" "$STAGING_FINDINGS" "$SCHEMA_FILE" --doc "$DOC_PATH"; then
     _fail_closed "findings violate schema or convergence contract"
 fi
 
-python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
+if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null; then
+    _fail_closed "claim no longer permits successful output promotion"
+fi
 CLAIM_FINISHED=1
+mv "$STAGING_FINDINGS" "$FINDINGS_OUT"
+STAGING_FINDINGS=""
+mv "$STAGING_META" "$META_OUT"
+STAGING_META=""
+rm -f "$FAILED_OUT"
 echo "magi-xfamily[$REVIEWER]: wrote $FINDINGS_OUT + $META_OUT"

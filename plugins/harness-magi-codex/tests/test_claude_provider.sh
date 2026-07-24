@@ -37,7 +37,19 @@ SID="aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 cat > "$TMP/bin/claude" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$@" > "$TMP/claude_args"
+if [ -e "/proc/\$\$/fd/9" ]; then
+  printf 'present\n' > "$TMP/claude_fd9"
+else
+  printf 'absent\n' > "$TMP/claude_fd9"
+fi
 cat > /dev/null  # drain the stdin prompt; argv never carries the doc
+if [ "\${STUB_HANG:-}" = 1 ]; then
+  : > "\${STUB_READY:?}"
+  while :; do sleep 1; done
+fi
+if [ "\${STUB_FAIL:-}" = 1 ]; then
+  exit 7
+fi
 PROJ="$TMP/home/.claude/projects/-tmp-fixture"
 mkdir -p "\$PROJ"
 # The model the transcript records is what the CLI "actually ran"; override to simulate a downgrade.
@@ -73,6 +85,14 @@ PATH="$TMP/bin:$PATH" HOME="$TMP/home" "$ADAPTER" --reviewer claude \
     "$DOC" 2 "$PRIOR" "$STATE/round_8_xfamily" >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "Claude adapter completes" || bad "Claude adapter rc=$rc"
+[ "$(cat "$TMP/claude_fd9" 2>/dev/null)" = absent ] \
+    && ok "Claude provider does not inherit review-lock FD9" \
+    || bad "Claude provider inherited review-lock FD9"
+if find "$STATE" -maxdepth 1 -name '.round_8_xfamily.claim-*' | grep -q .; then
+  bad "Claude adapter left claim-scoped staging files"
+else
+  ok "Claude claim-scoped staging is removed after promotion"
+fi
 
 # The default reviewer route must be Claude even with no --reviewer flag.
 python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'independent default-route fixture' >/dev/null || exit 1
@@ -174,6 +194,75 @@ HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_8_xfamily" \
     --orchestrator-family codex --reviewer-family claude >/dev/null 2>&1
 [ $? -ne 0 ] && ok "post-adapter Claude transcript mutation rejected" \
               || bad "mutated Claude transcript passed gate"
+
+# A charged retry owns its requested prefix. If its provider then fails, canonical output from an
+# older attempt must be gone rather than masquerading as the failed claim's result.
+python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'stale-prefix cleanup fixture' >/dev/null || exit 1
+seed_campaign || exit 1
+STALE="$STATE/round_8_stale"
+printf 'stale findings\n' > "$STALE.json"
+printf 'stale metadata\n' > "$STALE.meta.json"
+PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_FAIL=1 "$ADAPTER" --reviewer claude \
+    "$DOC" 2 "$PRIOR" "$STALE" >/dev/null 2>&1
+stale_rc=$?
+if [ $stale_rc -eq 2 ] && [ ! -e "$STALE.json" ] && [ ! -e "$STALE.meta.json" ] \
+    && [ -e "$STALE.FAILED.json" ]; then
+  ok "charged provider failure clears stale canonical output"
+else
+  bad "failed claim left stale canonical output (rc=$stale_rc)"
+fi
+
+# Requirement-revision cancellation owns the live adapter tree. Even when cancellation races a
+# provider invocation at the requested prefix, no findings/meta may reach canonical paths.
+CANCEL_DOC="$TMP/cancel-design.md"; printf 'a revised design\n' > "$CANCEL_DOC"
+CANCEL_SHA="$(sha256sum "$CANCEL_DOC" | cut -d' ' -f1)"
+CANCEL_ID="$(printf '%s' "$(realpath "$CANCEL_DOC")" | sha256sum | cut -c1-16)"
+CANCEL_STATE="$TMP/cancel-state"; mkdir -p "$CANCEL_STATE"
+CANCEL_SOURCE="$CANCEL_STATE/round_1_source.json"
+printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+    "$CANCEL_ID" "$CANCEL_SHA" > "$CANCEL_SOURCE"
+CANCEL_SOURCE_SHA="$(sha256sum "$CANCEL_SOURCE" | cut -d' ' -f1)"
+CANCEL_PRIOR="$CANCEL_STATE/round_1_codex.json"
+printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+    "$CANCEL_ID" "$CANCEL_SHA" "$(basename "$CANCEL_SOURCE")" "$CANCEL_SOURCE_SHA" > "$CANCEL_PRIOR"
+cancel_seed="$(python3 "$GUARD" claim "$CANCEL_DOC" 1 fanout "$CANCEL_STATE")" || exit 1
+cancel_seed_id="${cancel_seed##*CLAIM_ID=}"
+python3 "$GUARD" finish "$CANCEL_DOC" "$cancel_seed_id" success >/dev/null || exit 1
+CANCELLED="$CANCEL_STATE/round_8_cancelled"
+READY="$TMP/cancel-provider-ready"
+PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_HANG=1 STUB_READY="$READY" \
+    "$ADAPTER" --reviewer claude "$CANCEL_DOC" 2 "$CANCEL_PRIOR" "$CANCELLED" \
+    >"$TMP/cancel-adapter.log" 2>&1 &
+cancel_adapter_pid=$!
+for _ in $(seq 1 100); do
+  [ -e "$READY" ] && break
+  sleep 0.05
+done
+if [ ! -e "$READY" ]; then
+  bad "cancellation fixture provider did not start: $(tr '\n' ' ' < "$TMP/cancel-adapter.log")"
+  kill -TERM "$cancel_adapter_pid" 2>/dev/null
+  wait "$cancel_adapter_pid" 2>/dev/null
+else
+  python3 "$GUARD" cancel-revision "$CANCEL_DOC" \
+      --expected-artifact-sha "$CANCEL_SHA" --reason 'test requirement revision' \
+      --term-timeout-s 1 --kill-timeout-s 1 >/dev/null 2>&1
+  cancel_rc=$?
+  wait "$cancel_adapter_pid" 2>/dev/null
+  cancel_status="$(python3 - "$MARKER_DIR/CAMPAIGN.$CANCEL_ID.json" <<'PY'
+import json, sys
+ledger = json.load(open(sys.argv[1]))
+print(ledger["campaigns"][-1]["launches"][-1]["status"])
+PY
+)"
+  if [ $cancel_rc -eq 0 ] \
+      && [ "$cancel_status" = superseded-by-requirement-revision ] \
+      && [ ! -e "$CANCELLED.json" ] && [ ! -e "$CANCELLED.meta.json" ] \
+      && ! find "$CANCEL_STATE" -maxdepth 1 -name '.round_8_cancelled.claim-*' | grep -q .; then
+    ok "superseded xfamily claim cannot promote canonical output"
+  else
+    bad "superseded claim promotion guard failed (cancel_rc=$cancel_rc status=$cancel_status)"
+  fi
+fi
 
 echo "test_claude_provider: $pass passed, $fail failed"
 exit $((fail > 0))
