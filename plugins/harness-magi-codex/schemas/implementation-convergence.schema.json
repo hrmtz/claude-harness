@@ -34,6 +34,10 @@
       "type": "string",
       "pattern": "^[a-f0-9]{40}$"
     },
+    "review_base_git_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
     "changed_paths": {
       "type": "array",
       "minItems": 1,
@@ -55,6 +59,37 @@
         "minLength": 1,
         "maxLength": 256
       }
+    },
+    "incremental_review": {
+      "type": "object",
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "changed_loc": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "surface_changes": {
+          "type": "object",
+          "properties": {
+            "public_interface": {"type": "boolean"},
+            "trust_boundary": {"type": "boolean"},
+            "persistence_schema_rollback": {"type": "boolean"},
+            "design_invariant": {"type": "boolean"}
+          },
+          "required": [
+            "public_interface",
+            "trust_boundary",
+            "persistence_schema_rollback",
+            "design_invariant"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["eligible", "changed_loc", "surface_changes"],
+      "additionalProperties": false
     },
     "review_packet": {
       "type": "object",

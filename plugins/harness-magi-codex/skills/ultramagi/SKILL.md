@@ -96,7 +96,15 @@ degraded_until: <what must run before ship>
                  python3 scripts/magi_convergence_gate.py evaluate <implementation-manifest.json>
                Follow only CONTINUE or FINAL_REVIEW_REQUIRED. BLOCKED and REDESIGN are terminal.
                The evaluator is advisory/report-only: it never emits PASS or authorizes shipping.
-               At most two full fanout->xfamily cycles may run; never "re-run until clean".
+               For a later standard-risk fix, rebuild the same packet with --allow-incremental.
+               If the evaluator returns next_mode=incremental-fix, run:
+                 scripts/magi_fanout_codex.sh <manifest> 1 <dir> \
+                   --persona-set bug-hunt --review-mode incremental
+               This is one deterministic targeted reviewer (weight 1), never a final certificate.
+               Public-interface, trust-boundary, persistence/schema/rollback, design-invariant,
+               >8-path, or >200-line fixes require full review; declare semantic surface changes
+               with magi_review_packet.py --surface-change <kind>.
+               At most two fanout/targeted -> xfamily cycles may run; never "re-run until clean".
                Existing exact-revision plateau + human judgment remain the ship authority.
 [5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
                then Codex for final fixes/tests. Commit only when requested or policy allows.

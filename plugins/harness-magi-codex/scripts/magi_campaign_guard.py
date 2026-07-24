@@ -20,7 +20,7 @@ from typing import Iterator
 
 
 DEFAULT_MAX_MODEL_LAUNCHES = 16
-PHASE_WEIGHT = {"fanout": 3, "xfamily": 1}
+PHASE_WEIGHT = {"fanout": 3, "targeted": 1, "xfamily": 1}
 FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
 GLOBAL_MAX_MODEL_LAUNCHES = 16
 TERMINAL_STATUSES = {
@@ -465,7 +465,7 @@ def next_transition(launches: list[object]) -> dict[str, object]:
         }
     if status != "success":
         raise StateError(f"campaign launch has an invalid status: {status!r}")
-    expected_phase = "xfamily" if last_phase == "fanout" else "fanout"
+    expected_phase = "xfamily" if last_phase in {"fanout", "targeted"} else "fanout"
     return {
         "kind": "candidate",
         "round": last_round + 1,
@@ -507,7 +507,7 @@ def validate_transition(launches: list[object], round_no: int, phase: str) -> in
 
 def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, object]:
     weight = PHASE_WEIGHT[phase]
-    reserve = FINAL_XFAMILY_RESERVE if phase == "fanout" else 0
+    reserve = FINAL_XFAMILY_RESERVE if phase in {"fanout", "targeted"} else 0
     required = weight + reserve
     affordable = total_used + required <= ceiling
     reason = (
@@ -590,7 +590,7 @@ def may_rollover(
     assert isinstance(campaigns, list)
     launches = campaign["launches"]
     assert isinstance(launches, list)
-    if round_no != 1 or phase != "fanout" or not launches:
+    if round_no != 1 or phase not in {"fanout", "targeted"} or not launches:
         return False
     last = launches[-1]
     if not isinstance(last, dict):
@@ -598,7 +598,7 @@ def may_rollover(
     if last.get("status") in NONTERMINAL_STATUSES:
         return False
     if last.get("status") == "superseded-by-requirement-revision":
-        return last.get("artifact_sha") != file_sha(doc)
+        return phase == "fanout" and last.get("artifact_sha") != file_sha(doc)
     return (
         last.get("artifact_sha") != file_sha(doc)
         or last.get("protocol_sha") != protocol_sha()
@@ -612,6 +612,7 @@ def claim(
     state_raw: str,
     owner_pid: int | None = None,
     adapter_kind: str | None = None,
+    expected_artifact_sha: str | None = None,
 ) -> None:
     doc = canonical_doc(doc_raw)
     round_no = positive_int(round_raw, "round")
@@ -634,6 +635,8 @@ def claim(
     state = Path(state_raw).expanduser().resolve()
     state.mkdir(parents=True, exist_ok=True)
     with document_lock(doc):
+        if expected_artifact_sha is not None and expected_artifact_sha != file_sha(doc):
+            raise TransitionError("claim artifact changed after its authorization decision")
         ledger = load_ledger(doc, create=True)
         nonterminal = [
             launch
@@ -986,10 +989,11 @@ def parser() -> argparse.ArgumentParser:
     claim_parser = commands.add_parser("claim")
     claim_parser.add_argument("doc")
     claim_parser.add_argument("round")
-    claim_parser.add_argument("phase", choices=("fanout", "xfamily"))
+    claim_parser.add_argument("phase", choices=("fanout", "targeted", "xfamily"))
     claim_parser.add_argument("state_dir")
     claim_parser.add_argument("--owner-pid", type=int)
-    claim_parser.add_argument("--adapter-kind", choices=("fanout", "xfamily"))
+    claim_parser.add_argument("--adapter-kind", choices=("fanout", "targeted", "xfamily"))
+    claim_parser.add_argument("--expected-artifact-sha")
     finish_parser = commands.add_parser("finish")
     finish_parser.add_argument("doc")
     finish_parser.add_argument("claim_id")
@@ -1018,6 +1022,7 @@ def main() -> int:
                 args.state_dir,
                 args.owner_pid,
                 args.adapter_kind,
+                args.expected_artifact_sha,
             )
         elif args.command == "finish":
             finish(args.doc, args.claim_id, args.status)

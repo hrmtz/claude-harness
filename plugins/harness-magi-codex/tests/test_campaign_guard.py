@@ -633,6 +633,61 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertEqual(fanout.returncode, 4)
         self.assertIn("NOT PLATEAU", fanout.stderr)
 
+    def test_changed_artifact_can_roll_into_weight_one_targeted_pair(self) -> None:
+        self.assertEqual(self.claim(1, "fanout").returncode, 0)
+        self.assertEqual(self.claim(2, "xfamily").returncode, 0)
+        self.doc.write_text("# fixture\n\nsmall fix\n")
+
+        targeted = self.claim(1, "targeted")
+        self.assertEqual(targeted.returncode, 0, targeted.stderr)
+        final = self.claim(2, "xfamily")
+        self.assertEqual(final.returncode, 0, final.stderr)
+
+        ledger = json.loads(next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json")).read_text())
+        launches = ledger["campaigns"][-1]["launches"]
+        self.assertEqual([launch["phase"] for launch in launches], ["targeted", "xfamily"])
+        self.assertEqual([launch["model_launches"] for launch in launches], [1, 1])
+        self.assertEqual(
+            sum(
+                launch["model_launches"]
+                for campaign in ledger["campaigns"]
+                for launch in campaign["launches"]
+            ),
+            6,
+        )
+
+    def test_targeted_cannot_bootstrap_or_replace_requirement_revision(self) -> None:
+        initial = self.claim(1, "targeted", finish=None)
+        self.assertEqual(initial.returncode, 64)
+        self.assertIn("must start at round 1 fanout", initial.stderr)
+
+        owner, _ = self.start_owned_claim()
+        old_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        cancelled = self.cancel(old_sha)
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.wait_owned(owner)
+        self.doc.write_text("# revised requirements\n")
+
+        targeted = self.claim(1, "targeted", finish=None)
+        self.assertEqual(targeted.returncode, 64)
+        fanout = self.claim(1, "fanout")
+        self.assertEqual(fanout.returncode, 0, fanout.stderr)
+
+    def test_claim_rejects_stale_incremental_authorization_sha(self) -> None:
+        expected = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        self.doc.write_text("# changed after decision\n")
+        result = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            "--expected-artifact-sha",
+            expected,
+        )
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("artifact changed after its authorization", result.stderr)
+
 
 class FindingSchemaTest(unittest.TestCase):
     def test_classification_and_severity_contract(self) -> None:
