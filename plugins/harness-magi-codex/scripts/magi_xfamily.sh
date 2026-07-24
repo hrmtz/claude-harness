@@ -166,7 +166,10 @@ Claude is unavailable. The adapter provenance records the actual provider; prefe
 fallback reason remain an operator note. Do not accept silent same-family substitution.
 
 CONVERGENCE CONTRACT (mandatory): dup_flag must be exactly one of new, duplicate, regression,
-readiness-gap, or scope-expansion. After round 2, freeze the committed scope. Prioritize unresolved
+readiness-gap, or scope-expansion. Every REJECT, CRITICAL, or HIGH finding MUST include a stable,
+non-empty root_cause_id and subsystem so repeated roots and subsystem recurrence can be evaluated
+mechanically. Reuse a prior root_cause_id when the underlying cause is unchanged; do not mint a new
+id for a rewording. After round 2, freeze the committed scope. Prioritize unresolved
 prior blockers, regressions introduced by their fixes, and newly discovered unsafe or
 unimplementable behavior inside the committed scope. Missing evidence explicitly scheduled for a
 later phase is readiness-gap. An optional stronger guarantee or new subsystem is scope-expansion.

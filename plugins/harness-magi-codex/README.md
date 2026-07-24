@@ -1,8 +1,9 @@
 # harness-magi-codex
 
 **Codex is the orchestrator; Claude or Grok is the cross-family reviewer.** Claude remains the
-default; Grok is an explicit fallback for Claude quota/capacity failures. The mirror image of
-[`harness-magi`](../harness-magi/), which runs the same protocol the other way round.
+default; Grok is an explicit fallback for Claude quota/capacity failures. The Claude
+[`harness-magi`](../harness-magi/) package mirrors the human-readable contract but currently
+fails closed because it does not yet ship a Claude-native structural runner.
 
 version: see [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) (authoritative) · design:
 [`docs/designs/CODEX_MAGI_MIRROR.md`](../../docs/designs/CODEX_MAGI_MIRROR.md)
@@ -71,6 +72,9 @@ Preferred: install the native `harness-magi-codex` plugin from the repository
 Codex marketplace; see [`docs/codex_plugins.md`](../../docs/codex_plugins.md).
 The legacy `install-codex-skills.sh` symlink flow remains only for migration and
 is removed with `uninstall-codex-skills.sh` after native plugin installation.
+Both commands refuse foreign skill paths: the installer will not replace an
+unowned directory or symlink, and the uninstaller removes only entries carrying
+the harness ownership marker.
 
 Requires `codex`, `flock`, `bubblewrap`, Python 3 with `jsonschema`, and the
 selected reviewer CLI (`claude` or `grok`). Magi pre-flight uses a private
@@ -95,6 +99,15 @@ The result is only `PROCEED`, `PIVOT`, or `ABORT`; unsupported minority roots
 remain explicit questions, while grounded minority CRITICAL/security/data-loss/
 irreversibility findings retain veto power. Every result is report-only and
 sets `authorizes_shipping: false`.
+
+The output directory is single-use. Exit `5` means canonical output already
+exists, so retry with a fresh empty directory; exit `3` means an active run owns
+the directory lock. `MAGI_PREFLIGHT_TIMEOUT_S` accepts `1..900` seconds and
+defaults to `900`. Runner exit `1` covers dependency/provider/runtime failure,
+exit `2` covers unsafe or incomplete input/evidence, exit `64` is usage, and
+INT/TERM are preserved as `130`/`143`. An invalid brief may fail before an
+envelope exists; unsafe evaluator input emits a report-only `ABORT` with
+`UNSAFE_OR_INCOMPLETE_DESIGN_INPUT`.
 
 ```bash
 D=docs/designs/MY_DESIGN.md; S=docs/designs/.dual-magi; mkdir -p "$S"

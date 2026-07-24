@@ -1,10 +1,16 @@
 # harness-magi
 
-Three-perspective preflight review for Claude Code. Surfaces architectural / operational / commercial blind spots **before** you commit walltime, cost, or destructive state — front-loading the *"what if you DROP→rebuild instead?"* conversation that otherwise happens mid-execution as an expensive course correction.
+Contract mirror for a three-perspective preflight review. This Claude surface
+documents the protocol but deliberately fails closed until a Claude-native
+structural runner can prove reviewer independence and artifact provenance.
+Use the `harness-magi-codex` companion for the working runner.
 
 ## Why "Magi"?
 
-Named after Evangelion's Magi supercomputer system: three personalities (Melchior, Balthasar, Caspar) decide together. Here, three parallel `Task` agents — each with a distinct perspective — independently review the change and surface divergent observations.
+Named after Evangelion's Magi supercomputer system: three personalities
+(Melchior, Balthasar, Caspar) decide together. The contract defines three
+independent perspectives; prose-only `Task` dispatch is not accepted as proof
+that they ran independently.
 
 - **MELCHIOR** (technical): silent failure modes, per-unit cost reality, alternative idioms
 - **BALTHASAR** (operational): recovery cost, monitoring blind spots, peak resource envelope, concurrent-task collisions

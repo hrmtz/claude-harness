@@ -1,6 +1,6 @@
 {
   "name": "harness-magi",
-  "description": "Three-perspective preflight review skill (MELCHIOR/BALTHASAR/CASPAR) for high-stakes changes — front-loads post-hoc optimization insights before walltime / cost is committed.",
+  "description": "Fail-closed Claude contract mirror for MELCHIOR/BALTHASAR/CASPAR preflight; use harness-magi-codex until a Claude-native structural runner ships.",
   "author": {
     "name": "hrmtz",
     "url": "https://github.com/hrmtz"

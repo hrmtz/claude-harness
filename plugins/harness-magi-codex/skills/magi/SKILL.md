@@ -43,6 +43,15 @@ Resolve the installed `harness-magi-codex` plugin root with
 - The evaluator is report-only. `authorizes_shipping` is always `false`.
 - Magi never invokes the Dual-Magi G1-G9 gate and never creates a plateau
   marker.
-- Exit `0` means a complete deterministic decision, exit `2` means unsafe or
-  incomplete evidence and emits fail-closed `ABORT`, and exit `64` means usage
-  error.
+- The output directory is single-use. Exit `5` means canonical output already
+  exists; retry with a fresh empty directory. Exit `3` means another run owns
+  the directory lock; retry after that run finishes.
+- `MAGI_PREFLIGHT_TIMEOUT_S` is an integer in `1..900` (default `900`) and
+  applies to each reviewer process.
+- Exit `0` means a complete deterministic decision. Exit `1` means a missing
+  dependency or provider/runtime failure before a usable envelope exists.
+  Exit `2` means unsafe or incomplete design input/evidence. Invalid brief
+  input can fail before an envelope exists; when the evaluator receives unsafe
+  evidence it emits report-only `ABORT` with reason
+  `UNSAFE_OR_INCOMPLETE_DESIGN_INPUT`. Exit `64` means usage error. Signals are
+  preserved as `130` (INT) and `143` (TERM).

@@ -29,10 +29,12 @@ FANOUT = os.path.join(PLUGIN, "scripts", "magi_fanout_codex.sh")
 GATE = os.path.join(PLUGIN, "scripts", "magi_plateau_gate.sh")
 VERIFIER = os.path.join(PLUGIN, "scripts", "magi_verify_round.py")
 GUARD = os.path.join(PLUGIN, "scripts", "magi_campaign_guard.py")
+PREFLIGHT = os.path.join(PLUGIN, "scripts", "magi_preflight_codex.sh")
 README = os.path.join(PLUGIN, "README.md")
 DESIGN = os.path.join(PLUGIN, "..", "..", "docs", "designs", "CODEX_MAGI_MIRROR.md")
 DUAL_SKILL = os.path.join(PLUGIN, "skills", "dual-magi-review", "SKILL.md")
 ULTRA_SKILL = os.path.join(PLUGIN, "skills", "ultramagi", "SKILL.md")
+MAGI_SKILL = os.path.join(PLUGIN, "skills", "magi", "SKILL.md")
 
 
 def read(p: str) -> str:
@@ -273,18 +275,34 @@ def guard_env_vars(src: str) -> set[str]:
     return names
 
 
+def preflight_exit_codes(src: str) -> set[str]:
+    codes = set(re.findall(r"\bexit (\d+)\b", src))
+    if not {"1", "2", "3", "5", "64", "130", "143"}.issubset(codes):
+        raise RuntimeError(f"cannot observe the preflight exit contract in {PREFLIGHT}")
+    return codes
+
+
+def preflight_env_vars(src: str) -> set[str]:
+    names = set(re.findall(r"\$\{(MAGI_PREFLIGHT_[A-Z_]+):-", src))
+    if not names:
+        raise RuntimeError(f"cannot parse preflight env vars from {PREFLIGHT}")
+    return names
+
+
 def main() -> int:
-    adapter, fanout, gate, verifier, guard = (
+    adapter, fanout, gate, verifier, guard, preflight = (
         read(ADAPTER),
         read(FANOUT),
         read(GATE),
         read(VERIFIER),
         read(GUARD),
+        read(PREFLIGHT),
     )
-    skill_paths = (DUAL_SKILL, ULTRA_SKILL)
+    skill_paths = (DUAL_SKILL, ULTRA_SKILL, MAGI_SKILL)
     if not all(os.path.isfile(path) for path in skill_paths):
         raise RuntimeError("cannot read every shipped SKILL.md — checker is blind")
     docs = read(README) + read(DESIGN) + "".join(read(path) for path in skill_paths)
+    preflight_docs = read(README) + read(MAGI_SKILL)
     drift = []
 
     for code in sorted(adapter_exit_codes(adapter)):
@@ -310,6 +328,19 @@ def main() -> int:
     for var in sorted(env_vars(adapter) | env_vars(fanout) | guard_env_vars(guard)):
         if var not in docs:
             drift.append(f"adapter reads ${var} but no doc mentions it")
+
+    for code in sorted(preflight_exit_codes(preflight)):
+        if not re.search(rf"\b{code}\s*=|\bexit(?:s)? `{code}`|\bexit(?:s)? {code}\b|`{code}`", preflight_docs):
+            drift.append(f"preflight can `exit {code}` but no preflight doc explains it")
+
+    for var in sorted(preflight_env_vars(preflight)):
+        if var not in preflight_docs:
+            drift.append(f"preflight reads ${var} but no preflight doc mentions it")
+
+    for prompt_name, prompt in (("fanout", fanout), ("cross-family", adapter)):
+        for field in ("root_cause_id", "subsystem"):
+            if field not in prompt:
+                drift.append(f"{prompt_name} prompt omits blocking convergence field {field}")
 
     # The design's central honesty claim must not be silently dropped from the README.
     if "forgery" in read(README).lower() and "not" not in read(README).lower():
