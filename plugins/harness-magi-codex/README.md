@@ -4,7 +4,8 @@
 default; Grok is an explicit fallback for Claude quota/capacity failures. The mirror image of
 [`harness-magi`](../harness-magi/), which runs the same protocol the other way round.
 
-version: `0.1.0-codex` · design: [`docs/designs/CODEX_MAGI_MIRROR.md`](../../docs/designs/CODEX_MAGI_MIRROR.md)
+version: see [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) (authoritative) · design:
+[`docs/designs/CODEX_MAGI_MIRROR.md`](../../docs/designs/CODEX_MAGI_MIRROR.md)
 
 ## Why a mirror exists
 
@@ -91,12 +92,32 @@ For implementation campaigns, create an untracked exact-SHA packet at one stable
 that packet, then evaluate the already-charged history:
 
 ```bash
+MANIFEST="$PWD/.magi-implementation-review.json"
+STATE="$PWD/.magi-implementation-review-state"
+
 python3 scripts/magi_review_packet.py \
   --repo "$PWD" --base <base-commit> --scope <issue-or-task> \
   --invariant <invariant-id> --deadline <RFC3339> \
-  --output "$PWD/.magi-implementation-review.json"
+  --output "$MANIFEST"
 
-python3 scripts/magi_convergence_gate.py evaluate path/to/implementation-review.json
+scripts/magi_fanout_codex.sh "$MANIFEST" 1 "$STATE" \
+  --persona-set bug-hunt --prior -
+python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST"
+
+# Required orchestrator step: synthesize the three round_1 persona JSON files into
+# "$STATE/round_1_codex.json" using the Synthesis provenance contract below.
+scripts/magi_xfamily.sh --reviewer claude "$MANIFEST" 2 \
+  "$STATE/round_1_codex.json" "$STATE/round_2_xfamily"
+FINAL_DECISION="$(python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST")"
+printf '%s\n' "$FINAL_DECISION"
+if printf '%s' "$FINAL_DECISION" | python3 -c \
+  'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if (d.get("decision"), d.get("reason_code")) == ("BLOCKED", "REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE") else 1)'
+then
+  scripts/magi_plateau_gate.sh "$MANIFEST" "$STATE/round_2_xfamily" \
+    --reviewer-family claude
+else
+  echo "not ready for plateau gate; follow the evaluator decision" >&2
+fi
 ```
 
 The packet embeds the exact target tree and a `--binary --full-index` diff. Updating the stable
@@ -135,7 +156,10 @@ The evaluator is read-only and report-only. It returns only `CONTINUE`,
 ledger, writes a plateau marker, emits PASS, or authorizes shipping. Two complete logical cycles
 are the maximum: initial `fanout(3) -> xfamily(1)`, followed by either full fanout or an eligible
 `targeted(1) -> xfamily(1)` fix cycle. Existing exact-revision G1-G9 plateau and human judgment
-remain the PASS authority.
+remain the PASS authority. After a clean cross-family cycle, `BLOCKED` with reason
+`REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE` is an evaluator-terminal handoff: run
+`magi_plateau_gate.sh` as shown above. It is not a hard campaign blocker and does not itself
+authorize shipping. Every other `BLOCKED` reason remains fail-closed.
 
 Every round after round 1 requires a schema-valid prior synthesis artifact from the same state
 directory, canonical document identity, and immediately preceding round. Every output carries
@@ -261,6 +285,7 @@ only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 ```bash
 python3 tests/test_docs_match_scripts.py     # doc-vs-code contract (exit codes, G-asserts, env)
 python3 tests/test_campaign_guard.py          # global fuse, rollover, migration, prior/schema contracts
+python3 tests/test_convergence_gate.py        # exact-SHA packet + bounded implementation convergence
 python3 tests/test_autorun.py                 # no-ack Stop continuation, plateau, terminal block
 bash    tests/test_fanout_scrub.sh           # FIFO pre-write scrub + three-persona/sibling rail
 bash    tests/test_inv7_lock.sh              # flock: both sides, concurrency, SIGKILL, recursion
