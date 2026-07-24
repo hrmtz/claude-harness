@@ -344,6 +344,12 @@ The checked-in Magi finding schema is the source contract.
 No unknown top-level or finding keys are accepted because the existing schema
 sets `additionalProperties: false`.
 
+The contract is intentionally read at runtime rather than copied into Slice 0.
+Consequently, the issue #107 convergence additions are enforced at ingestion:
+every `REJECT`, `CRITICAL`, or `HIGH` finding must carry non-empty
+`subsystem` and `root_cause_id`, while the remaining convergence fields stay
+optional and are preserved when present.
+
 Additional foundation checks:
 
 - `reviewer` is non-empty after trimming;
