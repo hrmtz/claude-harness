@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +23,7 @@ SCRIPT = PLUGIN / "scripts" / "magi_convergence_gate.py"
 PACKET = PLUGIN / "scripts" / "magi_review_packet.py"
 sys.path.insert(0, str(PLUGIN / "scripts"))
 import magi_campaign_guard as guard  # noqa: E402
+import magi_convergence_gate as convergence  # noqa: E402
 
 
 def run(
@@ -941,6 +945,58 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertFalse(payload["authorizes_shipping"])
         self.assertIn("ledger fields do not match schema version 1", payload["detail"])
         self.assertNotIn("Traceback", result.stdout)
+
+    def test_symlink_loop_historical_manifest_is_stable_blocked_json(self) -> None:
+        loop = self.repo / "loop"
+        loop.symlink_to("loop")
+        payload = json.loads(self.manifest.read_text())
+        payload["historical_manifests"] = [
+            {
+                "path": str(loop / "archive.json"),
+                "artifact_sha": "0" * 64,
+            }
+        ]
+        self.manifest.write_text(json.dumps(payload))
+
+        result, blocked = self.evaluate()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(blocked["mode"], "report-only")
+        self.assertEqual(blocked["decision"], "BLOCKED")
+        self.assertEqual(blocked["reason_code"], "UNSAFE_OR_INCOMPLETE_INPUT")
+        self.assertFalse(blocked["authorizes_shipping"])
+        self.assertIn("Symlink loop", blocked["detail"])
+        self.assertNotIn("Traceback", result.stdout)
+
+    def test_resampling_oserror_is_stable_blocked_json(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                convergence,
+                "evaluate",
+                side_effect=OSError("resampling failed"),
+            ),
+            mock.patch.object(
+                sys,
+                "argv",
+                [str(SCRIPT), "evaluate", str(self.manifest)],
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            returncode = convergence.main()
+
+        blocked = json.loads(stdout.getvalue())
+        self.assertEqual(returncode, 2)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(blocked["mode"], "report-only")
+        self.assertEqual(blocked["decision"], "BLOCKED")
+        self.assertEqual(blocked["reason_code"], "UNSAFE_OR_INCOMPLETE_INPUT")
+        self.assertEqual(blocked["detail"], "resampling failed")
+        self.assertFalse(blocked["authorizes_shipping"])
+        self.assertNotIn("Traceback", stdout.getvalue())
 
 
 if __name__ == "__main__":

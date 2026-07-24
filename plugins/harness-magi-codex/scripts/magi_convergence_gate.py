@@ -807,7 +807,13 @@ def main() -> int:
     except (UsageError, guard.UsageError) as exc:
         print(f"MAGI_CONVERGENCE_USAGE: {exc}", file=sys.stderr)
         return 64
-    except (UnsafeInput, guard.StateError, guard.TransitionError) as exc:
+    except (
+        UnsafeInput,
+        guard.StateError,
+        guard.TransitionError,
+        OSError,
+        RuntimeError,
+    ) as exc:
         print(
             json.dumps(
                 {
