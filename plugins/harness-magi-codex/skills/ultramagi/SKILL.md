@@ -87,10 +87,35 @@ degraded_until: <what must run before ship>
                idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   adversarial review of the IMPLEMENTATION, not the design:
+                 python3 scripts/magi_review_packet.py --repo <absolute-root> --base <sha> \
+                   --scope <id> --invariant <id> --deadline <RFC3339> --output <stable-manifest>
                  scripts/magi_fanout_codex.sh <target> <round> <dir> --persona-set bug-hunt \
                    --prior <prior-synthesis.json|->
                Reviewers RUN read-only verification against real data and try to break it.
-               Fix findings; re-run until clean. This is the gate before an irreversible run.
+               After each completed phase, run:
+                 python3 scripts/magi_convergence_gate.py evaluate <implementation-manifest.json>
+               Follow CONTINUE. On FINAL_REVIEW_REQUIRED / next_mode=final-full, run:
+                 # Full fanout only: first synthesize every round-N persona artifact into the
+                 # schema-valid round_N_codex.json prior required by round N+1.
+                 scripts/magi_xfamily.sh --reviewer claude <manifest> <next-round> \
+                   <state-dir/round_N_codex.json> <state-dir/round_N+1_xfamily>
+               Then evaluate again. A clean final cycle returns BLOCKED with reason
+               REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE: this is an evaluator-terminal
+               handoff to magi_plateau_gate.sh, not permission to ship and not a hard blocker.
+               Invoke the plateau gate only after mechanically matching both that decision and
+               reason code; any CONTINUE result requires its named fix/review path instead.
+               Every other BLOCKED reason and every REDESIGN are terminal fail-closed results.
+               The evaluator is advisory/report-only: it never emits PASS or authorizes shipping.
+               For a later standard-risk fix, rebuild the same packet with --allow-incremental.
+               If the evaluator returns next_mode=incremental-fix, run:
+                 scripts/magi_fanout_codex.sh <manifest> 1 <dir> \
+                   --persona-set bug-hunt --review-mode incremental
+               This is one deterministic targeted reviewer (weight 1), never a final certificate.
+               Public-interface, trust-boundary, persistence/schema/rollback, design-invariant,
+               >8-path, or >200-line fixes require full review; declare semantic surface changes
+               with magi_review_packet.py --surface-change <kind>.
+               At most two fanout/targeted -> xfamily cycles may run; never "re-run until clean".
+               Existing exact-revision plateau + human judgment remain the ship authority.
 [5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
                then Codex for final fixes/tests. Commit only when requested or policy allows.
 [6] NEXT       update the epic; pick the next task; back to [0].
@@ -126,8 +151,26 @@ If a reviewer script exits `4`, the autonomous campaign budget is exhausted. Thi
 plateau: autonomously reduce scope, replace the primitive, or record an explicit limitation, then
 restart at round 1. A changed document/protocol rolls over automatically within the fixed global
 allowance of 16 weighted model launches across all revision campaigns, without acknowledgement.
+Fan-out admission preserves one weighted launch for its immediately following mandatory
+cross-family review. Reserve denial is a definitive blocked state, never permission to ship; the
+cross-family claim still passes the normal transition and budget guards and is not double-charged.
 At global exhaustion, emit a definitive blocked result. Do not keep
 rerolling until a model happens to say GO and do not pause for user acknowledgement.
+
+If requirements change while an adapter owns a live claim, do not edit the target or relaunch
+around it. Cancel that exact charged revision first:
+
+```bash
+TARGET="/absolute/path/to/active-review-target"
+python3 scripts/magi_campaign_guard.py cancel-revision "$TARGET" \
+  --expected-artifact-sha "$(sha256sum "$TARGET" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+Proceed only after the verified owner process tree is gone and the guard confirms cancellation.
+A cleanup-blocked result remains terminal; retry the same cancellation instead of unlinking the
+review lock or starting another adapter. Change the target content before replacement round 1:
+a protocol-only change cannot restart a superseded revision.
 
 ## Schema-grounding mandate
 

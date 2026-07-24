@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "magi-implementation-convergence/v1"
+    },
+    "scope_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "implementation_campaign_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "canonical_control_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "risk_class": {
+      "type": "string",
+      "enum": ["standard", "canonical-migration", "data-loss", "security", "irreversible"]
+    },
+    "repository_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_git_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "base_git_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "review_base_git_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "changed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+      }
+    },
+    "affected_invariants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "incremental_review": {
+      "type": "object",
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "changed_loc": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "surface_changes": {
+          "type": "object",
+          "properties": {
+            "public_interface": {"type": "boolean"},
+            "trust_boundary": {"type": "boolean"},
+            "persistence_schema_rollback": {"type": "boolean"},
+            "design_invariant": {"type": "boolean"}
+          },
+          "required": [
+            "public_interface",
+            "trust_boundary",
+            "persistence_schema_rollback",
+            "design_invariant"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["eligible", "changed_loc", "surface_changes"],
+      "additionalProperties": false
+    },
+    "review_packet": {
+      "type": "object",
+      "properties": {
+        "target_tree_sha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "diff_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "diff": {
+          "type": "string",
+          "maxLength": 900000
+        }
+      },
+      "required": ["target_tree_sha", "diff_sha256", "diff"],
+      "additionalProperties": false
+    },
+    "wall_clock_deadline": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "max_model_launches": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "historical_manifests": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_sha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": ["path", "artifact_sha"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "scope_id",
+    "risk_class",
+    "repository_root",
+    "target_git_sha",
+    "base_git_sha",
+    "changed_paths",
+    "affected_invariants",
+    "review_packet",
+    "wall_clock_deadline"
+  ],
+  "additionalProperties": false
+}

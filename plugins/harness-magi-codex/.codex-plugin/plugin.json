@@ -1,6 +1,6 @@
 {
   "name": "harness-magi-codex",
-  "version": "0.1.0+codex.20260718195300",
+  "version": "0.1.0+codex.20260724194224",
   "description": "Cross-family dual-Magi and ultramagi review workflows for Codex.",
   "author": {
     "name": "hrmtz",
@@ -13,7 +13,7 @@
   "interface": {
     "displayName": "Harness Magi Codex",
     "shortDescription": "Cross-family adversarial review gates.",
-    "longDescription": "Dual-Magi and ultramagi skills with three Codex reviewers, a mandatory Claude cross-family round, and a mechanical plateau gate.",
+    "longDescription": "Dual-Magi and ultramagi skills with three Codex reviewers, a mandatory cross-family round via Claude or explicit Grok fallback, and a mechanical plateau gate.",
     "developerName": "hrmtz",
     "category": "Productivity",
     "capabilities": [

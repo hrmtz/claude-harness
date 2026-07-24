@@ -4,7 +4,8 @@
 default; Grok is an explicit fallback for Claude quota/capacity failures. The mirror image of
 [`harness-magi`](../harness-magi/), which runs the same protocol the other way round.
 
-version: `0.1.0-codex` · design: [`docs/designs/CODEX_MAGI_MIRROR.md`](../../docs/designs/CODEX_MAGI_MIRROR.md)
+version: see [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) (authoritative) · design:
+[`docs/designs/CODEX_MAGI_MIRROR.md`](../../docs/designs/CODEX_MAGI_MIRROR.md)
 
 ## Why a mirror exists
 
@@ -31,6 +32,8 @@ same-family reviewers read the same text and found none of them.
 
 ```
 schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
+schemas/implementation-convergence.schema.json
+                              opt-in report-only implementation manifest
 scripts/
   magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
@@ -38,6 +41,10 @@ scripts/
   magi_xfamily_claude.sh      backward-compatible Claude wrapper
   magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
   magi_validate_findings.py   validates cross-field convergence rules after constrained output
+  magi_verify_round.py        write-free G1-G6/G9 verification
+  magi_git.py                 ambient-config-free Git object reads
+  magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
+  magi_convergence_gate.py    report-only implementation convergence evaluator
   magi_plateau_gate.sh        the ONLY thing that may write a plateau marker
   magi_lock.sh                flock(2) helper (recursion + concurrency guard)
   magi_scrub.py               redacts credential-shaped strings before anything hits disk
@@ -81,6 +88,79 @@ scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family grok
 Revise the doc with the findings and re-run. `--persona-set bug-hunt` swaps the personas to review
 an *implementation* instead of a design (ultramagi gate [4]).
 
+For implementation campaigns, create an untracked exact-SHA packet at one stable path, review
+that packet, then evaluate the already-charged history:
+
+```bash
+MANIFEST="$PWD/.magi-implementation-review.json"
+STATE="$PWD/.magi-implementation-review-state"
+
+python3 scripts/magi_review_packet.py \
+  --repo "$PWD" --base <base-commit> --scope <issue-or-task> \
+  --invariant <invariant-id> --deadline <RFC3339> \
+  --output "$MANIFEST"
+
+scripts/magi_fanout_codex.sh "$MANIFEST" 1 "$STATE" \
+  --persona-set bug-hunt --prior -
+python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST"
+
+# Required orchestrator step: synthesize the three round_1 persona JSON files into
+# "$STATE/round_1_codex.json" using the Synthesis provenance contract below.
+scripts/magi_xfamily.sh --reviewer claude "$MANIFEST" 2 \
+  "$STATE/round_1_codex.json" "$STATE/round_2_xfamily"
+FINAL_DECISION="$(python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST")"
+printf '%s\n' "$FINAL_DECISION"
+if printf '%s' "$FINAL_DECISION" | python3 -c \
+  'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if (d.get("decision"), d.get("reason_code")) == ("BLOCKED", "REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE") else 1)'
+then
+  scripts/magi_plateau_gate.sh "$MANIFEST" "$STATE/round_2_xfamily" \
+    --reviewer-family claude
+else
+  echo "not ready for plateau gate; follow the evaluator decision" >&2
+fi
+```
+
+The packet embeds the exact target tree and a `--binary --full-index` diff. Updating the stable
+packet path archives the prior bytes by SHA-256. Full review keeps the original base-to-target
+diff; an eligible `--allow-incremental` rebuild changes the packet diff base to the immediately
+preceding target SHA, so a fix review receives only the exact revision delta while historical
+review artifacts remain bound to their Git revisions.
+
+For a standard-risk fix, opt into the bounded incremental policy when rebuilding the packet:
+
+```bash
+python3 scripts/magi_review_packet.py \
+  --repo "$PWD" --base <original-base> --scope <issue-or-task> \
+  --invariant <invariant-id> --deadline <RFC3339> --allow-incremental \
+  --output "$PWD/.magi-implementation-review.json"
+
+scripts/magi_fanout_codex.sh path/to/implementation-review.json 1 state-dir \
+  --persona-set bug-hunt --review-mode incremental
+scripts/magi_xfamily.sh --reviewer claude path/to/implementation-review.json 2 \
+  state-dir/round_1_codex.json state-dir/round_2_xfamily
+```
+
+The evaluator selects exactly one bug-hunt persona deterministically from the affected invariants.
+The adapter mechanically wraps that one result in `round_1_codex.json` for the existing validated
+prior-envelope contract; this is not another model launch.
+The targeted claim costs 1 and still reserves 1 for the mandatory exact-SHA cross-family final
+review. Incremental mode is denied unless a prior reviewed revision exists, risk is `standard`,
+the exact fix is at most 8 paths and 200 changed lines, and no public-interface, trust-boundary,
+persistence/schema/rollback, or design-invariant change is declared. Use `--surface-change
+<kind>` (`public_interface`, `trust_boundary`, `persistence_schema_rollback`, or
+`design_invariant`) when rebuilding the packet to force full review (or REDESIGN for a design
+invariant).
+
+The evaluator is read-only and report-only. It returns only `CONTINUE`,
+`FINAL_REVIEW_REQUIRED`, `BLOCKED`, or `REDESIGN`; it never launches a reviewer, changes the
+ledger, writes a plateau marker, emits PASS, or authorizes shipping. Two complete logical cycles
+are the maximum: initial `fanout(3) -> xfamily(1)`, followed by either full fanout or an eligible
+`targeted(1) -> xfamily(1)` fix cycle. Existing exact-revision G1-G9 plateau and human judgment
+remain the PASS authority. After a clean cross-family cycle, `BLOCKED` with reason
+`REPORT_ONLY_READY_FOR_EXISTING_PLATEAU_GATE` is an evaluator-terminal handoff: run
+`magi_plateau_gate.sh` as shown above. It is not a hard campaign blocker and does not itself
+authorize shipping. Every other `BLOCKED` reason remains fail-closed.
+
 Every round after round 1 requires a schema-valid prior synthesis artifact from the same state
 directory, canonical document identity, and immediately preceding round. Every output carries
 `artifact_id` and `artifact_sha`. `dup_flag` is constrained to
@@ -94,8 +174,12 @@ subset from masquerading as the round synthesis.
 
 ## Campaign guard
 
-The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3 and
-cross-family costs 1, permitting four pairs without retries.
+The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3,
+incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted admission both
+preserve one weighted launch for the immediately following mandatory cross-family review. If that
+reserve cannot be preserved, the campaign is blocked before any provider starts; denial is never
+permission to ship. Cross-family admission charges only its real weight, so the reserve is not
+charged twice.
 Both reviewer adapters append to a canonical document-scoped campaign ledger before launching a
 model. Retries consume budget; a fresh state directory or repeated round 1 cannot reset it. Exit `4`
 means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive
@@ -117,6 +201,23 @@ Fan-out and cross-family calls have tightening-only deadlines via `MAGI_FANOUT_T
 Timeout and signal cleanup release the canonical lock, close the claim as failed, and preserve one
 bounded retry. Exit `4` is reserved for the global fuse; state corruption exits `2`, and illegal
 phase transitions exit `64`.
+
+If requirements change while an adapter owns a live claim, cancel that exact charged revision
+before modifying the document:
+
+```bash
+python3 scripts/magi_campaign_guard.py cancel-revision "$D" \
+  --expected-artifact-sha "$(sha256sum "$D" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+The guard records cancellation intent before signaling the verified adapter process tree, waits
+for bounded TERM/KILL cleanup, proves the canonical review lock is released, and then marks the
+claim `superseded-by-requirement-revision`. The launch remains charged and is never review
+evidence. Repeating the same command is idempotent. A replacement round 1 is admitted only after
+the document content SHA changes; changing only the review protocol does not restart a superseded
+revision. Do not unlink `.review.*.lock`, and do not treat a cleanup-blocked result as permission
+to launch or ship.
 
 `new-campaign` is not a production escape hatch. It is disabled unless deterministic fixtures set
 `MAGI_TEST_ALLOW_NEW_CAMPAIGN=1`; even there, the canonical global fuse remains unchanged.
@@ -170,7 +271,8 @@ and invents its findings passes. That is the largest residual risk, and it is un
 Adapter exit codes: `0` complete · `2` fail-closed (no usable result; no plateau) · `3` lock held
 (recursion or a concurrent review of the same doc) · `4` autonomous campaign budget exhausted
 (autonomous pivot or definitive blocked result required; not plateau) · `64` invalid invocation or
-ceiling arguments.
+ceiling arguments. Exit `2` also covers requirement-revision cleanup that cannot yet prove the
+verified owner tree and canonical lock are gone; retry the same cancellation, never launch around it.
 Fan-out exit `5` = a same-round sibling output already exists (re-running would contaminate).
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
@@ -183,6 +285,7 @@ only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 ```bash
 python3 tests/test_docs_match_scripts.py     # doc-vs-code contract (exit codes, G-asserts, env)
 python3 tests/test_campaign_guard.py          # global fuse, rollover, migration, prior/schema contracts
+python3 tests/test_convergence_gate.py        # exact-SHA packet + bounded implementation convergence
 python3 tests/test_autorun.py                 # no-ack Stop continuation, plateau, terminal block
 bash    tests/test_fanout_scrub.sh           # FIFO pre-write scrub + three-persona/sibling rail
 bash    tests/test_inv7_lock.sh              # flock: both sides, concurrency, SIGKILL, recursion

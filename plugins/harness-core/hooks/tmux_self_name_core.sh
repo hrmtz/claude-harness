@@ -56,9 +56,73 @@ EOF
     exit 0
 fi
 
+# Standalone sessions can also carry a stable mailbox identity. Prefer it over
+# a session sentinel so routing, display, and self-reference cannot diverge.
+PANE_FORMATION_ID=$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)
+CURRENT_WINDOW_NAME=$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)
+WINDOW_PANES=$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)
+
+has_foreign_chassis_ancestor() {
+    local pid="${PPID:-}" comm next
+    while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        case "$comm" in
+            codex|kimi|kimi-code|grok) return 0 ;;
+        esac
+        next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        [ "$next" = "$pid" ] && break
+        pid="$next"
+    done
+    return 1
+}
+
+routing_id_in_use() {
+    local ident="$1"
+    tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+        | awk -F '|' -v target="$TMUX_PANE" -v ident="$ident" \
+            '$1 != target && $2 == ident { found=1 } END { exit !found }'
+}
+
+# A Claude child launched inside another chassis inherits the parent's pane.
+# Permit sequential reuse once that foreign chassis is no longer an ancestor.
+case "$CURRENT_WINDOW_NAME" in
+    codex-*|kimi-*|grok-*)
+        [ "$WINDOW_PANES" = "1" ] || exit 0
+        has_foreign_chassis_ancestor && exit 0
+        ;;
+esac
+
+if [ -n "$PANE_FORMATION_ID" ]; then
+    if tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+        | awk -F '|' -v target="$TMUX_PANE" -v ident="$PANE_FORMATION_ID" \
+            '$1 != target && $2 == ident { found=1 } END { exit !found }'; then
+        exit 0
+    fi
+    NAME="${CHASSIS}-${PANE_FORMATION_ID}"
+    printf '%s\n' "$NAME" > "$SENTINEL" || exit 0
+    if [ "$WINDOW_PANES" = "1" ]; then
+        tmux rename-window -t "$TMUX_PANE" "$NAME" 2>/dev/null || true
+    fi
+    tmux select-pane -t "$TMUX_PANE" -T "$NAME" 2>/dev/null || true
+    cat <<EOF
+## Identity anchor (tmux pane $TMUX_PANE)
+
+あなたの identity は **${PANE_FORMATION_ID}** デス (= routing id / self-reference の source of truth、 ${CHASSIS} chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${PANE_FORMATION_ID}** を使う。
+EOF
+    exit 0
+fi
+
 if [ -f "$SENTINEL" ]; then
     EXISTING_NAME=$(head -n1 "$SENTINEL" 2>/dev/null)
     if [ -n "$EXISTING_NAME" ]; then
+        case "$EXISTING_NAME" in
+            "${CHASSIS}-"*)
+                EXISTING_ID="${EXISTING_NAME#${CHASSIS}-}"
+                routing_id_in_use "$EXISTING_ID" && exit 0
+                tmux set-option -p -t "$TMUX_PANE" @formation_id "$EXISTING_ID" >/dev/null 2>&1 || true
+                ;;
+            *) exit 0 ;;
+        esac
         cat <<EOF
 ## Identity anchor (tmux pane $TMUX_PANE)
 
@@ -90,7 +154,9 @@ POOL_NOUN=(
 rand_mod() { echo $(( $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % $1 )); }
 
 name_in_use() {
-    local cand="$1" f n
+    local cand="$1" bare f n
+    bare="${cand#${CHASSIS}-}"
+    routing_id_in_use "$bare" && return 0
     tmux list-windows -a -F '#{window_name}' 2>/dev/null | grep -qx "$cand" && return 0
     tmux list-panes   -a -F '#{pane_title}'  2>/dev/null | grep -qx "$cand" && return 0
     for f in "$SENTINEL_DIR"/*; do
@@ -119,6 +185,7 @@ fi
 echo "$NAME" > "$SENTINEL"
 
 CODENAME="${NAME#${CHASSIS}-}"
+tmux set-option -p -t "$TMUX_PANE" @formation_id "$CODENAME" >/dev/null 2>&1 || true
 cat <<EOF
 ## Identity assignment (tmux self-naming)
 

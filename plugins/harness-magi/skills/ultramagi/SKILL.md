@@ -104,9 +104,11 @@ degraded_until: <what must run before ship>
                repo-baked, idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   dual-magi / adversarial review of the IMPLEMENTATION (not the design): a
-               Workflow of parallel reviewers that RUN read-only verification against real data
-               and try to break it. Fix findings; re-run until clean. This is the gate before
-               an irreversible run (swap, deploy, bulk DML, publish).
+               Workflow of parallel reviewers that RUN read-only verification against real data.
+               After each phase, run the report-only implementation convergence evaluator.
+               Follow only CONTINUE or FINAL_REVIEW_REQUIRED; BLOCKED/REDESIGN are terminal.
+               Never re-run until clean or exceed two full cycles. The evaluator cannot emit PASS;
+               existing exact-revision plateau + human judgment remain ship authority.
 [5] CODE-REVIEW /code-review (or /simplify for quality-only) on the final diff. Prefer
                Claude for design-intent/adversarial review, then Codex for final fixes/tests.
                Commit only when requested or policy allows.
@@ -133,6 +135,11 @@ severity gate above is the *criterion*.
 
 If a round surfaces NEW criticals that break the invariant, it is **not** plateau — revise
 (minimally, see churn rule) and re-review.
+
+For guarded campaigns, fan-out admission preserves one weighted launch for its immediately
+following mandatory cross-family review. Reserve denial is a definitive blocked state, never
+permission to ship; the cross-family claim still passes the normal transition and budget guards
+and is not double-charged.
 
 ## Convergence economics (v0.2.0 — token budget + altitude rails)
 
@@ -217,7 +224,8 @@ Drive it from the main loop, or from inside a Workflow:
 - **Build** → write the repo-baked, backup-first, gated scripts.
 - **Implementation gate (bug-hunt)** → a Workflow with `parallel()` of 3–5 adversarial reviewer
   agents (**each spawned with `opts.model: "opus"`** — 上記) that RUN read-only verification and
-  return structured findings (`schema`-typed); fix + re-run until clean. (dedup-script-review pattern.)
+  return structured findings (`schema`-typed); the report-only convergence evaluator selects
+  CONTINUE / FINAL_REVIEW_REQUIRED / BLOCKED / REDESIGN and caps full cycles at two.
 - **code-review** → the `/code-review` skill (or `/simplify` for quality-only).
 
 When the user runs a **Workflow** for multi-agent execution, ultramagi is the contract that each

@@ -136,8 +136,9 @@ doc is honest about its limits, ship it.
 
 Plateau safety and autonomous-loop safety are separate. Before launching any reviewer, both
 adapters claim from a canonical document-scoped ledger through `scripts/magi_campaign_guard.py`.
-The default autonomous ceiling is 16 weighted model launches: fan-out costs 3 and cross-family
-costs 1, permitting four pairs without retries. Retries consume
+The default autonomous ceiling is 16 weighted model launches: fan-out costs 3, implementation-only
+incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted review both
+reserve the following cross-family unit. Retries consume
 budget; repeating round 1 or changing state directory cannot reset it. Above it, scripts exit `4` with
 `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU` before a model starts.
 
@@ -147,6 +148,21 @@ replacement autonomously, then invoke round 1 again. If the document or review-p
 changed, the guard automatically rolls over without user acknowledgement. Every revision campaign
 shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
 result; never pause for an acknowledgement and never reset history through a fresh state directory.
+
+If requirements change while a claim is live, do not start another adapter, edit the document, or
+abandon the ledger entry implicitly. First run:
+
+```bash
+python3 scripts/magi_campaign_guard.py cancel-revision "$DOC" \
+  --expected-artifact-sha "$(sha256sum "$DOC" | cut -d' ' -f1)" \
+  --reason "requirements changed: <brief reason>"
+```
+
+Cancellation is exact-artifact and fail-closed: the charged launch becomes
+`superseded-by-requirement-revision` only after the verified adapter process tree is gone and the
+canonical review lock is available. A cleanup-blocked result is terminal until the same command
+can finish cleanup. Change the document content before invoking replacement round 1; a protocol
+change alone cannot restart a superseded revision.
 
 For every finding, `dup_flag` is schema-bounded to `new`, `duplicate`, `regression`,
 `readiness-gap`, or `scope-expansion`. After round 2, freeze committed scope. Missing evidence

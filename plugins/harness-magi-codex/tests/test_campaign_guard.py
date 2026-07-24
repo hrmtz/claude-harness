@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -124,6 +125,107 @@ class CampaignGuardTest(unittest.TestCase):
             result = self.claim(round_no, phase)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def seed_ledger(self, launches: list[dict[str, object]]) -> Path:
+        control = self.doc.parent / ".dual-magi"
+        control.mkdir(exist_ok=True)
+        artifact_id = hashlib.sha256(str(self.doc.resolve()).encode()).hexdigest()[:16]
+        path = control / f"CAMPAIGN.{artifact_id}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "doc_id": artifact_id,
+                    "doc_path": str(self.doc.resolve()),
+                    "campaigns": [
+                        {
+                            "campaign_id": "seed",
+                            "started_at": "2026-01-01T00:00:00Z",
+                            "started_by": "test",
+                            "reason": "boundary fixture",
+                            "launches": launches,
+                        }
+                    ],
+                }
+            )
+        )
+        return path
+
+    def start_owned_claim(
+        self, *, ignore_term: bool = False
+    ) -> tuple[subprocess.Popen[str], str]:
+        code = textwrap.dedent(
+            """
+            import fcntl, hashlib, os, signal, subprocess, sys, time
+
+            guard, doc, state, ignore = sys.argv[1:5]
+            doc_id = hashlib.sha256(os.path.realpath(doc).encode()).hexdigest()[:16]
+            control = os.path.join(os.path.dirname(os.path.realpath(doc)), ".dual-magi")
+            os.makedirs(control, exist_ok=True)
+            lock_fd = os.open(os.path.join(control, f".review.{doc_id}.lock"),
+                              os.O_WRONLY | os.O_CREAT, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if ignore == "1":
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            child_code = (
+                "import signal,time,sys;"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN) if sys.argv[1]=='1' else None;"
+                "time.sleep(60)"
+            )
+            subprocess.Popen([sys.executable, "-c", child_code, ignore], close_fds=True)
+            result = subprocess.run(
+                [sys.executable, guard, "claim", doc, "1", "fanout", state,
+                 "--owner-pid", str(os.getpid()), "--adapter-kind", "fanout"],
+                text=True, capture_output=True, check=False,
+            )
+            print(result.stdout.strip() or result.stderr.strip(), flush=True)
+            if result.returncode:
+                raise SystemExit(result.returncode)
+            while True:
+                time.sleep(1)
+            """
+        )
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                code,
+                str(GUARD),
+                str(self.doc),
+                str(self.state),
+                "1" if ignore_term else "0",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        claim_line = process.stdout.readline().strip()
+        self.assertIn("CLAIM_ID=", claim_line)
+        return process, claim_line.rsplit("CLAIM_ID=", 1)[-1]
+
+    def cancel(
+        self, sha: str, *, term: int = 1, kill: int = 1
+    ) -> subprocess.CompletedProcess[str]:
+        return self.guard(
+            "cancel-revision",
+            str(self.doc),
+            "--expected-artifact-sha",
+            sha,
+            "--reason",
+            "requirements changed",
+            "--term-timeout-s",
+            str(term),
+            "--kill-timeout-s",
+            str(kill),
+        )
+
+    def wait_owned(self, process: subprocess.Popen[str]) -> None:
+        process.wait(timeout=5)
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+
     def test_global_fuse_has_no_extension_path(self) -> None:
         self.fill_default_campaign()
         denied = self.claim(9, "fanout")
@@ -131,6 +233,136 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertIn("NOT PLATEAU", denied.stderr)
         self.assertIn("MAGI_BUDGET_EXHAUSTED", denied.stderr)
         self.assertFalse(any((self.doc.parent / ".dual-magi").glob("PLATEAU*")))
+
+    def test_owner_registration_is_verified_and_optional(self) -> None:
+        claimed = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            "--owner-pid",
+            str(os.getpid()),
+            "--adapter-kind",
+            "fanout",
+        )
+        self.assertEqual(claimed.returncode, 0, claimed.stderr)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        launch = json.loads(ledger_path.read_text())["campaigns"][0]["launches"][0]
+        self.assertEqual(launch["owner"]["pid"], os.getpid())
+        self.assertEqual(launch["owner"]["adapter_kind"], "fanout")
+        self.assertGreater(launch["owner"]["start_ticks"], 0)
+        claim_id = claimed.stdout.rsplit("CLAIM_ID=", 1)[-1].strip()
+        self.assertEqual(
+            self.guard("finish", str(self.doc), claim_id, "failed").returncode, 0
+        )
+
+        other = self.root / "ownerless.md"
+        other.write_text("# ownerless\n")
+        ownerless = self.guard(
+            "claim", str(other), "1", "fanout", str(self.root / "ownerless-state")
+        )
+        self.assertEqual(ownerless.returncode, 0, ownerless.stderr)
+        other_ledger = json.loads(
+            next((other.parent / ".dual-magi").glob(
+                f"CAMPAIGN.{hashlib.sha256(str(other.resolve()).encode()).hexdigest()[:16]}.json"
+            )).read_text()
+        )
+        self.assertNotIn("owner", other_ledger["campaigns"][0]["launches"][0])
+
+    def test_second_claim_does_not_abandon_running_owner(self) -> None:
+        first = self.claim(1, "fanout", finish=None)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        before = ledger_path.read_bytes()
+        denied = self.guard("claim", str(self.doc), "1", "fanout", str(self.state))
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("still running", denied.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_wrong_cancel_sha_does_not_mutate_or_signal(self) -> None:
+        process, _ = self.start_owned_claim()
+        try:
+            ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+            before = ledger_path.read_bytes()
+            denied = self.cancel("0" * 64)
+            self.assertEqual(denied.returncode, 64)
+            self.assertIsNone(process.poll())
+            self.assertEqual(ledger_path.read_bytes(), before)
+        finally:
+            result = self.cancel(hashlib.sha256(self.doc.read_bytes()).hexdigest())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.wait_owned(process)
+
+    def test_ownerless_running_claim_cancellation_fails_closed(self) -> None:
+        claimed = self.claim(1, "fanout", finish=None)
+        self.assertEqual(claimed.returncode, 0, claimed.stderr)
+        blocked = self.cancel(hashlib.sha256(self.doc.read_bytes()).hexdigest())
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn("REQUIREMENT_REVISION_CLEANUP_BLOCKED", blocked.stderr)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        launch = json.loads(ledger_path.read_text())["campaigns"][0]["launches"][0]
+        self.assertEqual(launch["status"], "cancellation_in_progress")
+        self.assertEqual(launch["cancellation"]["cleanup"], "blocked")
+
+    def test_requirement_revision_cancellation_term_cleanup_and_late_finish(self) -> None:
+        process, claim_id = self.start_owned_claim()
+        sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        marker = self.doc.parent / ".dual-magi" / (
+            f"PLATEAU.{hashlib.sha256(str(self.doc.resolve()).encode()).hexdigest()[:16]}."
+            f"{sha[:16]}"
+        )
+        marker.write_text("{}\n")
+
+        cancelled = self.cancel(sha)
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.wait_owned(process)
+        self.assertFalse(marker.exists())
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        launch = json.loads(ledger_path.read_text())["campaigns"][0]["launches"][0]
+        self.assertEqual(launch["status"], "superseded-by-requirement-revision")
+        self.assertEqual(launch["cancellation"]["cleanup"], "complete")
+
+        late_failed = self.guard("finish", str(self.doc), claim_id, "failed")
+        self.assertEqual(late_failed.returncode, 0, late_failed.stderr)
+        late_success = self.guard("finish", str(self.doc), claim_id, "success")
+        self.assertEqual(late_success.returncode, 64)
+        repeated = self.cancel(sha)
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+
+    def test_term_ignoring_tree_is_killed_and_charge_survives_rollover(self) -> None:
+        process, _ = self.start_owned_claim(ignore_term=True)
+        old_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        cancelled = self.cancel(old_sha)
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.wait_owned(process)
+
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        ledger = json.loads(ledger_path.read_text())
+        ledger["campaigns"][0]["launches"][0]["protocol_sha"] = "old-protocol"
+        ledger_path.write_text(json.dumps(ledger))
+        same_sha = self.guard("claim", str(self.doc), "1", "fanout", str(self.state))
+        self.assertEqual(same_sha.returncode, 64)
+        self.assertIn("changed artifact", same_sha.stderr)
+
+        self.doc.write_text("# revised requirement\n")
+        rollover = self.claim(1, "fanout")
+        self.assertEqual(rollover.returncode, 0, rollover.stderr)
+        self.assertIn("global model launches 6/16", rollover.stdout)
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 2)
+        self.assertEqual(
+            ledger["campaigns"][0]["launches"][0]["status"],
+            "superseded-by-requirement-revision",
+        )
+        self.assertEqual(
+            sum(
+                launch["model_launches"]
+                for campaign in ledger["campaigns"]
+                for launch in campaign["launches"]
+            ),
+            6,
+        )
 
     def test_fresh_state_directory_does_not_reset_campaign(self) -> None:
         self.assertEqual(self.claim(1, "fanout", finish="failed").returncode, 0)
@@ -180,6 +412,60 @@ class CampaignGuardTest(unittest.TestCase):
             env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "17"},
         )
         self.assertEqual(invalid.returncode, 64)
+
+    def test_failed_fanout_retry_preserves_xfamily_reserve(self) -> None:
+        first = self.claim(
+            1,
+            "fanout",
+            finish="failed",
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "4"},
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        denied = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "4"},
+        )
+        self.assertEqual(denied.returncode, 4)
+        self.assertIn("reserved for mandatory xfamily", denied.stderr)
+
+    def test_illegal_transition_precedes_exhausted_budget(self) -> None:
+        self.fill_default_campaign()
+        denied = self.guard("claim", str(self.doc), "9", "xfamily", str(self.state))
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("MAGI_TRANSITION_ERROR", denied.stderr)
+
+    def test_denied_explicit_rollover_is_not_persisted(self) -> None:
+        history = (
+            (1, "fanout", "success"),
+            (2, "xfamily", "failed"),
+            (2, "xfamily", "success"),
+            (3, "fanout", "success"),
+            (4, "xfamily", "success"),
+            (5, "fanout", "success"),
+            (6, "xfamily", "failed"),
+        )
+        launches = [
+            {
+                "round": round_no,
+                "phase": phase,
+                "model_launches": 3 if phase == "fanout" else 1,
+                "status": status,
+                "artifact_sha": "old-revision",
+                "protocol_sha": "old-protocol",
+                "state_dir": str(self.state),
+            }
+            for round_no, phase, status in history
+        ]
+        ledger_path = self.seed_ledger(launches)
+        denied = self.guard("claim", str(self.doc), "1", "fanout", str(self.state))
+        self.assertEqual(denied.returncode, 4, denied.stderr)
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 1)
+        self.assertEqual(len(ledger["campaigns"][0]["launches"]), len(history))
 
     def test_stray_authorization_file_cannot_extend_fuse(self) -> None:
         self.fill_default_campaign()
@@ -346,6 +632,81 @@ class CampaignGuardTest(unittest.TestCase):
         )
         self.assertEqual(fanout.returncode, 4)
         self.assertIn("NOT PLATEAU", fanout.stderr)
+
+    def test_changed_artifact_can_roll_into_weight_one_targeted_pair(self) -> None:
+        self.assertEqual(self.claim(1, "fanout").returncode, 0)
+        self.assertEqual(self.claim(2, "xfamily").returncode, 0)
+        self.doc.write_text("# fixture\n\nsmall fix\n")
+
+        targeted = self.claim(1, "targeted")
+        self.assertEqual(targeted.returncode, 0, targeted.stderr)
+        final = self.claim(2, "xfamily")
+        self.assertEqual(final.returncode, 0, final.stderr)
+
+        ledger = json.loads(next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json")).read_text())
+        launches = ledger["campaigns"][-1]["launches"]
+        self.assertEqual([launch["phase"] for launch in launches], ["targeted", "xfamily"])
+        self.assertEqual([launch["model_launches"] for launch in launches], [1, 1])
+        self.assertEqual(
+            sum(
+                launch["model_launches"]
+                for campaign in ledger["campaigns"]
+                for launch in campaign["launches"]
+            ),
+            6,
+        )
+        status = self.guard(
+            "claim-status",
+            str(self.doc),
+            launches[-1]["claim_id"],
+        )
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "success")
+
+    def test_protocol_only_rollover_cannot_use_targeted_weight(self) -> None:
+        self.assertEqual(self.claim(1, "fanout").returncode, 0)
+        self.assertEqual(self.claim(2, "xfamily").returncode, 0)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        ledger = json.loads(ledger_path.read_text())
+        ledger["campaigns"][-1]["launches"][-1]["protocol_sha"] = "stale-protocol"
+        ledger_path.write_text(json.dumps(ledger))
+
+        targeted = self.claim(1, "targeted", finish=None)
+        self.assertEqual(targeted.returncode, 64)
+        fanout = self.claim(1, "fanout")
+        self.assertEqual(fanout.returncode, 0, fanout.stderr)
+
+    def test_targeted_cannot_bootstrap_or_replace_requirement_revision(self) -> None:
+        initial = self.claim(1, "targeted", finish=None)
+        self.assertEqual(initial.returncode, 64)
+        self.assertIn("must start at round 1 fanout", initial.stderr)
+
+        owner, _ = self.start_owned_claim()
+        old_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        cancelled = self.cancel(old_sha)
+        self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+        self.wait_owned(owner)
+        self.doc.write_text("# revised requirements\n")
+
+        targeted = self.claim(1, "targeted", finish=None)
+        self.assertEqual(targeted.returncode, 64)
+        fanout = self.claim(1, "fanout")
+        self.assertEqual(fanout.returncode, 0, fanout.stderr)
+
+    def test_claim_rejects_stale_incremental_authorization_sha(self) -> None:
+        expected = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        self.doc.write_text("# changed after decision\n")
+        result = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            "--expected-artifact-sha",
+            expected,
+        )
+        self.assertEqual(result.returncode, 64)
+        self.assertIn("artifact changed after its authorization", result.stderr)
 
 
 class FindingSchemaTest(unittest.TestCase):

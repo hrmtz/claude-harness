@@ -41,6 +41,34 @@ CURRENT_PANE_TITLE=$(tmux display-message -p -t "$PANE" '#{pane_title}' 2>/dev/n
 TARGET_WINDOW_ID=$(tmux display-message -p -t "$PANE" '#{window_id}' 2>/dev/null || true)
 WINDOW_PANES=$(tmux display-message -p -t "$PANE" '#{window_panes}' 2>/dev/null || true)
 
+has_foreign_chassis_ancestor() {
+    local pid="${PPID:-}" comm next
+    while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        case "$comm" in
+            claude|kimi|kimi-code|grok) return 0 ;;
+        esac
+        next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        [ "$next" = "$pid" ] && break
+        pid="$next"
+    done
+    return 1
+}
+
+# A Codex child launched inside another chassis inherits the parent's TMUX_PANE
+# and may also inherit FORMATION_SELF. Ownership is independent of the current
+# window label, so check ancestry before every rename path (#104). A sequential
+# CLI launch after the previous chassis exits has no foreign ancestor (#95).
+has_foreign_chassis_ancestor && exit 0
+
+# Shared windows have one window name for multiple panes. Preserve an existing
+# foreign chassis label even when no foreign process remains in our ancestry.
+case "$CURRENT_WINDOW_NAME" in
+    claude-*|kimi-*|grok-*)
+        [ "$WINDOW_PANES" = "1" ] || exit 0
+        ;;
+esac
+
 # Formation owns the worker identity. Do not let a session sentinel or random
 # codename replace it on start, compact, or resume.
 if [ -n "${FORMATION_SELF:-}" ]; then
@@ -61,17 +89,6 @@ if [ -n "${FORMATION_SELF:-}" ]; then
     exit 0
 fi
 
-# In an ordinary interactive pane a different chassis name is stale: users
-# legitimately run Kimi/Claude and then Codex in the same shell. The hook is
-# executing inside that exact TMUX_PANE, so Codex may replace the stale title
-# only when it owns the whole single-pane window. A split window's name belongs
-# to every pane and may still be an active sibling's identity (#95).
-case "$CURRENT_WINDOW_NAME" in
-    claude-*|kimi-*|grok-*)
-        [ "$WINDOW_PANES" = "1" ] || exit 0
-        ;;
-esac
-
 if [ -z "$SESSION_ID" ]; then
     SESSION_ID="${PANE//[^a-zA-Z0-9]/_}"
 fi
@@ -84,6 +101,33 @@ CLAIM_DIR="$SENTINEL_DIR/.claims"
 mkdir -p "$CLAIM_DIR"
 # A process killed between mkdir and sentinel write can leave an empty claim.
 find "$CLAIM_DIR" -mindepth 1 -maxdepth 1 -type d -mmin +5 -delete 2>/dev/null || true
+
+# Standalone panes may already have a stable mailbox identity assigned by a
+# launcher or an earlier session. That routing id is authoritative: repair the
+# display/sentinel to match it instead of generating a second codename.
+if [ -n "$PANE_FORMATION_ID" ]; then
+    if tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+        | awk -F '|' -v target="$PANE" -v ident="$PANE_FORMATION_ID" \
+            '$1 != target && $2 == ident { found=1 } END { exit !found }'; then
+        exit 0
+    fi
+    NAME="codex-$PANE_FORMATION_ID"
+    printf '%s\n' "$NAME" > "$SENTINEL" || exit 0
+    if [ "$WINDOW_PANES" = "1" ]; then
+        tmux rename-window -t "$PANE" "$NAME" 2>/dev/null || true
+    fi
+    tmux select-pane -t "$PANE" -T "$NAME" 2>/dev/null || true
+    CTX="## Identity anchor (tmux pane $PANE)
+
+あなたの identity は **${PANE_FORMATION_ID}** デス (= routing id / self-reference の source of truth、 codex chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${PANE_FORMATION_ID}** を使う。"
+    jq -n --arg ctx "$CTX" '{
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: $ctx
+      }
+    }'
+    exit 0
+fi
 
 # Codename pool mirrors kimi-wrapper.sh generate_formation_id.
 generate_codename() {
@@ -101,7 +145,12 @@ generate_codename() {
 }
 
 name_in_use() {
-    local cand="$1" f n
+    local cand="$1" bare f n
+    bare="${cand#codex-}"
+    tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+        | awk -F '|' -v target="$PANE" -v ident="$bare" \
+            '$1 != target && $2 == ident { found=1 } END { exit !found }' \
+        && return 0
     tmux list-windows -a -F '#{window_id}|#{window_name}' 2>/dev/null \
         | awk -F '|' -v target="$TARGET_WINDOW_ID" -v cand="$cand" \
             '$1 != target && $2 == cand { found=1 } END { exit !found }' \

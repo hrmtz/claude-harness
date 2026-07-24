@@ -49,7 +49,15 @@
             "type": "string",
             "enum": ["new", "duplicate", "regression", "readiness-gap", "scope-expansion"]
           },
-          "missed_angle": {"type": "string"}
+          "missed_angle": {"type": "string"},
+          "subsystem": {"type": "string", "minLength": 1},
+          "root_cause_id": {"type": "string", "minLength": 1},
+          "affected_invariant": {"type": "string", "minLength": 1},
+          "changes_design_invariant": {"type": "boolean"},
+          "relation_to_prior": {
+            "type": "string",
+            "enum": ["new-root", "same-root", "fix-induced-regression", "none"]
+          }
         },
         "required": ["finding_id", "severity", "title", "location", "rationale", "required_fix", "confidence", "dup_flag", "missed_angle"],
         "additionalProperties": false
