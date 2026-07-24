@@ -14,6 +14,7 @@ From a clone of this repository:
 ```bash
 codex plugin marketplace add /absolute/path/to/claude-harness
 codex plugin add harness-core@claude-harness
+bash /absolute/path/to/claude-harness/plugins/harness-core/bin/install-cache-safe-entrypoints --replace
 codex plugin add harness-rails@claude-harness
 codex plugin add harness-formation@claude-harness
 codex plugin add harness-magi-codex@claude-harness
@@ -22,6 +23,12 @@ codex plugin add harness-magi-codex@claude-harness
 Codex discovers `hooks/hooks.json` and `skills/*/SKILL.md` from each enabled
 plugin. Hook commands receive `PLUGIN_ROOT` plus the compatibility
 `CLAUDE_PLUGIN_ROOT`, so the same hook files work in both CLIs.
+
+The cache-safe entrypoint installer takes a persistent Sanada backup before
+replacing a conflicting user-level command. The core plugin also runs a
+non-replacing bootstrap as its first Codex `SessionStart` hook, but the explicit
+install step above ensures the dispatcher and direct-launch guard exist before
+the first plugin-backed session starts.
 
 Formation's CLI still needs a PATH entry:
 

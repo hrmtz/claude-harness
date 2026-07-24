@@ -306,6 +306,23 @@ resolve_cross_cli_guard() {
   printf '%s' "$candidate"
 }
 
+codex_cache_preflight() {
+  local safe_launcher="${CODEX_CACHE_SAFE_BIN:-}"
+  if [[ -z "$safe_launcher" ]]; then
+    safe_launcher="$(command -v codex-cache-safe 2>/dev/null || true)"
+  fi
+  if [[ -z "$safe_launcher" &&
+        -x "$SCRIPT_DIR/../../harness-core/bin/codex-cache-safe" ]]; then
+    safe_launcher="$SCRIPT_DIR/../../harness-core/bin/codex-cache-safe"
+  fi
+  [[ -x "$safe_launcher" ]] || {
+    echo "formation: codex-cache-safe is required before spawning Codex workers." >&2
+    return 1
+  }
+  CODEX_CACHE_SAFE_CHECK_ONLY=1 "$safe_launcher" || return
+  CODEX_LAUNCH_BIN="$safe_launcher"
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
@@ -331,6 +348,13 @@ cmd_spawn() {
   done
   [[ "$cli" == "claude" || "$cli" == "codex" || "$cli" == "kimi" ]] || { echo "unknown --cli: $cli (claude|codex|kimi)" >&2; exit 2; }
   [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+
+  # Delegate to the same cache guard used by direct launches. This happens
+  # before pane/registry mutation and avoids a second, recursively acquired
+  # generation lock inside Formation.
+  if [[ "$cli" == "codex" ]]; then
+    codex_cache_preflight
+  fi
 
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
@@ -431,7 +455,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning codex worker '$name' with workspace-write, approvals disabled, and scoped mailbox write access at $FORMATION_HOME. Use --bypass-sandbox only inside an external sandbox." >&2
     fi
-    tmux send-keys -t "$pane_id" "$guard_command codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
     # Kimi: launch the interactive TUI, then inject the seed. Kimi has no

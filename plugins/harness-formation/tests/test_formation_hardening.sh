@@ -71,6 +71,22 @@ if [[ "$CODEX_DEFAULT_FLAGS" != *"dangerously-bypass"* ]]; then ok "codex defaul
 CODEX_BYPASS_FLAGS="$(codex_launch_flags 1)"
 if [[ "$CODEX_BYPASS_FLAGS" == "--dangerously-bypass-approvals-and-sandbox" ]]; then ok "codex explicit bypass remains available"; else bad "codex explicit bypass changed [$CODEX_BYPASS_FLAGS]"; fi
 
+echo "== codex cache-safe delegation (#110) =="
+CACHE_SAFE_FIXTURE="$TMPDIR_T/codex-cache-safe"
+printf '%s\n' '#!/bin/bash' '[[ "${CODEX_CACHE_SAFE_CHECK_ONLY:-0}" == "1" ]]' >"$CACHE_SAFE_FIXTURE"
+chmod +x "$CACHE_SAFE_FIXTURE"
+if CODEX_CACHE_SAFE_BIN="$CACHE_SAFE_FIXTURE" codex_cache_preflight &&
+   [[ "$CODEX_LAUNCH_BIN" == "$CACHE_SAFE_FIXTURE" ]]; then
+  ok "Formation delegates preflight to cache-safe launcher"
+else
+  bad "Formation cache-safe delegation failed"
+fi
+if CODEX_CACHE_SAFE_BIN="$TMPDIR_T/missing-cache-safe" codex_cache_preflight 2>/dev/null; then
+  bad "missing cache-safe launcher did not fail closed"
+else
+  ok "missing cache-safe launcher fails closed"
+fi
+
 echo "== codex remote-control capability (#73) =="
 codex() {
   case "$1" in

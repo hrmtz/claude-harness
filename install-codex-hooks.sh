@@ -27,6 +27,27 @@ if ! command -v codex >/dev/null 2>&1; then
     echo "error: codex CLI not found. Install it first." >&2
     exit 1
 fi
+ORIGINAL_CODEX="$(command -v codex)"
+ORIGINAL_CODEX_REAL="$(readlink -f "$ORIGINAL_CODEX")"
+STANDALONE_CURRENT="$HOME/.codex/packages/standalone/current/bin/codex"
+SAFE_LAUNCHER="$HARNESS_DIR/plugins/harness-core/bin/codex-cache-safe"
+STABLE_DISPATCHER="$HARNESS_DIR/plugins/harness-core/bin/harness-hook"
+if [[ "$ORIGINAL_CODEX_REAL" == "$(readlink -f "$SAFE_LAUNCHER")" ||
+      "$(basename "$ORIGINAL_CODEX_REAL")" == "codex-cache-safe" ]]; then
+    if [[ -x "$HOME/.local/libexec/claude-harness-codex-real" ]]; then
+        ORIGINAL_CODEX_REAL="$HOME/.local/libexec/claude-harness-codex-real"
+    else
+        ORIGINAL_CODEX_REAL="$STANDALONE_CURRENT"
+    fi
+elif [[ -x "$STANDALONE_CURRENT" &&
+        "$ORIGINAL_CODEX_REAL" == "$(readlink -f "$STANDALONE_CURRENT")" ]]; then
+    # Keep the stable `current` indirection so a later Codex update is picked up.
+    ORIGINAL_CODEX_REAL="$STANDALONE_CURRENT"
+fi
+if [[ ! -x "$ORIGINAL_CODEX_REAL" ]]; then
+    echo "error: real Codex binary not executable: $ORIGINAL_CODEX_REAL" >&2
+    exit 1
+fi
 if ! command -v jq >/dev/null 2>&1; then
     echo "error: jq not found." >&2
     exit 1
@@ -38,6 +59,40 @@ touch "$CODEX_CONFIG"
 BK="$HOME/sanada_backup_persistent/codex_hooks_install_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BK"
 cp "$CODEX_CONFIG" "$BK/config.toml"
+
+# Seed the cache-safe launcher's inventory before publishing it as `codex`.
+# Legacy-only installations legitimately produce an empty local-plugin array.
+CODEX_STATE_HOME="${CODEX_HOME:-$HOME/.codex}"
+INVENTORY_SNAPSHOT="$CODEX_STATE_HOME/plugins/harness-local-inventory.json"
+mkdir -p "$(dirname "$INVENTORY_SNAPSHOT")"
+INVENTORY_STAGE="$(mktemp "$(dirname "$INVENTORY_SNAPSHOT")/.harness-inventory.XXXXXX")"
+if ! "$ORIGINAL_CODEX_REAL" plugin list --json 2>/dev/null | jq -e '
+    [
+      .installed[]
+      | select(
+          .installed == true and
+          .enabled == true and
+          (.marketplaceSource.sourceType // "unknown") == "local" and
+          .marketplaceName != "openai-curated" and
+          .marketplaceName != "openai-curated-remote"
+        )
+      | {
+          plugin_id: .pluginId,
+          marketplace: .marketplaceName,
+          plugin_name: .name,
+          source_path: .source.path
+        }
+    ]
+    | if all(.[]; all(.[]; type == "string"))
+      then .
+      else error("invalid inventory snapshot row")
+      end
+' >"$INVENTORY_STAGE"; then
+    rm -f "$INVENTORY_STAGE"
+    echo "error: unable to seed cache-safe plugin inventory." >&2
+    exit 1
+fi
+mv -f "$INVENTORY_STAGE" "$INVENTORY_SNAPSHOT"
 
 # Publish the shared cross-CLI guard on PATH. Preserve a replaced entrypoint in
 # the same persistent backup used for the Codex config.
@@ -53,6 +108,40 @@ fi
 if [[ ! -e "$CROSS_CLI_DST" && ! -L "$CROSS_CLI_DST" ]]; then
     ln -s "$CROSS_CLI_SRC" "$CROSS_CLI_DST"
 fi
+
+# ---- stable hook/launcher publication (#110) --------------------------------
+# Native plugin hooks must not depend on a versioned cache directory that a
+# concurrent Codex startup can delete. Publish stable user-level entrypoints,
+# preserving any replaced path in the same Sanada backup.
+install_stable_link() {
+    local target="$1" link="$2" backup_name="$3"
+    mkdir -p "$(dirname "$link")"
+    if [[ -e "$link" || -L "$link" ]]; then
+        if [[ "$(readlink -f "$link" 2>/dev/null || true)" == "$(readlink -f "$target")" ]]; then
+            return 0
+        fi
+        mv "$link" "$BK/$backup_name"
+    fi
+    ln -s "$target" "$link"
+}
+
+REAL_CODEX_LINK="$HOME/.local/libexec/claude-harness-codex-real"
+if [[ "$ORIGINAL_CODEX" == "$HOME/.local/bin/codex" &&
+      ! -L "$ORIGINAL_CODEX" &&
+      ! -e "$REAL_CODEX_LINK" ]]; then
+    mkdir -p "$(dirname "$REAL_CODEX_LINK")"
+    cp -a "$ORIGINAL_CODEX" "$BK/codex.previous"
+    mv "$ORIGINAL_CODEX" "$REAL_CODEX_LINK"
+    ORIGINAL_CODEX_REAL="$REAL_CODEX_LINK"
+fi
+install_stable_link "$ORIGINAL_CODEX_REAL" \
+    "$REAL_CODEX_LINK" codex-real.previous
+install_stable_link "$STABLE_DISPATCHER" \
+    "$HOME/.local/bin/harness-hook" harness-hook.previous
+install_stable_link "$SAFE_LAUNCHER" \
+    "$HOME/.local/bin/codex-cache-safe" codex-cache-safe.previous
+install_stable_link "$SAFE_LAUNCHER" \
+    "$HOME/.local/bin/codex" codex.previous
 
 # ---- verify canonical hooks feature ----------------------------------------
 FEATURE_LIST="$(codex features list 2>/dev/null)" || {
@@ -89,7 +178,7 @@ trap 'rm -f "$BLOCK_TMP" "$NEWCONF_TMP"' EXIT
 
 # (1) generate the fresh hooks block — must succeed before we touch config.toml
 python3 - "$OVERLAY" "$HARNESS_DIR" > "$BLOCK_TMP" <<'PYEOF'
-import json, sys, collections
+import collections, json, re, sys
 
 overlay_path, harness_dir = sys.argv[1], sys.argv[2]
 plugins_dir = f"{harness_dir}/plugins"
@@ -106,7 +195,11 @@ for plugin in sorted({spec["path"].split("/")[0] for spec in specs}):
         for blk in blocks:
             matcher = blk.get("matcher")
             for h in blk.get("hooks", []):
-                name = h["command"].split("/hooks/")[-1]
+                tail = h["command"].rsplit(";", 1)[-1]
+                match = re.search(r"(?:^|[ /])hooks/(.+)$", tail)
+                if not match:
+                    continue
+                name = match.group(1)
                 lookup.setdefault(f"{plugin}/hooks/{name}", []).append((
                     event, matcher, h.get("timeout", 5), h["command"]))
 
@@ -149,7 +242,7 @@ for (event, matcher), entries in groups.items():
             timeout = entry[1]
         print(f"\n[[hooks.{event}.hooks]]")
         print('type = "command"')
-        print(f'command = "{command}"')
+        print(f"command = {json.dumps(command)}")
         print(f"timeout = {timeout}")
 PYEOF
 

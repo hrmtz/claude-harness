@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/magi_autorun_hook.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/magi_autorun_hook.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-magi-codex hooks/magi_autorun_hook.sh",
             "timeout": 10
           }
         ]
