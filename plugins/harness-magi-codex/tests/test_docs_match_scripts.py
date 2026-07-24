@@ -76,13 +76,107 @@ def gate_ownership(src: str, path: str) -> set[str]:
     return set(declared)
 
 
+def literal_gate_tag(expression: ast.expr) -> str | None:
+    """Return a leading G-tag from a literal string or f-string expression."""
+    prefix: str | None = None
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        prefix = expression.value
+    elif (
+        isinstance(expression, ast.JoinedStr)
+        and expression.values
+        and isinstance(expression.values[0], ast.Constant)
+        and isinstance(expression.values[0].value, str)
+    ):
+        prefix = expression.values[0].value
+    if prefix is None:
+        return None
+    match = re.match(r"^(G[1-9]):", prefix)
+    return match.group(1) if match else None
+
+
+def verifier_gate_implementation(src: str) -> set[str]:
+    """AST-walk literal fail("Gx", ...) calls in the shared verifier."""
+    try:
+        tree = ast.parse(src, filename=VERIFIER)
+    except SyntaxError as exc:
+        raise RuntimeError(f"cannot parse {VERIFIER} — checker is blind") from exc
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "fail"
+    ]
+    tags: set[str] = set()
+    for call in calls:
+        if not call.args or not isinstance(call.args[0], ast.Constant):
+            raise RuntimeError(
+                f"{VERIFIER} has a non-literal fail() gate argument — checker is blind"
+            )
+        tag = call.args[0].value
+        if not isinstance(tag, str) or not re.fullmatch(r"G[1-9]", tag):
+            raise RuntimeError(
+                f"{VERIFIER} has invalid fail() gate argument {tag!r} — checker is blind"
+            )
+        tags.add(tag)
+    if not tags:
+        raise RuntimeError(f"cannot observe verifier gate failures in {VERIFIER} — checker is blind")
+    return tags
+
+
+def wrapper_python(src: str) -> ast.Module:
+    """Extract and parse the plateau wrapper's single embedded Python program."""
+    programs = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", src, re.S)
+    if len(programs) != 1:
+        raise RuntimeError(
+            f"expected one parseable Python heredoc in {GATE}, found {len(programs)} "
+            "— checker is blind"
+        )
+    try:
+        return ast.parse(programs[0], filename=GATE)
+    except SyntaxError as exc:
+        raise RuntimeError(f"cannot parse embedded Python in {GATE} — checker is blind") from exc
+
+
+def wrapper_gate_implementation(src: str) -> set[str]:
+    """Observe literal G-tagged failures appended by the plateau-only wrapper."""
+    tags: set[str] = set()
+    for node in ast.walk(wrapper_python(src)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "append"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "fails"
+            and node.args
+        ):
+            tag = literal_gate_tag(node.args[0])
+            if tag is not None:
+                tags.add(tag)
+    if not tags:
+        raise RuntimeError(f"cannot observe wrapper gate failures in {GATE} — checker is blind")
+    return tags
+
+
 def gate_asserts(wrapper_src: str, verifier_src: str) -> set[str]:
-    """Require the exact shared-verifier/wrapper ownership split and G1..G9 union."""
+    """Bind declared ownership to implementation, exact split, and G1..G9 union."""
     shared = gate_ownership(verifier_src, VERIFIER)
     wrapper = gate_ownership(wrapper_src, GATE)
+    implemented_shared = verifier_gate_implementation(verifier_src)
+    implemented_wrapper = wrapper_gate_implementation(wrapper_src)
     expected_shared = {"G1", "G2", "G3", "G4", "G5", "G6", "G9"}
     expected_wrapper = {"G7", "G8"}
     expected_union = {f"G{number}" for number in range(1, 10)}
+    if shared != implemented_shared:
+        raise RuntimeError(
+            f"{VERIFIER} declares {sorted(shared)} but implements "
+            f"{sorted(implemented_shared)} — checker is blind"
+        )
+    if wrapper != implemented_wrapper:
+        raise RuntimeError(
+            f"{GATE} declares {sorted(wrapper)} but implements "
+            f"{sorted(implemented_wrapper)} — checker is blind"
+        )
     if shared != expected_shared:
         raise RuntimeError(
             f"{VERIFIER} owns {sorted(shared)}, expected {sorted(expected_shared)} "
@@ -100,6 +194,61 @@ def gate_asserts(wrapper_src: str, verifier_src: str) -> set[str]:
             f"wrapper={sorted(wrapper)} — checker is blind"
         )
     return implemented
+
+
+def gate_ownership_mutation_probes(wrapper_src: str, verifier_src: str) -> None:
+    """Prove declarations alone cannot conceal removed or undeclared gate code."""
+    tree = ast.parse(verifier_src, filename=VERIFIER)
+
+    class RemoveImplementedG3(ast.NodeTransformer):
+        removed = 0
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "fail"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "G3"
+            ):
+                node.func = ast.Name(id="removed_gate", ctx=ast.Load())
+                self.removed += 1
+            return node
+
+    remover = RemoveImplementedG3()
+    missing_tree = remover.visit(tree)
+    ast.fix_missing_locations(missing_tree)
+    if remover.removed != 1:
+        raise RuntimeError(
+            f"cannot construct missing-gate mutation for {VERIFIER} — checker is blind"
+        )
+    missing_implementation = ast.unparse(missing_tree)
+
+    added_tree = ast.parse(verifier_src, filename=VERIFIER)
+    added_tree.body.append(
+        ast.Expr(
+            value=ast.Call(
+                func=ast.Name(id="fail", ctx=ast.Load()),
+                args=[
+                    ast.Constant(value="G8"),
+                    ast.Constant(value="ownership mutation probe"),
+                ],
+                keywords=[],
+            )
+        )
+    )
+    ast.fix_missing_locations(added_tree)
+    mutations = {
+        "implemented G3 removed with declaration retained": missing_implementation,
+        "undeclared implemented G8 added": ast.unparse(added_tree),
+    }
+    for label, mutated_verifier in mutations.items():
+        try:
+            gate_asserts(wrapper_src, mutated_verifier)
+        except RuntimeError:
+            continue
+        raise RuntimeError(f"ownership mutation passed unexpectedly: {label}")
 
 
 def env_vars(src: str) -> set[str]:
@@ -148,6 +297,7 @@ def main() -> int:
             drift.append(f"campaign guard can exit {code} but no doc explains it")
 
     implemented = gate_asserts(gate, verifier)
+    gate_ownership_mutation_probes(gate, verifier)
     for tag in sorted(implemented):
         if tag not in docs:
             drift.append(f"plateau gate asserts {tag} but no doc mentions it")

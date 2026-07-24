@@ -804,10 +804,10 @@ def main() -> int:
     args = parser().parse_args()
     try:
         result = evaluate(Path(args.manifest))
-    except UsageError as exc:
+    except (UsageError, guard.UsageError) as exc:
         print(f"MAGI_CONVERGENCE_USAGE: {exc}", file=sys.stderr)
         return 64
-    except UnsafeInput as exc:
+    except (UnsafeInput, guard.StateError, guard.TransitionError) as exc:
         print(
             json.dumps(
                 {

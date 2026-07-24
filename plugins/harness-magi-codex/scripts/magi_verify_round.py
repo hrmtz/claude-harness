@@ -13,8 +13,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 
-VALID_VERDICTS = {"GO", "GO-WITH-REVISE", "REVISE", "REJECT"}
+from magi_validate_findings import validate as validate_findings
+
+
 MAGI_GATE_OWNERSHIP = ("G1", "G2", "G3", "G4", "G5", "G6", "G9")
 FAMILY_MARKERS = {
     ("codex", "claude"): ("claude",),
@@ -96,13 +99,26 @@ def verify_round(
                 fail("G1", "round artifacts are not JSON objects")
             else:
                 findings, meta = findings_raw, meta_raw
-                if findings.get("verdict") not in VALID_VERDICTS:
-                    fail(
-                        "G1",
-                        f"verdict {findings.get('verdict')!r} not in {sorted(VALID_VERDICTS)}",
+                schema_path = (
+                    Path(__file__).resolve().parent.parent
+                    / "schemas"
+                    / "finding.schema.json"
+                )
+                try:
+                    schema = json.loads(schema_path.read_bytes())
+                    validate_findings(
+                        findings,
+                        schema,
+                        doc=doc,
+                        same_doc_only=expected_artifact_sha is not None,
                     )
-                if not isinstance(findings.get("findings"), list):
-                    fail("G1", "findings is not an array")
+                except (
+                    OSError,
+                    json.JSONDecodeError,
+                    jsonschema.ValidationError,
+                    ValueError,
+                ) as exc:
+                    fail("G1", f"findings schema/semantic validation failed: {exc}")
 
     if failures or findings is None or meta is None:
         return {

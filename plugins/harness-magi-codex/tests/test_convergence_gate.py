@@ -897,6 +897,51 @@ class ConvergenceGateTest(unittest.TestCase):
         result = run("python3", str(SCRIPT), "evaluate", str(self.repo / "missing.json"))
         self.assertEqual(result.returncode, 64)
 
+    def test_noninteger_guard_ceiling_is_stable_usage_error(self) -> None:
+        result = run(
+            "python3",
+            str(SCRIPT),
+            "evaluate",
+            str(self.manifest),
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "invalid"},
+        )
+        self.assertEqual(result.returncode, 64)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("MAGI_CONVERGENCE_USAGE:", result.stderr)
+        self.assertIn("must be an integer", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_over_limit_guard_ceiling_is_stable_usage_error(self) -> None:
+        result = run(
+            "python3",
+            str(SCRIPT),
+            "evaluate",
+            str(self.manifest),
+            env={"MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES": "17"},
+        )
+        self.assertEqual(result.returncode, 64)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("MAGI_CONVERGENCE_USAGE:", result.stderr)
+        self.assertIn("global fuse cannot be extended", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_malformed_guard_ledger_is_stable_blocked_json(self) -> None:
+        control = self.manifest.parent / ".dual-magi"
+        control.mkdir()
+        ledger = control / f"CAMPAIGN.{guard.doc_id(self.manifest.resolve())}.json"
+        ledger.write_text("{}\n")
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(payload["mode"], "report-only")
+        self.assertEqual(payload["decision"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "UNSAFE_OR_INCOMPLETE_INPUT")
+        self.assertFalse(payload["authorizes_shipping"])
+        self.assertIn("ledger fields do not match schema version 1", payload["detail"])
+        self.assertNotIn("Traceback", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
