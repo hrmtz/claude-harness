@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -23,6 +22,7 @@ import jsonschema
 sys.dont_write_bytecode = True
 
 import magi_campaign_guard as guard
+from magi_git import run_git
 from magi_validate_findings import validate as validate_findings
 from magi_verify_round import verify_round
 
@@ -76,23 +76,14 @@ def stable_json(path: Path, *, limit: int = MAX_JSON_BYTES) -> tuple[dict[str, A
 
 
 def git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_git(repo, *args)
     if result.returncode != 0:
         raise UnsafeInput(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
 def git_bytes(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        check=False,
-    )
+    result = run_git(repo, *args, text=False)
     if result.returncode != 0:
         raise UnsafeInput(
             f"git {' '.join(args)} failed: "
@@ -110,6 +101,8 @@ def validate_packet(payload: dict[str, Any], repo: Path) -> None:
     diff_bytes = git_bytes(
         repo,
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--binary",
         "--full-index",
         payload["base_git_sha"],
@@ -133,6 +126,8 @@ def validate_declared_scope(payload: dict[str, Any], repo: Path) -> None:
         for line in git(
             repo,
             "diff",
+            "--no-ext-diff",
+            "--no-textconv",
             "--name-only",
             payload["base_git_sha"],
             payload["target_git_sha"],
@@ -159,6 +154,10 @@ def validate_manifest(path: Path) -> tuple[dict[str, Any], str]:
         jsonschema.validate(payload, schema, format_checker=jsonschema.FormatChecker())
     except jsonschema.ValidationError as exc:
         raise UnsafeInput(f"manifest schema mismatch: {exc.message}") from exc
+    if not payload.get("implementation_campaign_id"):
+        raise UnsafeInput("current manifest lacks implementation_campaign_id")
+    if payload.get("canonical_control_path") != str(path.resolve()):
+        raise UnsafeInput("canonical_control_path does not match the manifest realpath")
 
     repo_input = Path(payload["repository_root"])
     if not repo_input.is_absolute():
@@ -224,6 +223,20 @@ def historical_target_map(
             raise UnsafeInput("historical manifest belongs to another repository")
         if archived["base_git_sha"] != manifest["base_git_sha"]:
             raise UnsafeInput("historical manifest uses another base_git_sha")
+        if archived.get("scope_id") != manifest["scope_id"]:
+            raise UnsafeInput("historical manifest uses another scope_id")
+        historical_campaign = archived.get("implementation_campaign_id")
+        if (
+            historical_campaign is not None
+            and historical_campaign != manifest["implementation_campaign_id"]
+        ):
+            raise UnsafeInput("historical manifest uses another implementation_campaign_id")
+        historical_control_path = archived.get("canonical_control_path")
+        if (
+            historical_control_path is not None
+            and historical_control_path != manifest["canonical_control_path"]
+        ):
+            raise UnsafeInput("historical manifest uses another canonical_control_path")
         validate_declared_scope(archived, repo)
         try:
             git(repo, "merge-base", "--is-ancestor", archived["target_git_sha"], manifest["target_git_sha"])
@@ -277,6 +290,25 @@ def validate_review(
     return payload
 
 
+def validate_review_payload(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+    artifact_sha: str,
+    round_no: int,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        validate_findings(payload, schema, doc=manifest_path, same_doc_only=True)
+    except (jsonschema.ValidationError, ValueError) as exc:
+        raise UnsafeInput(f"invalid verified review artifact: {exc}") from exc
+    if payload.get("artifact_sha") != artifact_sha:
+        raise UnsafeInput("verified review artifact SHA does not match launch")
+    if payload.get("round") != round_no:
+        raise UnsafeInput("verified review round does not match launch")
+    return payload
+
+
 def launch_reviews(
     launch: dict[str, Any],
     manifest_path: Path,
@@ -311,28 +343,35 @@ def launch_reviews(
             for persona in matching_sets[0]
         ]
 
-    findings_path = state / f"round_{round_no}_xfamily.json"
-    meta_path = state / f"round_{round_no}_xfamily.meta.json"
-    review = validate_review(
-        findings_path,
-        manifest_path=manifest_path,
-        artifact_sha=artifact_sha,
-        round_no=round_no,
-        schema=schema,
-    )
-    verified = verify_round(
-        manifest_path,
-        state / f"round_{round_no}_xfamily",
-        "codex",
-        str((stable_json(meta_path)[0]).get("reviewer_family") or "claude"),
-        expected_artifact_sha=artifact_sha,
-    )
+    try:
+        verified = verify_round(
+            manifest_path,
+            state / f"round_{round_no}_xfamily",
+            "codex",
+            None,
+            expected_artifact_sha=artifact_sha,
+        )
+    except Exception as exc:
+        raise UnsafeInput(
+            f"xfamily verifier failed closed: {type(exc).__name__}: {exc}"
+        ) from exc
     if verified["failures"]:
         raise UnsafeInput(
             "xfamily G1-G6/G9 verification failed: "
             + "; ".join(str(item) for item in verified["failures"])
         )
-    return [review]
+    review = verified["findings"]
+    if not isinstance(review, dict):
+        raise UnsafeInput("xfamily verifier returned no findings object")
+    return [
+        validate_review_payload(
+            review,
+            manifest_path=manifest_path,
+            artifact_sha=artifact_sha,
+            round_no=round_no,
+            schema=schema,
+        )
+    ]
 
 
 def normalize_root(finding: dict[str, Any]) -> str:

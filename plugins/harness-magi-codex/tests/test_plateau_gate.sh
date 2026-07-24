@@ -167,6 +167,20 @@ if [ -n "$REAL_SID" ]; then
   rm -f "$MARKER_DIR"/PLATEAU.*
 fi
 
+# A malformed rerun must revoke an existing marker even when later meta fields would have raised.
+if [ -n "$REAL_SID" ]; then
+  P="$TMP/revoke-exception-good"; mkfind "$P" "GO" 3
+  mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  "$GATE" "$DOC" "$P" >/dev/null 2>&1
+  Q="$TMP/revoke-exception-bad"; mkfind "$Q" "UNPARSEABLE" 3
+  mkmeta "$Q" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+  python3 -c 'import json,sys; p=sys.argv[1]; m=json.load(open(p)); m["num_turns"]="bad"; json.dump(m,open(p,"w"))' "$Q.meta.json"
+  "$GATE" "$DOC" "$Q" >/dev/null 2>&1
+  ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+      && bad "malformed verifier exception path left a plateau marker" \
+      || ok "malformed verifier exception path revokes plateau marker"
+fi
+
 # G2: a managed-deployment model id (us.anthropic.claude-…) must still count as cross-family
 if [ -n "$REAL_SID" ]; then
   # model_id carries a managed deployment prefix; requested_model is the bare id the operator passed.

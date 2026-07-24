@@ -60,7 +60,7 @@ def verify_round(
     doc: Path,
     out_prefix: Path,
     orchestrator_family: str,
-    reviewer_family: str,
+    reviewer_family: str | None,
     *,
     expected_artifact_sha: str | None = None,
 ) -> dict[str, Any]:
@@ -76,14 +76,18 @@ def verify_round(
 
     findings: dict[str, Any] | None = None
     meta: dict[str, Any] | None = None
+    findings_sha: str | None = None
     if not findings_path.exists():
         fail("G1", f"no cross-family findings at {findings_path}")
     elif not meta_path.exists():
         fail("G1", f"no provenance meta at {meta_path}")
     else:
         try:
-            findings_raw = json.loads(findings_path.read_text(encoding="utf-8"))
-            meta_raw = json.loads(meta_path.read_text(encoding="utf-8"))
+            findings_bytes = findings_path.read_bytes()
+            meta_bytes = meta_path.read_bytes()
+            findings_raw = json.loads(findings_bytes)
+            meta_raw = json.loads(meta_bytes)
+            findings_sha = hashlib.sha256(findings_bytes).hexdigest()
         except (OSError, json.JSONDecodeError) as exc:
             fail("G1", f"unreadable round artifacts: {exc}")
         else:
@@ -97,7 +101,7 @@ def verify_round(
                         f"verdict {findings.get('verdict')!r} not in {sorted(VALID_VERDICTS)}",
                     )
 
-    if findings is None or meta is None:
+    if failures or findings is None or meta is None:
         return {
             "findings": findings,
             "meta": meta,
@@ -105,6 +109,11 @@ def verify_round(
             "transcript_path": None,
         }
 
+    if reviewer_family is None:
+        candidate_family = meta.get("reviewer_family")
+        reviewer_family = (
+            candidate_family if candidate_family in {"claude", "grok"} else "unsupported"
+        )
     markers = FAMILY_MARKERS.get((orchestrator_family, reviewer_family))
     model_id = str(meta.get("model_id") or "")
     keys = meta.get("model_usage_keys") or []
@@ -131,7 +140,7 @@ def verify_round(
             f"model_id {model_id!r} is not cross-family for orchestrator "
             f"{orchestrator_family!r}",
         )
-    elif not keys:
+    elif not isinstance(keys, list) or not keys:
         fail("G2", "meta records no model_usage_keys")
     elif not all(isinstance(key, str) and cross_family(key) for key in keys):
         fail("G2", f"modelUsage keys {keys} are not all cross-family")
@@ -144,18 +153,23 @@ def verify_round(
             f"doc is now {actual_sha[:16]}… (stale round, or doc edited after review)",
         )
 
-    if meta.get("output_sha") != _sha(findings_path):
+    if meta.get("output_sha") != findings_sha:
         fail("G4", "output_sha mismatch: findings file changed since the adapter wrote it")
 
-    turns = meta.get("num_turns") or 0
-    commands = findings.get("verify_commands_executed") or []
-    if turns < 1:
+    turns = meta.get("num_turns")
+    commands = findings.get("verify_commands_executed")
+    if type(turns) is not int:
+        fail("G5", f"num_turns={turns!r} is not an integer")
+    elif turns < 1:
         fail("G5", f"num_turns={turns}")
-    elif turns <= 1 and commands:
+    elif turns <= 1 and isinstance(commands, list) and commands:
         fail(
             "G5",
             f"self-contradiction: num_turns={turns} but {len(commands)} commands reported",
         )
+    if not isinstance(commands, list):
+        fail("G9", "verify_commands_executed is not an array")
+        commands = []
 
     sid = meta.get("session_id")
     transcripts: list[str] = []
@@ -252,4 +266,5 @@ def verify_round(
         "meta": meta,
         "failures": failures,
         "transcript_path": str(transcript_path) if transcript_path else None,
+        "findings_sha": findings_sha,
     }

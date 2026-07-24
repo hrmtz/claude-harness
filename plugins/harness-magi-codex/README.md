@@ -41,6 +41,7 @@ scripts/
   magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
   magi_validate_findings.py   validates cross-field convergence rules after constrained output
   magi_verify_round.py        write-free G1-G6/G9 verification
+  magi_git.py                 ambient-config-free Git object reads
   magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
   magi_convergence_gate.py    report-only implementation convergence evaluator
   magi_plateau_gate.sh        the ONLY thing that may write a plateau marker

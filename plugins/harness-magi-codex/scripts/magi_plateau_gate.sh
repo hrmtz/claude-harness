@@ -62,15 +62,20 @@ def gate_number(failure):
     return int(match.group(1)) if match else 99
 
 
-result = verify_round(
-    Path(doc),
-    Path(prefix),
-    orch_family,
-    reviewer_family,
-)
-findings = result["findings"]
-meta = result["meta"]
-fails = list(result["failures"])
+try:
+    result = verify_round(
+        Path(doc),
+        Path(prefix),
+        orch_family,
+        reviewer_family,
+    )
+except Exception as exc:
+    findings = meta = None
+    fails = [f"G1: shared verifier failed closed: {type(exc).__name__}: {exc}"]
+else:
+    findings = result["findings"]
+    meta = result["meta"]
+    fails = list(result["failures"])
 
 if findings is not None and meta is not None:
     verdict = findings["verdict"]

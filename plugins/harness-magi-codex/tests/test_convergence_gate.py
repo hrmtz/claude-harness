@@ -100,6 +100,8 @@ class ConvergenceGateTest(unittest.TestCase):
         payload: dict[str, object] = {
             "schema": "magi-implementation-convergence/v1",
             "scope_id": scope,
+            "implementation_campaign_id": "11111111-2222-4333-8444-555555555555",
+            "canonical_control_path": str(self.manifest.resolve()),
             "risk_class": "standard",
             "repository_root": str(self.repo),
             "target_git_sha": self.target_sha,
@@ -345,7 +347,7 @@ class ConvergenceGateTest(unittest.TestCase):
             "--target",
             self.target_sha,
             "--scope",
-            "issue-107-revision-2",
+            "issue-107",
             "--invariant",
             "bounded-review-loop",
             "--deadline",
@@ -357,6 +359,10 @@ class ConvergenceGateTest(unittest.TestCase):
         payload = json.loads(self.manifest.read_text())
         self.assertEqual(payload["target_git_sha"], self.target_sha)
         self.assertEqual(
+            payload["implementation_campaign_id"],
+            "11111111-2222-4333-8444-555555555555",
+        )
+        self.assertEqual(
             payload["historical_manifests"][0]["artifact_sha"], previous_sha
         )
         archive = Path(payload["historical_manifests"][0]["path"])
@@ -364,6 +370,66 @@ class ConvergenceGateTest(unittest.TestCase):
         result, decision = self.evaluate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(decision["decision"], "CONTINUE")
+
+    def test_copied_packet_cannot_reset_control_path(self) -> None:
+        copied = self.repo / "copied-review.json"
+        copied.write_bytes(self.manifest.read_bytes())
+        result = run(
+            "python3",
+            str(SCRIPT),
+            "evaluate",
+            str(copied),
+            env={"HOME": str(self.fake_home)},
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("canonical_control_path", result.stdout)
+
+    def test_packet_builder_rejects_scope_drift_at_stable_path(self) -> None:
+        before = file_sha(self.manifest)
+        deadline = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        built = run(
+            "python3",
+            str(PACKET),
+            "--repo",
+            str(self.repo),
+            "--base",
+            self.base_sha,
+            "--target",
+            self.target_sha,
+            "--scope",
+            "different-scope",
+            "--invariant",
+            "bounded-review-loop",
+            "--deadline",
+            deadline,
+            "--output",
+            str(self.manifest),
+        )
+        self.assertEqual(built.returncode, 2)
+        self.assertEqual(file_sha(self.manifest), before)
+        self.assertFalse((self.repo / ".dual-magi").exists())
+
+    def test_git_external_diff_is_not_executed(self) -> None:
+        helper = Path(self.temp.name) / "external-diff"
+        sentinel = Path(self.temp.name) / "external-diff-ran"
+        helper.write_text(f"#!/bin/sh\ntouch {sentinel}\nexit 99\n")
+        helper.chmod(0o755)
+        result, payload = self.evaluate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "CONTINUE")
+        external_result = run(
+            "python3",
+            str(SCRIPT),
+            "evaluate",
+            str(self.manifest),
+            env={
+                "HOME": str(self.fake_home),
+                "GIT_EXTERNAL_DIFF": str(helper),
+                "SECRET_SENTINEL": "must-not-reach-helper",
+            },
+        )
+        self.assertEqual(external_result.returncode, 0, external_result.stderr)
+        self.assertFalse(sentinel.exists())
 
     def test_fanout_requires_reserved_final_diverse_review(self) -> None:
         artifact = file_sha(self.manifest)
@@ -402,7 +468,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.add_launch(2, "xfamily", old_artifact, root="root-a")
         historical = [self.archive_manifest()]
         self.advance_target()
-        self.write_manifest(scope="issue-107-revision-2", historical=historical)
+        self.write_manifest(historical=historical)
         current_artifact = file_sha(self.manifest)
         self.add_launch(3, "fanout", current_artifact, root="root-a")
         self.add_launch(4, "xfamily", current_artifact, root="root-a")
@@ -418,7 +484,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.add_launch(2, "xfamily", old_artifact, root="root-a", subsystem="parser")
         historical = [self.archive_manifest()]
         self.advance_target()
-        self.write_manifest(scope="issue-107-revision-2", historical=historical)
+        self.write_manifest(historical=historical)
         current_artifact = file_sha(self.manifest)
         self.add_launch(3, "fanout", current_artifact, root="root-b", subsystem="scheduler")
         self.add_launch(4, "xfamily", current_artifact, root="root-b", subsystem="scheduler")
@@ -516,7 +582,7 @@ class ConvergenceGateTest(unittest.TestCase):
         history = [self.archive_manifest()]
 
         self.advance_target()
-        self.write_manifest(scope="revision-2", historical=history)
+        self.write_manifest(historical=history)
         second_artifact = file_sha(self.manifest)
         self.add_launch(3, "fanout", second_artifact, root="root-b", subsystem="scheduler")
         self.add_launch(4, "xfamily", second_artifact, root="root-b", subsystem="scheduler")
@@ -526,7 +592,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.git("add", "implementation.py")
         self.git("commit", "-qm", "implementation revision 3")
         self.target_sha = self.git("rev-parse", "HEAD")
-        self.write_manifest(scope="revision-3", historical=history)
+        self.write_manifest(historical=history)
         third_artifact = file_sha(self.manifest)
         self.add_launch(5, "fanout", third_artifact, root="root-c", subsystem="storage")
         self.add_launch(6, "xfamily", third_artifact, root="root-c", subsystem="storage")
@@ -545,7 +611,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.add_launch(4, "xfamily", artifact, root="root-b", subsystem="scheduler")
         history = [self.archive_manifest()]
         self.advance_target()
-        self.write_manifest(scope="third-cycle", historical=history)
+        self.write_manifest(historical=history)
         self.write_ledger()
         result, payload = self.evaluate()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -625,7 +691,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.add_launch(1, "fanout", old_artifact, root="root-a")
         self.add_launch(2, "xfamily", old_artifact, root="root-a")
         self.advance_target()
-        self.write_manifest(scope="missing-history")
+        self.write_manifest()
         self.write_ledger()
         result, blocked = self.evaluate()
         self.assertEqual(result.returncode, 2)
@@ -658,7 +724,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.add_launch(2, "xfamily", old_artifact, root="root-a")
         historical = [self.archive_manifest()]
         self.advance_target()
-        self.write_manifest(scope="complete-current", historical=historical)
+        self.write_manifest(historical=historical)
         self.write_ledger()
         result, blocked = self.evaluate()
         self.assertEqual(result.returncode, 2)
@@ -669,7 +735,7 @@ class ConvergenceGateTest(unittest.TestCase):
         target_one_archive = self.archive_manifest()
 
         self.advance_target()
-        self.write_manifest(scope="target-two", historical=[target_one_archive])
+        self.write_manifest(historical=[target_one_archive])
         target_two_artifact = file_sha(self.manifest)
         target_two_archive = self.archive_manifest()
 
@@ -690,10 +756,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.git("add", "implementation.py")
         self.git("commit", "-qm", "implementation revision 3")
         self.target_sha = self.git("rev-parse", "HEAD")
-        self.write_manifest(
-            scope="target-three",
-            historical=[target_one_archive, target_two_archive],
-        )
+        self.write_manifest(historical=[target_one_archive, target_two_archive])
         self.write_ledger()
 
         result, blocked = self.evaluate()

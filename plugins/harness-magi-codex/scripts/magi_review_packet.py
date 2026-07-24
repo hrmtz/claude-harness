@@ -7,23 +7,20 @@ import argparse
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
+from magi_git import run_git
+
 
 def git(repo: Path, *args: str, text: bool = True) -> str | bytes:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=text,
-        check=False,
-    )
+    result = run_git(repo, *args, text=text)
     if result.returncode != 0:
         stderr = result.stderr if text else result.stderr.decode(errors="replace")
         raise ValueError(f"git {' '.join(args)} failed: {stderr.strip()}")
@@ -46,9 +43,9 @@ def atomic_write(path: Path, payload: bytes) -> None:
             pass
 
 
-def archive_previous(output: Path) -> list[dict[str, str]]:
+def read_previous(output: Path) -> tuple[bytes | None, dict[str, Any] | None]:
     if not output.exists():
-        return []
+        return None, None
     if output.is_symlink() or not output.is_file():
         raise ValueError("existing output is not a safe regular file")
     raw = output.read_bytes()
@@ -58,6 +55,14 @@ def archive_previous(output: Path) -> list[dict[str, str]]:
         raise ValueError("existing output is not a valid review packet") from exc
     if not isinstance(previous, dict):
         raise ValueError("existing output is not a review packet object")
+    return raw, previous
+
+
+def archive_previous(
+    output: Path,
+    raw: bytes,
+    previous: dict[str, Any],
+) -> list[dict[str, str]]:
     digest = hashlib.sha256(raw).hexdigest()
     archive_dir = output.parent / ".dual-magi" / "manifests"
     archive_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +98,18 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     git(repo, "merge-base", "--is-ancestor", args.base, target)
     changed_paths = sorted(
         line
-        for line in str(git(repo, "diff", "--name-only", args.base, target, "--")).splitlines()
+        for line in str(
+            git(
+                repo,
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--name-only",
+                args.base,
+                target,
+                "--",
+            )
+        ).splitlines()
         if line
     )
     if not changed_paths:
@@ -101,6 +117,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     diff = git(
         repo,
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--binary",
         "--full-index",
         args.base,
@@ -122,16 +140,46 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     output = Path(args.output).expanduser()
     if not output.is_absolute() or output.is_symlink():
         raise ValueError("--output must be an absolute non-symlink path")
-    history = archive_previous(output)
+    canonical_output = output.parent.resolve(strict=True) / output.name
+    if canonical_output != output:
+        raise ValueError("--output must be canonical")
+    previous_raw, previous = read_previous(output)
+    invariants = sorted(set(args.invariant))
+    if previous is None:
+        campaign_id = str(uuid.uuid4())
+    else:
+        for field, expected in (
+            ("repository_root", str(repo)),
+            ("base_git_sha", args.base),
+            ("scope_id", args.scope),
+            ("risk_class", args.risk_class),
+            ("affected_invariants", invariants),
+        ):
+            if previous.get(field) != expected:
+                raise ValueError(f"existing packet {field} is immutable")
+        previous_path = previous.get("canonical_control_path")
+        if previous_path is not None and previous_path != str(canonical_output):
+            raise ValueError("existing packet canonical_control_path mismatch")
+        previous_campaign = previous.get("implementation_campaign_id")
+        campaign_id = (
+            previous_campaign if isinstance(previous_campaign, str) else str(uuid.uuid4())
+        )
+    history = (
+        archive_previous(output, previous_raw, previous)
+        if previous_raw is not None and previous is not None
+        else []
+    )
     payload: dict[str, Any] = {
         "schema": "magi-implementation-convergence/v1",
         "scope_id": args.scope,
+        "implementation_campaign_id": campaign_id,
+        "canonical_control_path": str(canonical_output),
         "risk_class": args.risk_class,
         "repository_root": str(repo),
         "target_git_sha": target,
         "base_git_sha": args.base,
         "changed_paths": changed_paths,
-        "affected_invariants": sorted(set(args.invariant)),
+        "affected_invariants": invariants,
         "review_packet": {
             "target_tree_sha": git(repo, "rev-parse", f"{target}^{{tree}}"),
             "diff_sha256": hashlib.sha256(diff).hexdigest(),
