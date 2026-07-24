@@ -39,6 +39,24 @@ class TestKimiAgentsLoad(unittest.TestCase):
         """No emoji warning markers."""
         self.assertFalse(re.search(r"[🚨⚠️🛡]", self.text))
 
+    def test_contains_double_submit_rail(self):
+        """gh #105: the always-loaded template must pin the pane-messaging contract."""
+        for token in (
+            "formation msg",
+            "tmux_send_submit",
+            "sleep ~0.4s",
+            "sleep ~0.5s",
+            "send-keys -X cancel",
+            "#{pane_in_mode}",
+            "load-buffer",
+            "paste-buffer -p",
+        ):
+            self.assertIn(token, self.text)
+        # Double Enter: two submissions around the second delay, and the
+        # shell-command single-Enter distinction.
+        self.assertGreaterEqual(self.text.count("Enter"), 2)
+        self.assertIn("1発", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
