@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 TARGET="$CODEX_HOME/skills"
 
-for skill in dual-magi-review ultramagi; do
+for skill in magi dual-magi-review ultramagi; do
     dst="$TARGET/$skill"
     if [ -L "$dst" ]; then
         # Only unlink if it points into THIS plugin — never touch a foreign symlink.
@@ -20,7 +20,12 @@ for skill in dual-magi-review ultramagi; do
         # Only remove a copied dir carrying OUR ownership marker. "contains a SKILL.md" would
         # also match a user's hand-written skill of the same name -- an irreversible rm -rf of
         # someone else's work.
-        rm -rf "$dst"; echo "[harness-magi-codex] removed $dst"
+        expected_marker="installed by harness-magi-codex from $HERE/skills/$skill"
+        if [ "$(cat "$dst/.harness-magi-codex")" = "$expected_marker" ]; then
+            rm -rf "$dst"; echo "[harness-magi-codex] removed $dst"
+        else
+            echo "[harness-magi-codex] refusing to remove $dst (foreign marker)" >&2
+        fi
     elif [ -d "$dst" ]; then
         echo "[harness-magi-codex] refusing to remove $dst (no ownership marker; not ours)" >&2
     else

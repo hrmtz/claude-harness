@@ -52,6 +52,8 @@ class ConvergenceGateTest(unittest.TestCase):
             "schemas/implementation-convergence.schema.json",
             "scripts/magi_campaign_guard.py",
             "scripts/magi_convergence_gate.py",
+            "scripts/magi_convergence_kernel.py",
+            "scripts/magi_design_convergence_gate.py",
             "scripts/magi_fanout_codex.sh",
             "scripts/magi_git.py",
             "scripts/magi_lock.sh",
@@ -1216,6 +1218,13 @@ print("incremental fixture")
     def test_usage_error_is_64(self) -> None:
         result = run("python3", str(SCRIPT), "evaluate", str(self.repo / "missing.json"))
         self.assertEqual(result.returncode, 64)
+
+    def test_argparse_errors_are_usage_exit_64(self) -> None:
+        for args in ((), ("unknown",), ("evaluate", "--unknown")):
+            with self.subTest(args=args):
+                result = run("python3", str(SCRIPT), *args)
+                self.assertEqual(result.returncode, 64)
+                self.assertIn("MAGI_CONVERGENCE_USAGE:", result.stderr)
 
     def test_noninteger_guard_ceiling_is_stable_usage_error(self) -> None:
         result = run(

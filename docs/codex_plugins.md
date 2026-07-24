@@ -5,7 +5,7 @@ The repository marketplace is `.agents/plugins/marketplace.json`. It exposes:
 - `harness-core`: lifecycle safety hooks, including Codex self-naming
 - `harness-rails`: operational hooks and the versioning skill
 - `harness-formation`: Formation suggestion hook and worker skill
-- `harness-magi-codex`: Codex-orchestrated dual-Magi and ultramagi skills
+- `harness-magi-codex`: one-shot Magi plus bounded dual-Magi and ultramagi skills
 
 ## Install
 

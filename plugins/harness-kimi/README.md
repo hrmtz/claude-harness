@@ -108,5 +108,5 @@ uninstall 経路を断たないため、deprecated スクリプト自体は repo
 - `install-kimi-agents.sh` / `install-kimi-scrubber.sh` / `uninstall-kimi-scrubber.sh`
 - `kimi-wrapper.sh` / `install-kimi-wrapper.sh` — `kimi` コマンドをラップし、AGENTS.md
   自動配置と tmux routing/display identity の保護を行う
-- **skills port**: `install-kimi-skills.sh` + `skills/magi` / `skills/bug-hunt` — Kimi 側の magi / bug-hunt skill 移植
+- **skills port**: `install-kimi-skills.sh` + `skills/magi` / `skills/bug-hunt` — Kimi 側の magi / bug-hunt skill 移植。Magi の deterministic gate は Kimi-native structural runner 未実装のため fail-closed
 - deprecated: `guard-env.sh` / `guard-check.sh` / `guarded-bash.sh` / `install-kimi-bash-guard.sh` / `kimi_wire_watcher.*` / `install-kimi-watcher.sh` / `uninstall-kimi-watcher.sh`

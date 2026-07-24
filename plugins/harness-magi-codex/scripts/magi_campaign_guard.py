@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+import magi_convergence_kernel as kernel
+
 
 DEFAULT_MAX_MODEL_LAUNCHES = 16
 PHASE_WEIGHT = {"fanout": 3, "targeted": 1, "xfamily": 1}
@@ -36,6 +38,8 @@ PROTOCOL_FILES = (
     "schemas/implementation-convergence.schema.json",
     "scripts/magi_campaign_guard.py",
     "scripts/magi_convergence_gate.py",
+    "scripts/magi_convergence_kernel.py",
+    "scripts/magi_design_convergence_gate.py",
     "scripts/magi_fanout_codex.sh",
     "scripts/magi_git.py",
     "scripts/magi_lock.sh",
@@ -508,8 +512,14 @@ def validate_transition(launches: list[object], round_no: int, phase: str) -> in
 def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, object]:
     weight = PHASE_WEIGHT[phase]
     reserve = FINAL_XFAMILY_RESERVE if phase in {"fanout", "targeted"} else 0
-    required = weight + reserve
-    affordable = total_used + required <= ceiling
+    arithmetic = kernel.launch_affordability(
+        total_used,
+        ceiling,
+        launch_weight=weight,
+        reserved_weight=reserve,
+    )
+    required = int(arithmetic["required"])
+    affordable = bool(arithmetic["affordable"])
     reason = (
         f"global campaign history would require {total_used + required}/{ceiling} "
         f"model launches ({weight} for {phase}"
