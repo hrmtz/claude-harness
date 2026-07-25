@@ -15,6 +15,62 @@
 # coverage: .env / .env.<suffix> / rclone.conf / .netrc / .aws/credentials /
 #           .cloudflared/*.json / *.pem / *.key / *.p12
 
+classify_credential_path() {
+  local path="$1"
+
+  case "$path" in
+    *.env.example | *.env.template | *.env.sample | *.env.dist | *.env.test | *.env.local-example)
+      return 11
+      ;;
+  esac
+
+  case "$path" in
+    .env | */.env)
+      REASON=".env (= plain credential SoT)"
+      return 0
+      ;;
+    .env.* | */.env.*)
+      REASON=".env.<suffix> (= environment-specific credentials)"
+      return 0
+      ;;
+    credentials.* | */credentials.*)
+      REASON="credentials.<suffix> (= credential artifact)"
+      return 0
+      ;;
+    rclone.conf | */rclone.conf | *.config/rclone/rclone.conf)
+      REASON="rclone.conf (= R2/S3 secret access key)"
+      return 0
+      ;;
+    .aws/credentials | */.aws/credentials)
+      REASON="AWS credentials"
+      return 0
+      ;;
+    .netrc | */.netrc)
+      REASON=".netrc (= HTTP basic auth credentials)"
+      return 0
+      ;;
+    */.cloudflared/*.json)
+      REASON="cloudflared tunnel credentials"
+      return 0
+      ;;
+    *.pem | *.key | *.p12 | *.pfx)
+      REASON="private key file"
+      return 0
+      ;;
+  esac
+
+  return 10
+}
+
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 2 ] || [ "$1" != "--classify-path" ] || [ -z "$2" ]; then
+    printf '%s\n' "CREDENTIAL_CLASSIFIER_INVALID_INVOCATION" >&2
+    exit 64
+  fi
+  classify_credential_path "$2"
+  exit $?
+fi
+
 source "$(dirname "$0")/lib.sh"
 
 MAX_HOOK_INPUT_BYTES=4194304
@@ -74,48 +130,16 @@ PY
   esac
 fi
 
-# ----------------------------------------
-# Exempt suffix list (= dummy / template / test fixture、 block しない)
-# ----------------------------------------
-case "$FILE_PATH" in
-  *.env.example | *.env.template | *.env.sample | *.env.dist | *.env.test | *.env.local-example)
-    exit 0
+classify_credential_path "$FILE_PATH"
+CLASSIFICATION=$?
+case "$CLASSIFICATION" in
+  0) ;;
+  10|11) exit 0 ;;
+  *)
+    printf '%s\n' "credential read guard classification failed; refusing tool execution" >&2
+    exit 2
     ;;
 esac
-
-# ----------------------------------------
-# Block target patterns (= 完全 match)
-# ----------------------------------------
-BLOCK=0
-case "$FILE_PATH" in
-  # plain .env / .env.<host> family
-  .env | */.env)
-    BLOCK=1; REASON=".env (= plain credential SoT)"
-    ;;
-  .env.* | */.env.*)
-    BLOCK=1; REASON=".env.<suffix> (= environment-specific credentials)"
-    ;;
-  # rclone / aws / netrc
-  rclone.conf | */rclone.conf | *.config/rclone/rclone.conf)
-    BLOCK=1; REASON="rclone.conf (= R2/S3 secret access key)"
-    ;;
-  .aws/credentials | */.aws/credentials)
-    BLOCK=1; REASON="AWS credentials"
-    ;;
-  .netrc | */.netrc)
-    BLOCK=1; REASON=".netrc (= HTTP basic auth credentials)"
-    ;;
-  # cloudflared tunnel credentials
-  */.cloudflared/*.json)
-    BLOCK=1; REASON="cloudflared tunnel credentials"
-    ;;
-  # private key files
-  *.pem | *.key | *.p12 | *.pfx)
-    BLOCK=1; REASON="private key file"
-    ;;
-esac
-
-[ "$BLOCK" -eq 0 ] && exit 0
 
 # ----------------------------------------
 # Block + alternative action

@@ -127,7 +127,8 @@ for item in overlay["hooks"]:
     if event in LIFECYCLE:
         matcher = None
     timeout = max(1, min(600, int(timeout)))  # Kimi clamps to 1–600
-    cmd = f"bash {plugins_dir}/{path}"
+    runner = "python3" if path_token.endswith(".py") else "bash"
+    cmd = f"{runner} {plugins_dir}/{path}"
     entries.append((event, matcher, cmd, timeout))
 
 # Assemble the marker block.

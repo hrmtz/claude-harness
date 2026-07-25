@@ -55,7 +55,7 @@ OUT_TMP="$(mktemp)"
 trap 'rm -f "$OUT_TMP"' EXIT
 
 python3 - "$OVERLAY" "$HARNESS_DIR" > "$OUT_TMP" <<'PYEOF'
-import json, sys, collections
+import json, shlex, sys, collections
 
 overlay_path, harness_dir = sys.argv[1], sys.argv[2]
 plugins_dir = f"{harness_dir}/plugins"
@@ -77,7 +77,20 @@ for plugin in sorted({h.split("/")[0] for h in overlay["hooks"]}):
         for blk in blocks:
             matcher = blk.get("matcher")
             for h in blk.get("hooks", []):
-                name = h["command"].split("/hooks/")[-1]
+                tail = h["command"].rsplit(";", 1)[-1]
+                try:
+                    tokens = shlex.split(tail)
+                except ValueError:
+                    continue
+                hook_tokens = [
+                    token for token in tokens
+                    if token.startswith("hooks/") or "/hooks/" in token
+                ]
+                if not hook_tokens:
+                    continue
+                token = hook_tokens[0]
+                name = (token.split("/hooks/", 1)[1]
+                        if "/hooks/" in token else token[len("hooks/"):])
                 lookup[f"{plugin}/hooks/{name}"] = (event, matcher, h.get("timeout", 5))
 
 # Group by (event, matcher) preserving overlay order.
@@ -89,8 +102,9 @@ for hook in overlay["hooks"]:
     event, matcher, timeout = lookup[hook]
     if event in LIFECYCLE:
         matcher = None
+    runner = "python3" if hook.split()[0].endswith(".py") else "bash"
     groups.setdefault((event, matcher), []).append(
-        (f"bash {plugins_dir}/{hook}", timeout))
+        (f"{runner} {plugins_dir}/{hook}", timeout))
 sys.path.insert(0, f"{harness_dir}/scripts/lib")
 from cross_cli_externals import resolve  # noqa: E402
 for ext in resolve(overlay_path, "grok", harness_dir):

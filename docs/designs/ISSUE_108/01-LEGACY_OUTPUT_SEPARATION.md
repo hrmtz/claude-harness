@@ -1,6 +1,7 @@
 # Issue #108 Slice 1 — Legacy output separation
 
-Status: implemented locally; revised exact-revision plateau remains incomplete after campaign exhaustion
+Status: merged via PR #146 at `9e2bcd1` under maintainer human waiver; the bounded campaign ended
+without a mechanical exact-revision plateau marker
 Parent: `docs/designs/ISSUE_108_SECRET_DISCLOSURE_AUTHORIZATION.md`
 Issue: <https://github.com/hrmtz/claude-harness/issues/108>
 

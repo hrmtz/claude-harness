@@ -131,6 +131,11 @@
           },
           {
             "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret_delivery_prompt.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/secret_delivery_prompt.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code_review_suggest.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/code_review_suggest.sh",
             "timeout": 5
           }
