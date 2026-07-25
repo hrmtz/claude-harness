@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# Guard a child CLI launch against tmux identity drift (#95).
+set -uo pipefail
+
+usage() {
+    echo "usage: harness-cross-cli [--target-pane PANE] [--expected-window NAME] [--isolate-tmux] [--allow-self-name] -- command [args...]" >&2
+    exit 64
+}
+
+target_pane="${TMUX_PANE:-}"
+expected_window=""
+isolate_tmux=0
+disable_self_name=1
+signal_reset='
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+os.execvpe(sys.argv[1], sys.argv[1:], os.environ)
+'
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --target-pane) [ "$#" -ge 2 ] || usage; target_pane="$2"; shift 2 ;;
+        --expected-window) [ "$#" -ge 2 ] || usage; expected_window="$2"; shift 2 ;;
+        --isolate-tmux) isolate_tmux=1; shift ;;
+        --allow-self-name) disable_self_name=0; shift ;;
+        --) shift; break ;;
+        *) usage ;;
+    esac
+done
+[ "$#" -gt 0 ] || usage
+
+run_child() {
+    if [ "$isolate_tmux" -eq 1 ]; then
+        if [ "$disable_self_name" -eq 0 ]; then
+            exec env -u TMUX -u TMUX_PANE \
+                -u HARNESS_TMUX_SELF_NAME_DISABLE \
+                -u HIPPOCAMPUS_TMUX_NAME_DISABLE \
+                -u KIMI_TMUX_NAME_DISABLE \
+                -u CODEX_TMUX_NAME_DISABLE \
+                -u CLAUDE_TMUX_NAME_DISABLE \
+                -u GROK_TMUX_NAME_DISABLE \
+                python3 -c "$signal_reset" "$@"
+        fi
+        exec env -u TMUX -u TMUX_PANE \
+            HARNESS_TMUX_SELF_NAME_DISABLE=1 \
+            HIPPOCAMPUS_TMUX_NAME_DISABLE=1 \
+            KIMI_TMUX_NAME_DISABLE=1 \
+            CODEX_TMUX_NAME_DISABLE=1 \
+            CLAUDE_TMUX_NAME_DISABLE=1 \
+            GROK_TMUX_NAME_DISABLE=1 \
+            python3 -c "$signal_reset" "$@"
+    else
+        if [ "$disable_self_name" -eq 0 ]; then
+            exec env -u HARNESS_TMUX_SELF_NAME_DISABLE \
+                -u HIPPOCAMPUS_TMUX_NAME_DISABLE \
+                -u KIMI_TMUX_NAME_DISABLE \
+                -u CODEX_TMUX_NAME_DISABLE \
+                -u CLAUDE_TMUX_NAME_DISABLE \
+                -u GROK_TMUX_NAME_DISABLE \
+                python3 -c "$signal_reset" "$@"
+        fi
+        exec env HARNESS_TMUX_SELF_NAME_DISABLE=1 \
+            HIPPOCAMPUS_TMUX_NAME_DISABLE=1 \
+            KIMI_TMUX_NAME_DISABLE=1 \
+            CODEX_TMUX_NAME_DISABLE=1 \
+            CLAUDE_TMUX_NAME_DISABLE=1 \
+            GROK_TMUX_NAME_DISABLE=1 \
+            python3 -c "$signal_reset" "$@"
+    fi
+}
+
+# Headless isolation does not need a parent identity snapshot when inherited
+# tmux state is incomplete or stale. Strip it and launch instead of failing a
+# safe reviewer/cron process during tmux preflight.
+if [ "$isolate_tmux" -eq 1 ] \
+   && { [ -z "${TMUX:-}" ] || [ -z "$target_pane" ] \
+        || ! command -v tmux >/dev/null 2>&1 \
+        || ! tmux display-message -p -t "$target_pane" '#{pane_id}' >/dev/null 2>&1; }; then
+    if [ "$disable_self_name" -eq 0 ]; then
+        exec env -u TMUX -u TMUX_PANE \
+            -u HARNESS_TMUX_SELF_NAME_DISABLE \
+            -u HIPPOCAMPUS_TMUX_NAME_DISABLE \
+            -u KIMI_TMUX_NAME_DISABLE \
+            -u CODEX_TMUX_NAME_DISABLE \
+            -u CLAUDE_TMUX_NAME_DISABLE \
+            -u GROK_TMUX_NAME_DISABLE \
+            "$@"
+    fi
+    exec env -u TMUX -u TMUX_PANE \
+        HARNESS_TMUX_SELF_NAME_DISABLE=1 \
+        HIPPOCAMPUS_TMUX_NAME_DISABLE=1 \
+        KIMI_TMUX_NAME_DISABLE=1 \
+        CODEX_TMUX_NAME_DISABLE=1 \
+        CLAUDE_TMUX_NAME_DISABLE=1 \
+        GROK_TMUX_NAME_DISABLE=1 \
+        "$@"
+fi
+
+# Outside tmux there is no identity surface to protect.
+if [ -z "${TMUX:-}" ]; then
+    if [ "$isolate_tmux" -eq 1 ]; then
+        if [ "$disable_self_name" -eq 0 ]; then
+            exec env -u TMUX -u TMUX_PANE \
+                -u HARNESS_TMUX_SELF_NAME_DISABLE \
+                -u HIPPOCAMPUS_TMUX_NAME_DISABLE \
+                -u KIMI_TMUX_NAME_DISABLE \
+                -u CODEX_TMUX_NAME_DISABLE \
+                -u CLAUDE_TMUX_NAME_DISABLE \
+                -u GROK_TMUX_NAME_DISABLE \
+                "$@"
+        fi
+        exec env -u TMUX -u TMUX_PANE \
+            HARNESS_TMUX_SELF_NAME_DISABLE=1 \
+            HIPPOCAMPUS_TMUX_NAME_DISABLE=1 \
+            KIMI_TMUX_NAME_DISABLE=1 \
+            CODEX_TMUX_NAME_DISABLE=1 \
+            CLAUDE_TMUX_NAME_DISABLE=1 \
+            GROK_TMUX_NAME_DISABLE=1 \
+            "$@"
+    fi
+    if [ "$disable_self_name" -eq 0 ]; then
+        exec env -u HARNESS_TMUX_SELF_NAME_DISABLE \
+            -u HIPPOCAMPUS_TMUX_NAME_DISABLE \
+            -u KIMI_TMUX_NAME_DISABLE \
+            -u CODEX_TMUX_NAME_DISABLE \
+            -u CLAUDE_TMUX_NAME_DISABLE \
+            -u GROK_TMUX_NAME_DISABLE \
+            "$@"
+    fi
+    exec env HARNESS_TMUX_SELF_NAME_DISABLE=1 \
+        HIPPOCAMPUS_TMUX_NAME_DISABLE=1 \
+        KIMI_TMUX_NAME_DISABLE=1 \
+        CODEX_TMUX_NAME_DISABLE=1 \
+        CLAUDE_TMUX_NAME_DISABLE=1 \
+        GROK_TMUX_NAME_DISABLE=1 \
+        "$@"
+fi
+
+command -v tmux >/dev/null 2>&1 || {
+    echo "harness-cross-cli: tmux target exists but tmux is unavailable" >&2
+    exit 70
+}
+command -v jq >/dev/null 2>&1 || {
+    echo "harness-cross-cli: jq is required for structured identity logging" >&2
+    exit 70
+}
+[ -n "$target_pane" ] || {
+    echo "harness-cross-cli: refusing launch: target pane is unresolved" >&2
+    exit 70
+}
+
+pane_id="$(tmux display-message -p -t "$target_pane" '#{pane_id}' 2>/dev/null)" || {
+    echo "harness-cross-cli: refusing launch: target pane does not resolve" >&2
+    exit 70
+}
+window_id="$(tmux display-message -p -t "$pane_id" '#{window_id}' 2>/dev/null)" || exit 70
+window_name="$(tmux display-message -p -t "$pane_id" '#{window_name}' 2>/dev/null)" || exit 70
+pane_title="$(tmux display-message -p -t "$pane_id" '#{pane_title}' 2>/dev/null)" || exit 70
+window_panes="$(tmux display-message -p -t "$pane_id" '#{window_panes}' 2>/dev/null)" || exit 70
+[ "$pane_id" = "$target_pane" ] || {
+    echo "harness-cross-cli: refusing launch: target resolved to a different pane" >&2
+    exit 70
+}
+
+log_event() {
+    local event="$1" observed="${2:-}" restored="${3:-false}"
+    jq -cn \
+        --arg event "$event" \
+        --arg pane_id "$pane_id" \
+        --arg window_id "$window_id" \
+        --arg snapshot_window "$window_name" \
+        --arg observed_window "$observed" \
+        --argjson restored "$restored" \
+        '{component:"harness-cross-cli",event:$event,pane_id:$pane_id,
+          window_id:$window_id,snapshot_window:$snapshot_window,
+          observed_window:$observed_window,restored:$restored}' >&2
+}
+
+if [ -n "$expected_window" ] && [ "$window_name" != "$expected_window" ]; then
+    [ "$window_panes" = "1" ] || {
+        log_event "preflight_shared_window_mismatch" "$window_name" false
+        exit 70
+    }
+    tmux rename-window -t "$window_id" "$expected_window" 2>/dev/null || {
+        log_event "preflight_restore_failed" "$window_name" false
+        exit 70
+    }
+    log_event "preflight_restored" "$window_name" true
+    window_name="$expected_window"
+fi
+
+child_pid=""
+signal_rc=0
+forward_signal() {
+    local sig="$1" rc="$2"
+    signal_rc="$rc"
+    [ -n "$child_pid" ] && kill "-$sig" "$child_pid" 2>/dev/null || true
+}
+trap 'forward_signal INT 130' INT
+trap 'forward_signal TERM 143' TERM
+
+restore_identity() {
+    local current_pane current_window current_name current_title restored=false
+    current_pane="$(tmux display-message -p -t "$pane_id" '#{pane_id}' 2>/dev/null)" || {
+        log_event "postflight_target_missing" "" false
+        return 0
+    }
+    current_window="$(tmux display-message -p -t "$pane_id" '#{window_id}' 2>/dev/null)" || return 0
+    current_name="$(tmux display-message -p -t "$pane_id" '#{window_name}' 2>/dev/null)" || return 0
+    current_title="$(tmux display-message -p -t "$pane_id" '#{pane_title}' 2>/dev/null)" || return 0
+    if [ "$current_pane" != "$pane_id" ] || [ "$current_window" != "$window_id" ]; then
+        log_event "postflight_ownership_changed" "$current_name" false
+        return 0
+    fi
+    # An isolated child cannot see the tmux socket or target pane, so any
+    # concurrent rename came from outside this launch and must be preserved.
+    if [ "$isolate_tmux" -eq 1 ]; then
+        if [ "$current_name" != "$window_name" ] || [ "$current_title" != "$pane_title" ]; then
+            log_event "postflight_external_drift" "$current_name" false
+        fi
+        return 0
+    fi
+    # A shared window has multiple legitimate owners. Only a single-pane
+    # snapshot gives this launch enough ownership to restore the window name.
+    if [ "$window_panes" = "1" ] && [ "$current_name" != "$window_name" ]; then
+        if tmux rename-window -t "$window_id" "$window_name" 2>/dev/null; then
+            restored=true
+        fi
+    fi
+    # A TUI may own a transient pane title. Restore it only when it was the
+    # canonical window identity before launch.
+    if [ "$pane_title" = "$window_name" ] && [ "$current_title" != "$pane_title" ]; then
+        tmux select-pane -t "$pane_id" -T "$pane_title" 2>/dev/null || true
+        restored=true
+    fi
+    if [ "$current_name" != "$window_name" ] || [ "$current_title" != "$pane_title" ]; then
+        log_event "postflight_drift" "$current_name" "$restored"
+    fi
+}
+trap 'restore_identity' EXIT
+
+# An asynchronous command gets /dev/null as stdin when job control is off
+# unless stdin is explicitly redirected. Preserve the caller's stdin for
+# interactive TUIs and commands such as `codex exec -`.
+run_child "$@" <&0 &
+child_pid=$!
+child_rc=0
+wait "$child_pid" || child_rc=$?
+if [ "$signal_rc" -ne 0 ]; then
+    wait "$child_pid" 2>/dev/null || true
+fi
+child_pid=""
+[ "$signal_rc" -eq 0 ] || exit "$signal_rc"
+exit "$child_rc"

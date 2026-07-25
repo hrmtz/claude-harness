@@ -32,23 +32,35 @@ same-family reviewers read the same text and found none of them.
 ## What's inside
 
 ```
-schemas/finding.schema.json   SSOT. codex takes --output-schema <file>; claude needs it inlined.
+schemas/finding.schema.json   Local validation SSOT, including conditional HIGH+ identity rules.
+schemas/finding.codex.schema.json
+                              Provider subset for Codex constrained decoding; deliberately stricter.
 schemas/implementation-convergence.schema.json
                               opt-in report-only implementation manifest
 schemas/preflight-{review,decision}.schema.json
                               one-shot Magi evidence and decision contracts
 schemas/preflight-run.schema.json
                               structural three-reviewer run binding
+schemas/protocol.external.json
+                              generated hash-bound external protocol payloads
 scripts/
   magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
+  magi_synthesize.py          lossless, deterministic synthesis envelope
   magi_xfamily.sh             provider-selectable adapter -> headless Claude or Grok
   magi_xfamily_claude.sh      backward-compatible Claude wrapper
   magi_campaign_guard.py      fixed global fuse + claim lifecycle + legacy migration
+  magi_classify_failure.py    bounded content-free fan-out failure classification
   magi_validate_findings.py   validates cross-field convergence rules after constrained output
   magi_verify_round.py        write-free G1-G6/G9 verification
   magi_git.py                 ambient-config-free Git object reads
   magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
+  magi_protocol.py            closed protocol identity + immutable claim snapshots
+  magi_rename_noreplace.py    atomic no-replace installer publication primitive
+  magi_verify_canonical_templates.py
+                              canonical prompt fingerprint verification
+  magi_verify_xfamily_artifacts.py
+                              cross-family findings/metadata pair verification
   magi_convergence_gate.py    report-only implementation convergence evaluator
   magi_convergence_kernel.py  pure normalization, delta, affordability, profile policy
   magi_design_convergence_gate.py
@@ -63,18 +75,25 @@ skills/{magi,dual-magi-review,ultramagi}/SKILL.md
 tests/                        exit codes, G-asserts, lock semantics, read-only rail, doc-drift
 ```
 
-Persona templates are **not** copied — they are read from the canonical `harness-magi` plugin.
-(The `harness-kimi` copies have already drifted from their originals.)
+One-shot Magi prompts are built deterministically by `magi_preflight.py` from the exact brief and
+the bundled review contract. Multi-round dual-magi persona templates are not maintained as
+hand-copied sources: fan-out reads the fingerprinted canonical files from `harness-magi` in a
+checkout. Native detached plugin packages carry a generated, hash-bound payload of those same
+external inputs. Each campaign materializes and pins one verified closed-protocol snapshot; the
+payload is not an independently editable template source.
 
 ## Install
 
-Preferred: install the native `harness-magi-codex` plugin from the repository
-Codex marketplace; see [`docs/codex_plugins.md`](../../docs/codex_plugins.md).
+Install both the native `harness-core` and `harness-magi-codex` plugins from the
+repository Codex marketplace; see
+[`docs/codex_plugins.md`](../../docs/codex_plugins.md). `harness-core` supplies
+the mandatory cross-CLI identity guard used for every reviewer launch.
 The legacy `install-codex-skills.sh` symlink flow remains only for migration and
 is removed with `uninstall-codex-skills.sh` after native plugin installation.
 Both commands refuse foreign skill paths: the installer will not replace an
 unowned directory or symlink, and the uninstaller removes only entries carrying
-the harness ownership marker.
+the harness ownership marker. The three skill publications commit as one
+generation; a later publication failure restores earlier predecessors.
 
 Requires `codex`, `flock`, `bubblewrap`, Python 3 with `jsonschema`, and the
 selected reviewer CLI (`claude` or `grok`). Magi pre-flight uses a private
@@ -84,6 +103,10 @@ is absent.
 A missing selected CLI fails closed (exit `2`). There is no automatic provider
 fallback: the caller must explicitly choose Grok so provenance and routing
 remain auditable.
+
+`MAGI_MAX_ARTIFACT_BYTES` may tighten the shared fan-out/cross-family review
+artifact ceiling from its 10 MiB default into `1..10485760`. Oversized input is
+refused before a campaign claim or provider launch.
 
 ## Use
 
@@ -114,15 +137,16 @@ D=docs/designs/MY_DESIGN.md; S=docs/designs/.dual-magi; mkdir -p "$S"
 
 python3 scripts/magi_autorun.py arm "$D"                              # once per campaign
 scripts/magi_fanout_codex.sh      "$D" 1 "$S" --persona-set magi     # same-family ×3
+python3 scripts/magi_synthesize.py "$D" 1 "$S" \
+  "$S/round_1_magi_synthesis.json" --persona-set magi
 python3 scripts/magi_design_convergence_gate.py evaluate "$D"
-# Synthesize the three outputs into $S/round_1_codex.json, then:
 scripts/magi_xfamily.sh --reviewer claude \
-  "$D" 2 "$S/round_1_codex.json" "$S/round_2_xfamily"
+  "$D" 2 "$S/round_1_magi_synthesis.json" "$S/round_2_xfamily"
 scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family claude
 
 # Explicit fallback when Claude is unavailable:
 scripts/magi_xfamily.sh --reviewer grok \
-  "$D" 2 "$S/round_1_codex.json" "$S/round_2_xfamily"
+  "$D" 2 "$S/round_1_magi_synthesis.json" "$S/round_2_xfamily"
 scripts/magi_plateau_gate.sh "$D" "$S/round_2_xfamily" --reviewer-family grok
 ```
 
@@ -145,12 +169,12 @@ python3 scripts/magi_review_packet.py \
 
 scripts/magi_fanout_codex.sh "$MANIFEST" 1 "$STATE" \
   --persona-set bug-hunt --prior -
+python3 scripts/magi_synthesize.py "$MANIFEST" 1 "$STATE" \
+  "$STATE/round_1_bug-hunt_synthesis.json" --persona-set bug-hunt
 python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST"
 
-# Required orchestrator step: synthesize the three round_1 persona JSON files into
-# "$STATE/round_1_codex.json" using the Synthesis provenance contract below.
 scripts/magi_xfamily.sh --reviewer claude "$MANIFEST" 2 \
-  "$STATE/round_1_codex.json" "$STATE/round_2_xfamily"
+  "$STATE/round_1_bug-hunt_synthesis.json" "$STATE/round_2_xfamily"
 FINAL_DECISION="$(python3 scripts/magi_convergence_gate.py evaluate "$MANIFEST")"
 printf '%s\n' "$FINAL_DECISION"
 if printf '%s' "$FINAL_DECISION" | python3 -c \
@@ -210,10 +234,13 @@ directory, canonical document identity, and immediately preceding round. Every o
 `new`, `duplicate`, `regression`, `readiness-gap`, or `scope-expansion`; the last two cannot be
 HIGH-or-worse.
 
-The synthesis must use `reviewer: SYNTHESIS`, list every preceding-round source filename and
-SHA-256 in `source_artifacts`, and disposition every `<source-file>#<finding_id>` as `carried`,
-`duplicate`, `resolved`, or `deferred`. This prevents a single reviewer output or incomplete
-subset from masquerading as the round synthesis.
+Create full-round synthesis artifacts only with `magi_synthesize.py`. It emits
+`reviewer: SYNTHESIS`, records every preceding-round source filename and SHA-256, and carries every
+`<source-file>#<finding_id>` into the provenance-specific
+`round_<N>_<persona-set>_synthesis.json` basename. This prevents a single reviewer output or
+incomplete subset from masquerading as the round synthesis. Incremental targeted review remains
+the exception: fan-out mechanically publishes its validated one-source
+`round_<N>_codex.json` wrapper.
 
 ## Campaign guard
 
@@ -237,7 +264,8 @@ Arming binds the workflow to the current Codex thread. On its intact path, the b
 moving without user acknowledgement until the exact-revision plateau marker exists or the
 controller records a definitive blocked state. Two continued turns with no durable document or
 ledger progress terminate blocked rather than loop. Hook input/registry/ledger parse or I/O errors
-fail open so the session may stop, while the independent campaign guard still bounds spend.
+return one visible `decision: block`, persist a blocked registry when possible, and rely on the
+independent campaign guard to keep provider spend bounded.
 
 Fan-out and cross-family calls have tightening-only deadlines via `MAGI_FANOUT_TIMEOUT_S` and
 `MAGI_XFAMILY_TIMEOUT_S` (default/max `900`).
@@ -317,11 +345,22 @@ Adapter exit codes: `0` complete · `2` fail-closed (no usable result; no platea
 ceiling arguments. Exit `2` also covers requirement-revision cleanup that cannot yet prove the
 verified owner tree and canonical lock are gone; retry the same cancellation, never launch around it.
 Fan-out exit `5` = a same-round sibling output already exists (re-running would contaminate).
+Before a claim, fan-out checks that the local Codex launcher exposes the required `exec` interface.
+That check writes only `round_<N>_fanout.PREFLIGHT_FAILED.json` metadata on failure. A charged
+reviewer failure writes `round_<N>_fanout.<claim-id>.FAILED.json` with provider/scrubber exit codes,
+byte counts, redaction counts, and a bounded classification. Neither failure artifact contains the
+provider response, prompt, document, or scrubbed log content, and neither occupies a canonical
+persona artifact path. Classifications distinguish missing child status, scrubber/provider/timeout
+failure, live-document drift, empty output, JSON parse/schema/convergence rejection, post-scrub
+corruption, and exact artifact-identity rejection.
+Fan-out lock I/O failure exits `2`; live lock contention exits `5`.
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
 `claude-fable-5`) · `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`) ·
 `MAGI_XFAMILY_TIMEOUT_S` (default `900`) · `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` (default `16`, tightening
 only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
+`MAGI_CANONICAL_SKILLS_DIR` may override the canonical `harness-magi/skills` template root for a
+compatible checkout layout.
 
 ## Tests
 
@@ -329,6 +368,7 @@ only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 python3 tests/test_docs_match_scripts.py     # doc-vs-code contract (exit codes, G-asserts, env)
 python3 tests/test_campaign_guard.py          # global fuse, rollover, migration, prior/schema contracts
 python3 tests/test_convergence_gate.py        # exact-SHA packet + bounded implementation convergence
+python3 tests/test_failure_classification.py  # content-free provider/FIFO/schema/identity diagnostics
 python3 tests/test_autorun.py                 # no-ack Stop continuation, plateau, terminal block
 bash    tests/test_fanout_scrub.sh           # FIFO pre-write scrub + three-persona/sibling rail
 bash    tests/test_inv7_lock.sh              # flock: both sides, concurrency, SIGKILL, recursion

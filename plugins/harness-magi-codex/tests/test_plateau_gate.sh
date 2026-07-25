@@ -4,12 +4,14 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
+GUARD="$HERE/../scripts/magi_campaign_guard.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 DOC="$TMP/design.md"; printf 'a design document\n' > "$DOC"
 MARKER_DIR="$TMP/.dual-magi"
 SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
 DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -d' ' -f1 | cut -c1-16)"
+PROTOCOL_SHA="$(python3 "$HERE/../scripts/magi_protocol.py" sha)"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
@@ -41,12 +43,13 @@ cat > "$HOME/.claude/projects/test/$SUPER_SID.jsonl" <<'JSONL'
 JSONL
 
 mkmeta() { # mkmeta <prefix> <model_id> <artifact_sha> <num_turns> <session_id> [requested_model]
-  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-$2}" <<'PY'
+  python3 - "$1" "$2" "$3" "$4" "$5" "${6:-$2}" "$PROTOCOL_SHA" <<'PY'
 import hashlib, json, sys
-prefix, model, sha, turns, sid, requested = sys.argv[1:7]
+prefix, model, sha, turns, sid, requested, protocol_sha = sys.argv[1:8]
 meta = {"session_id": sid, "model_id": model, "requested_model": requested,
         "model_usage_keys": [model],
         "num_turns": int(turns), "artifact_sha": sha, "permission_denials": [],
+        "protocol_sha": protocol_sha,
         "output_sha": hashlib.sha256(open(prefix + ".json","rb").read()).hexdigest()}
 json.dump(meta, open(prefix + ".meta.json","w"), indent=2)
 PY
@@ -75,6 +78,15 @@ denied() { # denied <case> <prefix>
     bad "$1 -> plateau GRANTED (should be denied)"
   else ok "$1 -> denied"; fi
 }
+
+claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$TMP" \
+  --owner-pid "$$" --adapter-kind fanout)" || exit 1
+claim_id="${claim_line##*CLAIM_ID=}"
+python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || exit 1
+claim_line="$(python3 "$GUARD" claim "$DOC" 2 xfamily "$TMP" \
+  --owner-pid "$$" --adapter-kind xfamily)" || exit 1
+claim_id="${claim_line##*CLAIM_ID=}"
+python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || exit 1
 
 # G1: missing cross-family round
 denied "G1 missing findings" "$TMP/g1"
@@ -294,6 +306,60 @@ if [ -n "$REAL_SID" ]; then
   else
     bad "valid round was denied (gate too strict)"
   fi
+
+  # Fault-inject the inline publication boundary from an isolated runtime copy.
+  # A real directory-fsync error must return nonzero and revoke the just-published marker.
+  for fault in eio einval protocol document; do
+    runtime="$TMP/gate-$fault"
+    mkdir -p "$runtime"
+    for dependency in "$HERE/../scripts/"*.py "$HERE/../scripts/magi_lock.sh"; do
+      ln -s "$dependency" "$runtime/$(basename "$dependency")"
+    done
+    case "$fault" in
+      eio)
+        sed 's/os\.fsync(directory_fd)/raise OSError(errno.EIO, "injected directory fsync failure")/' \
+          "$GATE" > "$runtime/magi_plateau_gate.sh"
+        ;;
+      einval)
+        sed 's/os\.fsync(directory_fd)/raise OSError(errno.EINVAL, "unsupported directory fsync")/' \
+          "$GATE" > "$runtime/magi_plateau_gate.sh"
+        ;;
+      protocol)
+        sed 's/publish_protocol_sha = protocol_sha()/publish_protocol_sha = "injected-protocol-drift"/' \
+          "$GATE" > "$runtime/magi_plateau_gate.sh"
+        ;;
+      document)
+        sed 's/post_publish_sha = hashlib.sha256(Path(doc).read_bytes()).hexdigest()/Path(doc).write_text("changed during publication\\\\n"); post_publish_sha = hashlib.sha256(Path(doc).read_bytes()).hexdigest()/' \
+          "$GATE" > "$runtime/magi_plateau_gate.sh"
+        ;;
+    esac
+    chmod +x "$runtime/magi_plateau_gate.sh"
+  done
+
+  rm -f "$MARKER_DIR"/PLATEAU.*
+  "$TMP/gate-eio/magi_plateau_gate.sh" "$DOC" "$P" >/dev/null 2>&1
+  [ $? -ne 0 ] && ! ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+    && ok "real directory-fsync failure returns nonzero and leaves no marker" \
+    || bad "real directory-fsync failure left an accepted marker or returned success"
+
+  rm -f "$MARKER_DIR"/PLATEAU.*
+  "$TMP/gate-einval/magi_plateau_gate.sh" "$DOC" "$P" >/dev/null 2>&1
+  [ $? -eq 0 ] && ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+    && ok "unsupported directory fsync preserves the flushed atomic marker" \
+    || bad "unsupported directory fsync produced an inconsistent publication result"
+
+  rm -f "$MARKER_DIR"/PLATEAU.*
+  "$TMP/gate-protocol/magi_plateau_gate.sh" "$DOC" "$P" >/dev/null 2>&1
+  [ $? -ne 0 ] && ! ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+    && ok "protocol mutation before publication denies and leaves no marker" \
+    || bad "protocol mutation was published as reviewed"
+
+  rm -f "$MARKER_DIR"/PLATEAU.*
+  "$TMP/gate-document/magi_plateau_gate.sh" "$DOC" "$P" >/dev/null 2>&1
+  [ $? -ne 0 ] && ! ls "$MARKER_DIR"/PLATEAU.* >/dev/null 2>&1 \
+    && ok "document mutation during publication revokes the marker and denies" \
+    || bad "document mutation during publication left an accepted marker"
+  printf 'a design document\n' > "$DOC"
 else
   echo "  skip - positive case (no local transcript to reference)"
 fi

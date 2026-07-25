@@ -624,6 +624,20 @@ class CampaignGuardTest(unittest.TestCase):
 
     def test_budget_denial_happens_before_provider_launch(self) -> None:
         self.fill_default_campaign()
+        stub_bin = self.root / "bin"
+        stub_bin.mkdir()
+        marker = self.root / "provider-started"
+        codex_stub = stub_bin / "codex"
+        codex_stub.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = exec ] && [ \"$2\" = --help ]; then\n"
+            "  echo '--output-schema --output-last-message --ephemeral'\n"
+            "  exit 0\n"
+            "fi\n"
+            f"touch {marker}\n"
+            "exit 70\n"
+        )
+        codex_stub.chmod(0o755)
         fanout = run(
             str(FANOUT),
             str(self.doc),
@@ -631,9 +645,11 @@ class CampaignGuardTest(unittest.TestCase):
             str(self.state),
             "--prior",
             str(self.prior),
+            env={"PATH": f"{stub_bin}:{os.environ['PATH']}"},
         )
         self.assertEqual(fanout.returncode, 4)
         self.assertIn("NOT PLATEAU", fanout.stderr)
+        self.assertFalse(marker.exists())
 
     def test_changed_artifact_can_roll_into_weight_one_targeted_pair(self) -> None:
         self.assertEqual(self.claim(1, "fanout").returncode, 0)

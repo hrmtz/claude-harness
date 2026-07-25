@@ -3,6 +3,9 @@
 # tmux display identity must share FORMATION_SELF; nested non-interactive Codex
 # must not overwrite its parent; standalone Kimi remains random.
 set -u
+unset HARNESS_TMUX_SELF_NAME_DISABLE HIPPOCAMPUS_TMUX_NAME_DISABLE
+unset KIMI_TMUX_NAME_DISABLE CODEX_TMUX_NAME_DISABLE CLAUDE_TMUX_NAME_DISABLE
+unset GROK_TMUX_NAME_DISABLE
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WRAPPER="$HERE/../kimi-wrapper.sh"
@@ -11,6 +14,7 @@ FORMATION="$ROOT/plugins/harness-formation/bin/formation"
 CLAUDE_CORE="$ROOT/plugins/harness-core/hooks/tmux_self_name_core.sh"
 CODEX_HOOK="$ROOT/plugins/harness-core/hooks/codex_tmux_self_name.sh"
 AGENTS_TEMPLATE="$ROOT/plugins/harness-kimi/AGENTS.md.template"
+KIMI_INSTALLER="$ROOT/plugins/harness-kimi/install-kimi-wrapper.sh"
 
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
@@ -27,6 +31,7 @@ case "$1" in
   display-message)
     format="${@: -1}"
     case "$format" in
+      '#{@formation_identity_locked}') printf '%s\n' "${TEST_FORMATION_LOCKED:-}" ;;
       '#{@formation_id}') printf '%s\n' "${TEST_FORMATION_ID:-}" ;;
       '#{window_panes}') printf '%s\n' "${TEST_WINDOW_PANES:-1}" ;;
       '#{window_name}') printf '%s\n' "${TEST_WINDOW_NAME:-shell}" ;;
@@ -39,11 +44,13 @@ case "$1" in
     ;;
   list-panes)
     case "$*" in
-      *'#{pane_id}|#{@formation_id}'*)
-        [ -n "${TEST_OTHER_FORMATION_ID:-}" ] && printf '%%88|%s\n' "$TEST_OTHER_FORMATION_ID"
+      *'#{pane_id}|'*)
+        other_id="${TEST_OTHER_FORMATION_LOCKED:-${TEST_OTHER_FORMATION_ID:-}}"
+        [ -n "$other_id" ] && printf '%%88|%s\n' "$other_id"
         ;;
       *'#{@formation_id}'*)
-        [ -n "${TEST_OTHER_FORMATION_ID:-}" ] && printf '%s\n' "$TEST_OTHER_FORMATION_ID"
+        other_id="${TEST_OTHER_FORMATION_LOCKED:-${TEST_OTHER_FORMATION_ID:-}}"
+        [ -n "$other_id" ] && printf '%s\n' "$other_id"
         ;;
     esac
     ;;
@@ -76,11 +83,14 @@ run_wrapper() {
   TMUX_PANE="%77" \
   TEST_TMUX_LOG="$TEST_ROOT/tmux.log" \
   TEST_FORMATION_ID="${TEST_FORMATION_ID:-}" \
+  TEST_FORMATION_LOCKED="${TEST_FORMATION_LOCKED:-}" \
   TEST_WINDOW_PANES="${TEST_WINDOW_PANES:-1}" \
   TEST_ANCESTOR_COMM="${TEST_ANCESTOR_COMM:-}" \
   TEST_OTHER_FORMATION_ID="${TEST_OTHER_FORMATION_ID:-}" \
+  TEST_OTHER_FORMATION_LOCKED="${TEST_OTHER_FORMATION_LOCKED:-}" \
+  HARNESS_KIMI_FORCE_INTERACTIVE_IDENTITY=1 \
   FORMATION_SELF="${FORMATION_SELF:-}" \
-  bash "$WRAPPER"
+  bash "$WRAPPER" "$@"
 }
 
 expect_log() {
@@ -127,6 +137,22 @@ expect_log "rename-window -t %77 kimi-standalone-test" "standalone Kimi display 
 expect_log "set-option -p -t %77 @formation_id standalone-test" "standalone Kimi display override seeds routing identity"
 
 : > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="kimi-help-test" run_wrapper --help
+if [[ ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "non-interactive Kimi help does not claim the parent pane"
+else
+  bad "non-interactive Kimi help mutated tmux identity"
+fi
+
+: > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="kimi-doctor-test" run_wrapper doctor
+if [[ ! -s "$TEST_ROOT/tmux.log" ]]; then
+  ok "Kimi utility subcommands do not claim the parent pane"
+else
+  bad "Kimi utility subcommand mutated tmux identity"
+fi
+
+: > "$TEST_ROOT/tmux.log"
 TEST_FORMATION_ID="" HARNESS_KIMI_DISPLAY_NAME="review-agent" run_wrapper
 expect_log "rename-window -t %77 review-agent" "standalone Kimi preserves an unprefixed display override"
 expect_log "set-option -p -t %77 @formation_id review-agent" "unprefixed Kimi display override seeds routing identity"
@@ -142,6 +168,21 @@ fi
 : > "$TEST_ROOT/tmux.log"
 TEST_FORMATION_ID="onyx-raven" TEST_WINDOW_NAME="kimi-muted-fox" run_wrapper
 expect_log "rename-window -t %77 kimi-onyx-raven" "standalone Kimi display follows existing routing identity"
+
+: > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_LOCKED="onyx-raven" TEST_FORMATION_ID="drifted-alias" \
+  TEST_WINDOW_NAME="kimi-drifted-alias" run_wrapper
+expect_log "set-option -p -t %77 @formation_id onyx-raven" "standalone Kimi repairs a drifted routing alias"
+expect_log "rename-window -t %77 kimi-onyx-raven" "standalone Kimi display follows locked identity"
+
+: > "$TEST_ROOT/tmux.log"
+TEST_FORMATION_ID="" TEST_OTHER_FORMATION_ID="drifted-alias" \
+  TEST_OTHER_FORMATION_LOCKED="review-agent" HARNESS_KIMI_DISPLAY_NAME="review-agent" run_wrapper
+if grep -Fq 'set-option -p -t %77 @formation_identity_locked review-agent' "$TEST_ROOT/tmux.log"; then
+  bad "Kimi reused another pane's locked identity"
+else
+  ok "Kimi collision check honors another pane's locked identity"
+fi
 
 : > "$TEST_ROOT/tmux.log"
 TEST_FORMATION_ID="parent-id" TEST_WINDOW_NAME="codex-parent-id" TEST_ANCESTOR_COMM="codex" run_wrapper
@@ -165,10 +206,20 @@ else
   bad "Formation initial window drifted ($got)"
 fi
 
-if grep -Fq -- 'tmux display-message -p -t "$TMUX_PANE" '\''#{@formation_id}|#{window_name}'\''' "$AGENTS_TEMPLATE"; then
-  ok "Kimi identity self-check targets its own pane"
+if grep -Fq -- 'tmux display-message -p -t "$TMUX_PANE" '\''#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'\''' "$AGENTS_TEMPLATE"; then
+  ok "Kimi identity self-check targets its own pane and prefers the lock"
 else
-  bad "Kimi identity self-check can read the parent client window"
+  bad "Kimi identity self-check can ignore the locked pane identity"
+fi
+if grep -Fq 'guard_command="$(' "$FORMATION" \
+   && grep -Fq -- '--target-pane' "$FORMATION" \
+   && grep -Fq -- '--allow-self-name' "$FORMATION" \
+   && grep -Fq '"$guard_command $(printf '\''%q'\'' "$CODEX_LAUNCH_BIN") ' "$FORMATION" \
+   && grep -Fq '"$guard_command kimi ' "$FORMATION" \
+   && grep -Fq '"$guard_command claude ' "$FORMATION"; then
+  ok "Formation routes every CLI through the shared explicit-pane launch guard"
+else
+  bad "Formation has an unguarded CLI launch path"
 fi
 
 : > "$TEST_ROOT/tmux.log"
@@ -219,6 +270,19 @@ else
   bad "standalone Codex context drifted from routing identity"
 fi
 expect_log "rename-window -t %77 codex-storm-lantern" "standalone Codex display follows existing routing identity"
+
+: > "$TEST_ROOT/tmux.log"
+codex_locked_json="$(printf '%s' '{"session_id":"standalone-locked"}' | \
+  PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" TMUX_PANE="%77" \
+  TEST_FORMATION_LOCKED="storm-lantern" TEST_FORMATION_ID="drifted-alias" \
+  TEST_WINDOW_NAME="codex-drifted-alias" TEST_PANE_TITLE="codex-drifted-alias" \
+  TEST_TMUX_LOG="$TEST_ROOT/tmux.log" bash "$CODEX_HOOK")"
+if [[ "$codex_locked_json" == *"storm-lantern"* ]]; then
+  ok "standalone Codex context follows locked identity"
+else
+  bad "standalone Codex context ignored locked identity"
+fi
+expect_log "set-option -p -t %77 @formation_id storm-lantern" "standalone Codex repairs a drifted routing alias"
 
 : > "$TEST_ROOT/tmux.log"
 codex_child_json="$(printf '%s' '{"session_id":"standalone-child"}' | \
@@ -297,6 +361,18 @@ fi
 expect_log "rename-window -t %77 claude-slate-rook" "standalone Claude display follows existing routing identity"
 
 : > "$TEST_ROOT/tmux.log"
+claude_locked_ctx="$(PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" \
+  TMUX_PANE="%77" TEST_FORMATION_LOCKED="slate-rook" TEST_FORMATION_ID="drifted-alias" \
+  TEST_WINDOW_NAME="claude-drifted-alias" TEST_TMUX_LOG="$TEST_ROOT/tmux.log" \
+  bash "$CLAUDE_CORE" --chassis claude --session-id standalone-claude-locked)"
+if [[ "$claude_locked_ctx" == *"slate-rook"* ]]; then
+  ok "standalone Claude context follows locked identity"
+else
+  bad "standalone Claude context ignored locked identity"
+fi
+expect_log "set-option -p -t %77 @formation_id slate-rook" "standalone Claude repairs a drifted routing alias"
+
+: > "$TEST_ROOT/tmux.log"
 claude_child_ctx="$(PATH="$TEST_ROOT/bin:$PATH" HOME="$TEST_ROOT/home" \
   TMUX_PANE="%77" TEST_FORMATION_ID="parent-id" \
   TEST_WINDOW_NAME="codex-parent-id" TEST_ANCESTOR_COMM="codex" TEST_TMUX_LOG="$TEST_ROOT/tmux.log" \
@@ -354,6 +430,19 @@ if [[ -z "$claude_collision_ctx" ]] \
   ok "legacy Claude sentinel refuses a duplicate routing identity"
 else
   bad "legacy Claude sentinel duplicated a live routing identity"
+fi
+
+INSTALL_HOME="$TEST_ROOT/install-home"
+mkdir -p "$INSTALL_HOME/.kimi-code/bin" "$INSTALL_HOME/.local/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$INSTALL_HOME/.kimi-code/bin/kimi"
+chmod +x "$INSTALL_HOME/.kimi-code/bin/kimi"
+if HOME="$INSTALL_HOME" bash "$KIMI_INSTALLER" >/dev/null \
+   && HOME="$INSTALL_HOME" bash "$KIMI_INSTALLER" >/dev/null \
+   && [ "$(readlink -f "$INSTALL_HOME/.local/bin/harness-cross-cli")" = \
+        "$(readlink -f "$ROOT/plugins/harness-core/bin/harness-cross-cli")" ]; then
+  ok "Kimi installer is idempotent with the shared guard symlink"
+else
+  bad "Kimi installer conflicts with the shared guard symlink"
 fi
 
 printf 'RESULT: %d passed, %d failed\n' "$PASS" "$FAIL"

@@ -26,6 +26,8 @@ VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 sys.path.insert(0, str(PLUGIN / "scripts"))
 import magi_campaign_guard as guard  # noqa: E402
 import magi_convergence_gate as convergence  # noqa: E402
+import magi_protocol  # noqa: E402
+import magi_verify_round  # noqa: E402
 
 
 def run(
@@ -46,11 +48,231 @@ def file_sha(path: Path) -> str:
 
 
 class ConvergenceGateTest(unittest.TestCase):
+    def test_protocol_snapshot_materializes_one_verified_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "snapshot"
+            magi_protocol.write_snapshot(destination)
+            payload = json.loads((destination / "manifest.json").read_text())
+            self.assertEqual(payload["protocol_sha"], magi_protocol.protocol_sha())
+            for item in payload["files"]:
+                self.assertEqual(file_sha(destination / item["path"]), item["sha256"])
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(magi_protocol.ProtocolError, r"does not match claim"):
+                magi_protocol.write_snapshot(Path(raw) / "snapshot", "0" * 64)
+
+    def test_detached_plugin_snapshot_materializes_embedded_external_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source = magi_protocol.runtime_root()
+            runtime = Path(raw) / "cache" / "harness-magi-codex" / "version"
+            for name in magi_protocol.RUNTIME_FILES:
+                target = runtime / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source / name).read_bytes())
+            destination = Path(raw) / "snapshot"
+            with (
+                mock.patch.object(magi_protocol, "runtime_root", return_value=runtime),
+                mock.patch.object(magi_protocol, "repository_root", return_value=None),
+            ):
+                magi_protocol.write_snapshot(destination)
+            for name in magi_protocol.REPOSITORY_FILES:
+                self.assertTrue((destination / name).is_file(), name)
+
+    def test_protocol_snapshot_reports_cleanup_failure_and_residual_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            destination = Path(raw) / "snapshot"
+            with (
+                mock.patch.object(
+                    magi_protocol,
+                    "manifest_generation",
+                    return_value=(
+                        [{"path": "missing", "sha256": "0" * 64}],
+                        {},
+                    ),
+                ),
+                mock.patch.object(
+                    magi_protocol.shutil,
+                    "rmtree",
+                    side_effect=OSError("injected cleanup refusal"),
+                ),
+                self.assertRaisesRegex(
+                    magi_protocol.ProtocolError,
+                    r"cleanup also failed.*residual destination",
+                ),
+            ):
+                magi_protocol.write_snapshot(destination)
+
+    def test_protocol_git_generation_uses_read_only_index(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            runtime = repo / "plugins" / "harness-magi-codex"
+            schemas = runtime / "schemas"
+            schemas.mkdir(parents=True)
+            external = repo / "external.txt"
+            external.write_text("first\n")
+            digest = hashlib.sha256(external.read_bytes()).hexdigest()
+            snapshot = schemas / "protocol.external.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "magi-external-contracts/v2",
+                        "files": [
+                            {
+                                "path": "external.txt",
+                                "sha256": digest,
+                                "content_base64": "Zmlyc3QK",
+                            }
+                        ],
+                    }
+                )
+            )
+            run("git", "init", str(repo))
+            run("git", "-C", str(repo), "config", "user.email", "test@example.invalid")
+            run("git", "-C", str(repo), "config", "user.name", "Test")
+            run("git", "-C", str(repo), "add", ".")
+            run("git", "-C", str(repo), "commit", "-m", "fixture")
+            external.write_text("second\n")
+            digest = hashlib.sha256(external.read_bytes()).hexdigest()
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "schema": "magi-external-contracts/v2",
+                        "files": [
+                            {
+                                "path": "external.txt",
+                                "sha256": digest,
+                                "content_base64": "c2Vjb25kCg==",
+                            }
+                        ],
+                    }
+                )
+            )
+            run("git", "-C", str(repo), "add", ".")
+            git_dirs = [repo / ".git" / "objects", *[
+                path for path in (repo / ".git" / "objects").rglob("*") if path.is_dir()
+            ]]
+            for path in git_dirs:
+                path.chmod(0o555)
+            try:
+                with (
+                    mock.patch.object(
+                        magi_protocol, "RUNTIME_FILES", ("schemas/protocol.external.json",)
+                    ),
+                    mock.patch.object(magi_protocol, "REPOSITORY_FILES", ("external.txt",)),
+                    mock.patch.object(magi_protocol, "runtime_root", return_value=runtime),
+                    mock.patch.object(magi_protocol, "repository_root", return_value=repo),
+                ):
+                    entries, payloads = magi_protocol.git_generation() or ([], {})
+                self.assertEqual(
+                    [item["path"] for item in entries],
+                    ["external.txt", "plugins/harness-magi-codex/schemas/protocol.external.json"],
+                )
+                self.assertEqual(payloads["external.txt"], b"second\n")
+            finally:
+                for path in reversed(git_dirs):
+                    path.chmod(0o755)
+
+    def test_protocol_git_generation_ignores_ambient_repository_overrides(self) -> None:
+        expected = magi_protocol.protocol_sha()
+        with tempfile.TemporaryDirectory() as raw:
+            foreign = Path(raw)
+            run("git", "init", str(foreign))
+            with mock.patch.dict(
+                os.environ,
+                {"GIT_DIR": str(foreign / ".git"), "GIT_WORK_TREE": str(foreign)},
+            ):
+                self.assertEqual(magi_protocol.protocol_sha(), expected)
+
+    def test_protocol_snapshot_manifest_requires_exact_closed_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            runtime = root / "plugins" / "harness-magi-codex"
+            runtime.mkdir(parents=True)
+            (runtime / "runtime.txt").write_text("runtime\n")
+            (root / "external.txt").write_text("external\n")
+            valid_entries = [
+                {
+                    "path": "external.txt",
+                    "sha256": hashlib.sha256((root / "external.txt").read_bytes()).hexdigest(),
+                },
+                {
+                    "path": "plugins/harness-magi-codex/runtime.txt",
+                    "sha256": hashlib.sha256(
+                        (runtime / "runtime.txt").read_bytes()
+                    ).hexdigest(),
+                },
+            ]
+            marker = root / "manifest.json"
+            malformed = (
+                [],
+                valid_entries[:1],
+                [valid_entries[0], valid_entries[0]],
+                list(reversed(valid_entries)),
+                [
+                    valid_entries[0],
+                    {"path": "../runtime.txt", "sha256": "0" * 64},
+                ],
+            )
+            with (
+                mock.patch.object(magi_protocol, "RUNTIME_FILES", ("runtime.txt",)),
+                mock.patch.object(magi_protocol, "REPOSITORY_FILES", ("external.txt",)),
+                mock.patch.object(magi_protocol, "runtime_root", return_value=runtime),
+            ):
+                for entries in malformed:
+                    with self.subTest(entries=entries):
+                        marker.write_text(
+                            json.dumps(
+                                {
+                                    "schema": "magi-protocol-snapshot/v1",
+                                    "protocol_sha": "0" * 64,
+                                    "files": entries,
+                                }
+                            )
+                        )
+                        with self.assertRaisesRegex(
+                            magi_protocol.ProtocolError, r"snapshot (file|path)"
+                        ):
+                            magi_protocol.snapshot_generation()
+
+    def test_malformed_transcript_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            transcript = Path(raw) / "transcript.jsonl"
+            transcript.write_text('{"message":{"model":"claude-fable-5"}}\n{broken\n')
+            with self.assertRaisesRegex(ValueError, r"transcript\.jsonl:2"):
+                magi_verify_round._models_and_tools(transcript, "claude")
+            transcript.write_text('[]\n')
+            with self.assertRaisesRegex(ValueError, r"record must be an object"):
+                magi_verify_round._models_and_tools(transcript, "claude")
+            transcript.write_text('{"message":"not-an-object"}\n')
+            with self.assertRaisesRegex(ValueError, r"message must be an object"):
+                magi_verify_round._models_and_tools(transcript, "claude")
+
+    def test_transcript_line_limit_is_enforced_before_unbounded_read(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            transcript = Path(raw) / "transcript.jsonl"
+            prefix = b'{"message":{"model":"claude-fable-5","content":[]},"padding":"'
+            suffix = b'"}\n'
+            padding = (
+                magi_verify_round.MAX_TRANSCRIPT_LINE_BYTES
+                - len(prefix)
+                - len(suffix)
+            )
+            transcript.write_bytes(prefix + b"x" * padding + suffix)
+            self.assertEqual(
+                magi_verify_round._models_and_tools(transcript, "claude"),
+                ({"claude-fable-5"}, 0),
+            )
+            transcript.write_bytes(prefix + b"x" * (padding + 1) + suffix)
+            with self.assertRaisesRegex(ValueError, r"line exceeds.*byte limit"):
+                magi_verify_round._models_and_tools(transcript, "claude")
+
     def test_protocol_digest_covers_load_bearing_convergence_files(self) -> None:
         expected = {
             "schemas/finding.schema.json",
+            "schemas/finding.codex.schema.json",
             "schemas/implementation-convergence.schema.json",
             "scripts/magi_campaign_guard.py",
+            "scripts/magi_classify_failure.py",
+            "scripts/magi_codex_schema_preflight.py",
             "scripts/magi_convergence_gate.py",
             "scripts/magi_convergence_kernel.py",
             "scripts/magi_design_convergence_gate.py",
@@ -345,7 +567,9 @@ class ConvergenceGateTest(unittest.TestCase):
             (output_state / f"round_{round_no}_xfamily.meta.json").write_text(
                 json.dumps(
                     {
+                        "round": round_no,
                         "artifact_sha": artifact_sha,
+                        "protocol_sha": guard.protocol_sha(),
                         "output_sha": file_sha(findings),
                         "reviewer_family": "grok",
                         "model_id": "grok-4.5-build",
@@ -649,6 +873,9 @@ class ConvergenceGateTest(unittest.TestCase):
             """#!/usr/bin/env python3
 import json, re, sys
 args = sys.argv[1:]
+if args == ["exec", "--help"]:
+    print("--output-schema --output-last-message --ephemeral")
+    raise SystemExit(0)
 out = args[args.index("-o") + 1]
 prompt = sys.stdin.read()
 def field(name):

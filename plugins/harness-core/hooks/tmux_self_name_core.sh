@@ -14,6 +14,10 @@
 # Sentinel: $HOME/.local/state/tmux_self_name/<session_id>  (one line: <name>)
 set -uo pipefail
 
+[ "${HARNESS_TMUX_SELF_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${CLAUDE_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+[ "${HIPPOCAMPUS_TMUX_NAME_DISABLE:-0}" = "1" ] && exit 0
+
 CHASSIS="claude"
 SESSION_ID=""
 while [ $# -gt 0 ]; do
@@ -36,28 +40,7 @@ SENTINEL="$SENTINEL_DIR/${SESSION_ID}"
 
 find "$SENTINEL_DIR" -type f -mtime +30 -delete 2>/dev/null || true
 
-# Formation owns this pane's routing and self-reference identity. Bypass random
-# and pane-keyed sentinel naming so compact/resume and pane-id reuse cannot
-# split the worker into multiple identities.
-if [ -n "${FORMATION_SELF:-}" ]; then
-    PANE_FORMATION_ID=$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)
-    [ "$PANE_FORMATION_ID" = "$FORMATION_SELF" ] || exit 0
-    NAME="${CHASSIS}-${FORMATION_SELF}"
-    WINDOW_PANES=$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)
-    if [ "$WINDOW_PANES" = "1" ]; then
-        tmux rename-window -t "$TMUX_PANE" "$NAME" 2>/dev/null || true
-    fi
-    tmux select-pane -t "$TMUX_PANE" -T "$NAME" 2>/dev/null || true
-    cat <<EOF
-## Formation identity anchor (tmux pane $TMUX_PANE)
-
-あなたの Formation identity は **${FORMATION_SELF}** デス (= routing id / self-reference の source of truth、 ${CHASSIS} chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${FORMATION_SELF}** を使う。 compact/resume 後も変更禁止。
-EOF
-    exit 0
-fi
-
-# Standalone sessions can also carry a stable mailbox identity. Prefer it over
-# a session sentinel so routing, display, and self-reference cannot diverge.
+PANE_FORMATION_LOCKED=$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_identity_locked}' 2>/dev/null || true)
 PANE_FORMATION_ID=$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)
 CURRENT_WINDOW_NAME=$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)
 WINDOW_PANES=$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)
@@ -76,9 +59,47 @@ has_foreign_chassis_ancestor() {
     return 1
 }
 
+# A nested Claude process can inherit both the pane and FORMATION_SELF from its
+# parent. Never repair or rename that borrowed pane.
+has_foreign_chassis_ancestor && exit 0
+
+# Formation owns this pane's routing and self-reference identity. Bypass random
+# and pane-keyed sentinel naming so compact/resume and pane-id reuse cannot
+# split the worker into multiple identities.
+if [ -n "${FORMATION_SELF:-}" ]; then
+    PANE_FORMATION_OWNER="${PANE_FORMATION_LOCKED:-$PANE_FORMATION_ID}"
+    [ "$PANE_FORMATION_OWNER" = "$FORMATION_SELF" ] || exit 0
+    [ -n "$PANE_FORMATION_LOCKED" ] \
+        || tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$FORMATION_SELF" >/dev/null 2>&1 || true
+    [ "$PANE_FORMATION_ID" = "$FORMATION_SELF" ] \
+        || tmux set-option -p -t "$TMUX_PANE" @formation_id "$FORMATION_SELF" >/dev/null 2>&1 || true
+    NAME="${CHASSIS}-${FORMATION_SELF}"
+    if [ "$WINDOW_PANES" = "1" ]; then
+        tmux rename-window -t "$TMUX_PANE" "$NAME" 2>/dev/null || true
+    fi
+    tmux select-pane -t "$TMUX_PANE" -T "$NAME" 2>/dev/null || true
+    cat <<EOF
+## Formation identity anchor (tmux pane $TMUX_PANE)
+
+あなたの Formation identity は **${FORMATION_SELF}** デス (= routing id / self-reference の source of truth、 ${CHASSIS} chassis)。 window/pane title は **${NAME}**。 user への第一声と以降の self-reference には **${FORMATION_SELF}** を使う。 compact/resume 後も変更禁止。
+EOF
+    exit 0
+fi
+
+# Standalone sessions can also carry a stable mailbox identity. Prefer it over
+# a session sentinel so routing, display, and self-reference cannot diverge.
+if [ -n "$PANE_FORMATION_LOCKED" ]; then
+    [ "$PANE_FORMATION_ID" = "$PANE_FORMATION_LOCKED" ] \
+        || tmux set-option -p -t "$TMUX_PANE" @formation_id "$PANE_FORMATION_LOCKED" >/dev/null 2>&1 || true
+    PANE_FORMATION_ID="$PANE_FORMATION_LOCKED"
+elif [ -n "$PANE_FORMATION_ID" ]; then
+    tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$PANE_FORMATION_ID" >/dev/null 2>&1 || true
+    PANE_FORMATION_LOCKED="$PANE_FORMATION_ID"
+fi
+
 routing_id_in_use() {
     local ident="$1"
-    tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+    tmux list-panes -a -F '#{pane_id}|#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
         | awk -F '|' -v target="$TMUX_PANE" -v ident="$ident" \
             '$1 != target && $2 == ident { found=1 } END { exit !found }'
 }
@@ -93,7 +114,7 @@ case "$CURRENT_WINDOW_NAME" in
 esac
 
 if [ -n "$PANE_FORMATION_ID" ]; then
-    if tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+    if tmux list-panes -a -F '#{pane_id}|#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
         | awk -F '|' -v target="$TMUX_PANE" -v ident="$PANE_FORMATION_ID" \
             '$1 != target && $2 == ident { found=1 } END { exit !found }'; then
         exit 0
@@ -120,6 +141,7 @@ if [ -f "$SENTINEL" ]; then
                 EXISTING_ID="${EXISTING_NAME#${CHASSIS}-}"
                 routing_id_in_use "$EXISTING_ID" && exit 0
                 tmux set-option -p -t "$TMUX_PANE" @formation_id "$EXISTING_ID" >/dev/null 2>&1 || true
+                tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$EXISTING_ID" >/dev/null 2>&1 || true
                 ;;
             *) exit 0 ;;
         esac
@@ -186,6 +208,7 @@ echo "$NAME" > "$SENTINEL"
 
 CODENAME="${NAME#${CHASSIS}-}"
 tmux set-option -p -t "$TMUX_PANE" @formation_id "$CODENAME" >/dev/null 2>&1 || true
+tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$CODENAME" >/dev/null 2>&1 || true
 cat <<EOF
 ## Identity assignment (tmux self-naming)
 

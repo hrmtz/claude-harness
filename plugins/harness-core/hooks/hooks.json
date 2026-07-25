@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stall_autocontinue.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stall_autocontinue.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/stall_autocontinue.sh",
             "timeout": 10
           }
         ]
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/sr_depth_gate.py\" --hook 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
             "timeout": 15
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/sr_depth_gate.py\" --hook 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/sr_depth_gate.py --hook 2>/dev/null || exit 0",
             "timeout": 15
           }
         ]
@@ -38,27 +38,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/bash_command_guard.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_command_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/bash_command_guard.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/branch_policy_guard.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/branch_policy_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/branch_policy_guard.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/long_task_advisor.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/long_task_advisor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/long_task_advisor.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pg_rotation_propagation_guard.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pg_rotation_propagation_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/pg_rotation_propagation_guard.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/sanada_autobackup.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/sanada_autobackup.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/sanada_autobackup.sh",
             "timeout": 12
           }
         ]
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/credential_file_read_guard.sh",
             "timeout": 5
           }
         ]
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/credential_file_read_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/credential_file_read_guard.sh",
             "timeout": 5
           }
         ]
@@ -88,12 +88,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/check_zsh_reserved_vars.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/check_zsh_reserved_vars.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/check_zsh_reserved_vars.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/check_early_check_timer.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/check_early_check_timer.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/check_early_check_timer.sh",
             "timeout": 5
           }
         ]
@@ -105,7 +105,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_value_scrub.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/credential_value_scrub.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/credential_value_scrub.sh",
             "timeout": 10
           }
         ]
@@ -115,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/credential_scrub.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/credential_scrub.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/credential_scrub.sh",
             "timeout": 30
           }
         ]
@@ -126,12 +126,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/admission_reminder.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/admission_reminder.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/admission_reminder.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/code_review_suggest.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/code_review_suggest.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/code_review_suggest.sh",
             "timeout": 5
           }
         ]
@@ -142,28 +142,33 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/temporal_anchor.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/tmux_self_name.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/ghost_inject.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/recent_topics_inject.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/codex_hippocampus_session_start.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/install-cache-safe-entrypoints\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/temporal_anchor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/temporal_anchor.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/tmux_self_name.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/tmux_self_name.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ghost_inject.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/ghost_inject.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/recent_topics_inject.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/recent_topics_inject.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/codex_hippocampus_session_start.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/codex_hippocampus_session_start.sh",
+            "timeout": 20
           }
         ]
       }

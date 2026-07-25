@@ -71,10 +71,13 @@ seed_campaign() {
 seed_campaign || exit 1
 
 # --- run 1: succeeds ---
-"$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >/dev/null 2>&1
+"$ADAPTER" "$DOC" 2 "$PRIOR" "$STATE/round_2_xfamily" >"$TMP/run1.log" 2>&1
 rc1=$?
 [ $rc1 -eq 0 ] && [ -s "$STATE/round_2_xfamily.json" ] \
-    && ok "run 1 succeeded and wrote findings" || bad "run 1 rc=$rc1 (expected 0 with findings)"
+    && ok "run 1 succeeded and wrote findings" || {
+      sed -n '1,160p' "$TMP/run1.log" >&2
+      bad "run 1 rc=$rc1 (expected 0 with findings)"
+    }
 
 "$GATE" "$DOC" "$STATE/round_2_xfamily" >/dev/null 2>&1 \
     && ok "gate grants plateau on the valid round" || bad "gate refused a valid round"

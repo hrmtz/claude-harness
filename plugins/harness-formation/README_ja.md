@@ -39,11 +39,15 @@ worker 起動のコストは「fresh な AI agent プロセス (claude or codex)
 ```bash
 # Claude Code 内
 /plugin marketplace add github:hrmtz/claude-harness
+/plugin install harness-core@claude-harness
 /plugin install harness-formation@claude-harness
 
 # CLI を PATH に置く
 ln -sfn ~/.claude/plugins/harness-formation/bin/formation ~/.local/bin/formation
 ```
+
+`harness-core` は全 Formation worker 起動で使う cross-CLI identity guard を提供する。
+両 plugin を install すること。guard が見つからない場合、Formation は fail closed する。
 
 plugin install 後、hook は `hooks/hooks.json` 経由で Claude Code に配線される。CLI は `~/.local/bin/formation` など PATH 上に symlink して使う。ランタイム状態は `~/.formation/` (mailbox と registry、git 管理外) に作られる。既存の legacy runtime dir がある場合は自動検出する。
 

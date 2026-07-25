@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Fan-out regression: raw reviewer bytes travel through FIFOs and only scrubbed artifacts persist.
 set -uo pipefail
+# Model a stale inherited TMUX_PANE without binding the fixture to the
+# developer's current tmux server.
+unset TMUX
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FANOUT="$HERE/../scripts/magi_fanout_codex.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -9,25 +12,46 @@ DOC="$TMP/design.md"; printf '%s\n' 'a test design' > "$DOC"
 
 cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
+if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then
+  printf '%s\n' '--output-schema --output-last-message --ephemeral'
+  exit 0
+fi
 if [ -n "${STUB_TMUX_LOG:-}" ]; then
   if [ -z "${TMUX_PANE+x}" ]; then printf 'unset\n' >> "$STUB_TMUX_LOG"
   else printf 'inherited:%s\n' "$TMUX_PANE" >> "$STUB_TMUX_LOG"; fi
 fi
 out=""
+schema=""
 while [ $# -gt 0 ]; do
-  if [ "$1" = "-o" ]; then out="$2"; shift 2; else shift; fi
+  if [ "$1" = "-o" ]; then out="$2"; shift 2
+  elif [ "$1" = "--output-schema" ]; then schema="$2"; shift 2
+  elif [ "$1" = "-C" ]; then
+    [ -z "${STUB_ARGS_LOG:-}" ] || printf '%s\n' "$2" >> "$STUB_ARGS_LOG"
+    shift 2
+  else shift; fi
 done
+[ -z "${STUB_CALLED:-}" ] || printf 'called\n' >> "$STUB_CALLED"
+[ -z "$schema" ] || ! grep -q '"allOf"' "$schema" || {
+  printf '%s\n' "invalid_json_schema: In context=('properties', 'findings', 'items'), 'allOf' is not permitted." >&2
+  exit 1
+}
 [ -n "$out" ] || exit 64
 if [ -n "${STUB_INVALID:-}" ]; then printf '{}\n' > "$out"; exit 0; fi
 if [ -n "${STUB_HANG:-}" ]; then sleep 60; exit 1; fi
 prompt="$(cat)"
 artifact_id="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT ID: //p' | head -n 1)"
 artifact_sha="$(printf '%s\n' "$prompt" | sed -n 's/^ARTIFACT SHA256: //p' | head -n 1)"
+reviewer="$(printf '%s\n' "$prompt" | sed -n 's/^You are the \([^ ]*\) reviewer.*/\1/p' | head -n 1 | tr '[:lower:]' '[:upper:]')"
+[ -z "${STUB_WRONG_REVIEWER:-}" ] || reviewer="WRONG"
 marker="Bearer "
 marker="${marker}AAAAAAAAAAAA"
-printf '{"reviewer":"STUB","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
-  "$artifact_id" "$artifact_sha" "$marker" > "$out"
+grounding="${STUB_GROUNDING:-PASS}"
+commands='["'"$marker"'"]'
+[ -z "${STUB_EMPTY_COMMANDS:-}" ] || commands='[]'
+printf '{"reviewer":"%s","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"%s","verify_commands_executed":%s,"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$reviewer" "$artifact_id" "$artifact_sha" "$grounding" "$commands" > "$out"
 printf '%s\n' "$marker"
+[ -z "${STUB_EXIT:-}" ] || exit 70
 if [ -n "${STUB_CANCEL:-}" ] && printf '%s\n' "$prompt" | grep -q 'You are the CASPAR reviewer'; then
   sleep 60
 fi
@@ -37,6 +61,90 @@ chmod +x "$TMP/bin/codex"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
+
+# Reproduce the provider's exact rejection deterministically.  The adapter must discover it before
+# campaign claim (and before provider invocation), leaving usage and the xfamily reserve untouched.
+INCOMPAT_DOC="$TMP/incompatible.md"; printf '%s\n' 'unsupported schema fixture' > "$INCOMPAT_DOC"
+INCOMPAT_OUT="$TMP/incompatible-out"; mkdir -p "$INCOMPAT_OUT"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" \
+  "$HERE/../schemas/finding.schema.json" \
+  >"$TMP/incompatible.stdout" 2>"$TMP/incompatible.stderr"
+incompat_rc=$?
+if [ "$incompat_rc" -eq 64 ] \
+    && grep -q 'provider-incompatible.*allOf' "$TMP/incompatible.stderr" \
+    && [ ! -d "$TMP/.dual-magi" ]; then
+  ok "unsupported allOf fails deterministic provider-schema preflight"
+else
+  bad "unsupported schema passed deterministic preflight (rc=$incompat_rc)"
+fi
+
+DEPENDENT_SCHEMA="$TMP/dependent-schema.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false,"dependentRequired":{"value":["other"]}}' \
+  > "$DEPENDENT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$DEPENDENT_SCHEMA" \
+  >"$TMP/dependent.stdout" 2>"$TMP/dependent.stderr"
+dependent_rc=$?
+if [ "$dependent_rc" -eq 64 ] \
+    && grep -q 'provider-incompatible.*dependentRequired' "$TMP/dependent.stderr"; then
+  ok "dependent schema keywords fail provider preflight"
+else
+  bad "schema preflight accepted a dependent schema keyword"
+fi
+
+MISSING_REQUIRED_SCHEMA="$TMP/missing-required.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"kept":{"type":"string"},"missing":{"type":"string"}},"required":["kept"],"additionalProperties":false}' \
+  > "$MISSING_REQUIRED_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$MISSING_REQUIRED_SCHEMA" \
+  >"$TMP/missing-required.stdout" 2>"$TMP/missing-required.stderr"
+missing_required_rc=$?
+if [ "$missing_required_rc" -eq 64 ] \
+    && grep -q 'required missing provider-required properties missing' \
+      "$TMP/missing-required.stderr"; then
+  ok "provider-required property omissions fail schema preflight"
+else
+  bad "schema preflight accepted a property omitted from required"
+fi
+
+OPEN_OBJECT_SCHEMA="$TMP/open-object.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}' \
+  > "$OPEN_OBJECT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$OPEN_OBJECT_SCHEMA" \
+  >"$TMP/open-object.stdout" 2>"$TMP/open-object.stderr"
+open_object_rc=$?
+if [ "$open_object_rc" -eq 64 ] \
+    && grep -q 'additionalProperties must be false' "$TMP/open-object.stderr"; then
+  ok "open object schemas fail provider preflight"
+else
+  bad "schema preflight accepted an open object"
+fi
+
+KEYWORD_PROPERTY_SCHEMA="$TMP/keyword-property.json"
+printf '%s\n' \
+  '{"type":"object","properties":{"if":{"type":"string"}},"required":["if"],"additionalProperties":false}' \
+  > "$KEYWORD_PROPERTY_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$KEYWORD_PROPERTY_SCHEMA" \
+  >"$TMP/keyword-property.stdout" 2>"$TMP/keyword-property.stderr"
+keyword_property_rc=$?
+if [ "$keyword_property_rc" -eq 0 ]; then
+  ok "property names matching schema keywords remain valid"
+else
+  bad "schema preflight confused a property name with a schema keyword"
+fi
+
+NON_OBJECT_SCHEMA="$TMP/non-object.json"
+printf '%s\n' '{"type":"string"}' > "$NON_OBJECT_SCHEMA"
+python3 "$HERE/../scripts/magi_codex_schema_preflight.py" "$NON_OBJECT_SCHEMA" \
+  >"$TMP/non-object.stdout" 2>"$TMP/non-object.stderr"
+non_object_rc=$?
+if [ "$non_object_rc" -eq 64 ] \
+    && grep -q 'root type must be object' "$TMP/non-object.stderr"; then
+  ok "non-object provider schemas fail preflight"
+else
+  bad "schema preflight accepted a non-object root"
+fi
 
 STUB_TMUX_LOG="$TMP/tmux-env" TMUX_PANE="%57" \
   PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
@@ -90,10 +198,121 @@ PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
 mkdir -p "$TMP/invalid"
 INVALID_DOC="$TMP/invalid-design.md"; printf '%s\n' 'another design' > "$INVALID_DOC"
 STUB_INVALID=1 PATH="$TMP/bin:$PATH" "$FANOUT" "$INVALID_DOC" 1 "$TMP/invalid" >/dev/null 2>&1
-if [ $? -ne 0 ] && ! find "$TMP/invalid" -name 'round_1_*.json' -type f | grep -q .; then
-  ok "durable JSON is schema-validated and invalid partials are cleared"
+invalid_rc=$?
+invalid_diag="$(find "$TMP/invalid" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' -type f | head -n 1)"
+if [ "$invalid_rc" -ne 0 ] \
+    && ! find "$TMP/invalid" -maxdepth 1 \( -name 'round_1_melchior.json' -o \
+        -name 'round_1_balthasar.json' -o -name 'round_1_caspar.json' \) | grep -q . \
+    && [ -s "$invalid_diag" ] \
+    && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' "$invalid_diag")" \
+         = "json-schema-rejection" ]; then
+  ok "invalid partials clear while bounded schema diagnostics persist"
 else
-  bad "schema-invalid durable output passed fan-out"
+  bad "schema-invalid output was published or not durably classified"
+fi
+
+mkdir -p "$TMP/wrong-identity"
+WRONG_DOC="$TMP/wrong-identity-design.md"; printf '%s\n' 'identity fixture' > "$WRONG_DOC"
+STUB_WRONG_REVIEWER=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$WRONG_DOC" 1 "$TMP/wrong-identity" >/dev/null 2>&1
+wrong_rc=$?
+wrong_diag="$(
+  find "$TMP/wrong-identity" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+    -type f | head -n 1
+)"
+if [ "$wrong_rc" -ne 0 ] && [ -s "$wrong_diag" ] \
+    && [ "$(jq -r '[.reviewers[] | .classification + ":" + .identity_field] | unique | join(",")' \
+        "$wrong_diag")" = "artifact-identity-rejection:reviewer" ]; then
+  ok "reviewer identity mismatch is fail-closed and classified"
+else
+  bad "reviewer identity mismatch escaped or was misclassified"
+fi
+
+for grounding in PASS PARTIAL FAIL; do
+  grounding_dir="$TMP/grounding-$grounding"
+  grounding_doc="$TMP/grounding-$grounding.md"
+  mkdir -p "$grounding_dir"
+  printf 'grounding fixture %s\n' "$grounding" > "$grounding_doc"
+  STUB_GROUNDING="$grounding" STUB_EMPTY_COMMANDS=1 PATH="$TMP/bin:$PATH" \
+    "$FANOUT" "$grounding_doc" 1 "$grounding_dir" >"$grounding_dir/run.log" 2>&1
+  grounding_rc=$?
+  grounding_diag="$(
+    find "$grounding_dir" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+      -type f | head -n 1
+  )"
+  if [ "$grounding_rc" -ne 0 ] && [ -s "$grounding_diag" ] \
+      && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' \
+          "$grounding_diag")" = "convergence-rule-rejection" ] \
+      && jq -e '[.reviewers[].diagnostic] | all(test("grounding|verification"))' \
+          "$grounding_diag" >/dev/null; then
+    ok "$grounding with empty verification commands is rejected with diagnostics"
+  else
+    bad "$grounding with empty verification commands escaped grounding validation"
+  fi
+done
+
+mkdir -p "$TMP/provider-exit"
+EXIT_DOC="$TMP/provider-exit-design.md"; printf '%s\n' 'provider exit fixture' > "$EXIT_DOC"
+STUB_EXIT=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$EXIT_DOC" 1 "$TMP/provider-exit" >/dev/null 2>&1
+exit_rc=$?
+exit_diag="$(
+  find "$TMP/provider-exit" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+    -type f | head -n 1
+)"
+if [ "$exit_rc" -ne 0 ] && [ -s "$exit_diag" ] \
+    && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' "$exit_diag")" \
+         = "provider-exit" ] \
+    && ! rg -F 'Bearer' "$TMP/provider-exit" >/dev/null 2>&1 \
+    && ! rg -F 'REDACTED' "$TMP/provider-exit" >/dev/null 2>&1; then
+  ok "provider failure persists metadata only, without scrubbed payload content"
+else
+  bad "provider failure diagnostic retained content or lost its classification"
+fi
+
+mkdir -p "$TMP/broken-bin" "$TMP/preflight"
+cat > "$TMP/broken-bin/codex" <<'STUB'
+#!/usr/bin/env bash
+exit 127
+STUB
+chmod +x "$TMP/broken-bin/codex"
+PREFLIGHT_DOC="$TMP/preflight-design.md"; printf '%s\n' 'preflight fixture' > "$PREFLIGHT_DOC"
+preflight_launches_before="$(python3 - "$TMP/.dual-magi" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+print(sum(
+    len(campaign.get("launches") or [])
+    for path in root.glob("CAMPAIGN.*.json")
+    for campaign in (json.loads(path.read_text()).get("campaigns") or [])
+))
+PY
+)"
+PATH="$TMP/broken-bin:$PATH" "$FANOUT" "$PREFLIGHT_DOC" 1 "$TMP/preflight" \
+  >/dev/null 2>&1
+preflight_rc=$?
+preflight_diag="$TMP/preflight/round_1_fanout.PREFLIGHT_FAILED.json"
+preflight_launches_after="$(python3 - "$TMP/.dual-magi" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+print(sum(
+    len(campaign.get("launches") or [])
+    for path in root.glob("CAMPAIGN.*.json")
+    for campaign in (json.loads(path.read_text()).get("campaigns") or [])
+))
+PY
+)"
+if [ "$preflight_rc" -ne 0 ] && [ -s "$preflight_diag" ] \
+    && [ "$(jq -r '.classification' "$preflight_diag")" = "cli-interface-preflight" ] \
+    && [ "$preflight_launches_after" -eq "$preflight_launches_before" ]; then
+  ok "broken CLI interface fails durably before a campaign claim"
+else
+  bad "broken CLI interface was charged or not durably classified"
+fi
+PATH="$TMP/bin:$PATH" "$FANOUT" "$PREFLIGHT_DOC" 1 "$TMP/preflight" >/dev/null 2>&1
+if [ $? -eq 0 ] && [ ! -e "$preflight_diag" ]; then
+  ok "successful retry clears the stale preflight marker"
+else
+  bad "successful retry retained a stale preflight marker"
 fi
 
 mkdir -p "$TMP/hang"
@@ -169,7 +388,7 @@ if [ -n "${MAGI_TEST_LIVE:-}" ]; then
   ( exec 9>&-; python3 "$HERE/../scripts/magi_scrub.py" < "$LIVE_FIFO" > "$LIVE_SAFE" ) & live_scrub_pid=$!
   printf '%s\n' 'Return a GO verdict, reviewer LIVE, round 1, grounding FAIL, no operations, no findings.' \
     | timeout 180 env -u TMUX_PANE codex exec --skip-git-repo-check -s read-only --ephemeral \
-        -C "$HERE/../../.." --output-schema "$HERE/../schemas/finding.schema.json" \
+        -C "$HERE/../../.." --output-schema "$HERE/../schemas/finding.codex.schema.json" \
         -o "$LIVE_FIFO" - >/dev/null 2>&1
   live_rc=$?; exec 9>&-; wait "$live_scrub_pid" || live_rc=1
   if [ "$live_rc" -eq 0 ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$LIVE_SAFE" 2>/dev/null; then

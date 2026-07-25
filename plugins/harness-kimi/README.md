@@ -23,9 +23,10 @@ Kimi Code CLI >= 0.28 は **native hook API** を持つ (gh #54)。ペイロー�
 ### 2. AGENTS.md と tmux identity を管理する (wrapper)
 
 `~/.local/bin/kimi` を wrapper に置き換えると、`kimi` 起動時にカレントディレクトリへ
-`AGENTS.md` を自動配置する。tmux 内では pane の `@formation_id` を routing identity の
-SSOT として扱い、standalone Kimi の表示名を整える。別 chassis の nested child は親 pane
-を改名せず、Formation 管理 pane の identity も上書きしない。
+`AGENTS.md` を自動配置する。tmux 内では pane の `@formation_identity_locked` を routing
+identity の SSOT として扱い、互換 alias の `@formation_id` と standalone Kimi の表示名を
+揃える。別 chassis の nested child は親 pane を改名せず、Formation 管理 pane の identity
+も上書きしない。
 
 ```bash
 ~/projects/claude-harness/plugins/harness-kimi/install-kimi-wrapper.sh
@@ -108,5 +109,13 @@ uninstall 経路を断たないため、deprecated スクリプト自体は repo
 - `install-kimi-agents.sh` / `install-kimi-scrubber.sh` / `uninstall-kimi-scrubber.sh`
 - `kimi-wrapper.sh` / `install-kimi-wrapper.sh` — `kimi` コマンドをラップし、AGENTS.md
   自動配置と tmux routing/display identity の保護を行う
-- **skills port**: `install-kimi-skills.sh` + `skills/magi` / `skills/bug-hunt` — Kimi 側の magi / bug-hunt skill 移植。Magi の deterministic gate は Kimi-native structural runner 未実装のため fail-closed
+- **skills port**: `install-kimi-skills.sh` installs `magi`, `bug-hunt`, `dual-magi-review`, and
+  `ultramagi`. The latter two drive the hardened Codex×3 + Claude/Grok runtime through the
+  ownership-checked `~/.kimi-code/harness-magi-runtime` symlink. Skill replacement and the final
+  runtime identity check commit as one generation; failure restores all earlier predecessors.
 - deprecated: `guard-env.sh` / `guard-check.sh` / `guarded-bash.sh` / `install-kimi-bash-guard.sh` / `kimi_wire_watcher.*` / `install-kimi-watcher.sh` / `uninstall-kimi-watcher.sh`
+
+The Magi runtime is checkout-linked, not self-contained: keep this repository present or set
+`HARNESS_MAGI_RUNTIME` to a compatible checkout. Kimi does not install the Codex autorun Stop hook;
+campaign artifacts support inspection/resume, but only the mechanical G1-G9 gate may declare
+plateau.

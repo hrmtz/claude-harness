@@ -20,6 +20,13 @@ while [[ -L "$SELF" ]]; do SELF="$(readlink -f "$SELF")"; done
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 
+# The integration audit must not even initialize/touch Formation runtime state.
+# Dispatch it before mailbox helpers create directories or registry files.
+if [[ "${BASH_SOURCE[0]}" == "${0}" && "${1:-}" == "integration-audit" ]]; then
+  shift
+  exec "$SCRIPT_DIR/formation-integration-audit" "$@"
+fi
+
 if [[ -z "${FORMATION_HOME:-}" ]]; then
   if [[ -n "${NJSLYR_HOME:-}" ]]; then
     FORMATION_HOME="$NJSLYR_HOME"
@@ -57,13 +64,14 @@ refuse_credential() {
 }
 
 self_id() {
-  # Identify the caller. Priority: env > tmux pane user-option > pane_id.
+  # Identify the caller. Priority: launch env > immutable pane identity >
+  # legacy mutable pane option > pane_id.
   if [[ -n "${FORMATION_SELF:-}" ]]; then
     echo "$FORMATION_SELF"; return
   fi
   local opt=""
   if [[ -n "${TMUX_PANE:-}" ]]; then
-    opt="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
+    opt="$(tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null || true)"
   fi
   if [[ -n "$opt" ]]; then
     echo "$opt"
@@ -125,13 +133,13 @@ extract_goal() {
   printf '%s' "${goal:0:160}"
 }
 
-# Pane-border line for formation panes: colored by cli (claude=blue,
-# codex=orange, kimi=magenta), live status suffix from @formation_status.
+# Pane-border line for formation panes: immutable identity colored by cli
+# (claude=blue, codex=orange, kimi=magenta), with current task/status beside it.
 # Bypass is the de facto universal mode here (user runs ~100% bypass workers),
 # so marking it would be an always-on no-signal badge — the RARE case gets the
 # marker instead: 🔒sandbox on --sandbox workers. Non-formation panes in the
 # same window fall back to their plain pane_title.
-FORMATION_BORDER_FORMAT='#{?#{@formation_id},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#{?#{==:#{@formation_cli},kimi},#[fg=colour135],#[fg=colour39]}}#[bold] #{@formation_id} · #{@formation_task} #[nobold]#{?#{==:#{@formation_bypass},0},#[fg=colour81]🔒sandbox #[fg=default],}#{?#{@formation_status},#[fg=colour245]— #{@formation_status} ,}#[default],#{pane_title}}'
+FORMATION_BORDER_FORMAT='#{?#{||:#{@formation_identity_locked},#{@formation_id}},#{?#{==:#{@formation_cli},codex},#[fg=colour208],#{?#{==:#{@formation_cli},kimi},#[fg=colour135],#[fg=colour39]}}#[bold] #{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}} #[nobold]#{?#{==:#{@formation_bypass},0},#[fg=colour81]🔒sandbox #[fg=default],}#[fg=colour245]· #{@formation_task}#{?#{@formation_status}, — #{@formation_status},} #[default],#{pane_title}}'
 
 # Install the red-accent theme for bypass claude workers into ~/.claude/themes
 # (idempotent copy from the plugin). Returns 1 (skip theme injection) when the
@@ -161,6 +169,11 @@ usage() {
 formation - long-running peer AI agent panes (claude, codex, or kimi)
 
 Parent (lead) commands:
+  formation integration-audit --repo OWNER/REPO [options]
+                                          Read-only PASS/WARN/ACTION reconciliation of
+                                          PRs, issues, evidence, refs/worktrees, parent
+                                          checkout divergence, and Formation worker state.
+                                          Use --json for stable machine-readable output.
   formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator]
                   [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart
@@ -172,15 +185,15 @@ Parent (lead) commands:
                                           claude workers also pin '🎯 <goal>' in a statusline
                                           (goal = first line under '## Mission' in the briefing,
                                           task label = --task or briefing basename).
-                                          Sandbox default: Claude bypass; Codex workspace-write
-                                            with approvals disabled and only FORMATION_HOME added
-                                            as an extra writable directory; Kimi --auto (autonomous),
-                                            guarded by the always-on harness-kimi bash guard.
+                                          Sandbox default: Claude and Codex full bypass; Kimi
+                                            --auto (autonomous), guarded by the always-on
+                                            harness-kimi bash guard.
                                           --bypass-sandbox forces full privilege bypass
                                           (claude bypassPermissions / codex dangerously-bypass /
                                           kimi --auto).
-                                          --sandbox forces normal sandbox/approval mode
-                                          (kimi: the softer -y auto-approve).
+                                          --sandbox explicitly opts into normal sandbox/approval
+                                          mode (Codex: workspace-write + never-ask + scoped
+                                          FORMATION_HOME; Kimi: the softer -y auto-approve).
                                           A one-line stderr notice states the chosen mode and why.
                                           --orchestrator (claude, no explicit --model): capacity-oracle
                                             picks the tier (opus vs fable) by live headroom — fable only
@@ -236,20 +249,16 @@ cmd_remote_check() {
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
 # Input $2 (bypass): "" => pick default, "1"/"0" => explicit override.
-# Claude retains the unattended bypass default. Codex can stay unattended with
-# `--ask-for-approval never`, while `--add-dir FORMATION_HOME` grants only the
-# extra write scope needed by report/done/ask.
+# Formation workers default to full capability. Safety is enforced by the
+# surrounding harness (briefing boundaries, credential refusal, mailbox
+# auditability, review gates, and explicit stop conditions), not by silently
+# reducing a worker's filesystem or network authority. --sandbox remains an
+# explicit per-spawn opt-in.
 # Echoes 1 (bypass) or 0 (normal sandbox).
 resolve_bypass_default() {
   local cli="$1" bypass="$2"
   if [[ -n "$bypass" ]]; then echo "$bypass"; return; fi
-  if [[ "$cli" == "codex" ]]; then echo 0; return; fi
-  # user directive 2026-07-08: Claude formation workers default to BYPASS.
-  # A normal-approval claude worker stalls at its first permission prompt and the
-  # lead has to babysit it (observed twice this session), defeating the point of
-  # an autonomous peer. --sandbox is the explicit opt-out back to normal approval.
-  # kimi follows the same autonomy-by-default rationale (its bash still goes
-  # through the always-on harness-kimi guard), so it also defaults to 1.
+  : "$cli"
   echo 1
 }
 
@@ -282,12 +291,53 @@ formation_window_name() {
   printf '%s-%s' "$cli" "$worker_id"
 }
 
+resolve_cross_cli_guard() {
+  local candidate="${HARNESS_CROSS_CLI_GUARD:-}" cache_root match
+  if [[ -z "$candidate" ]]; then
+    candidate="$(command -v harness-cross-cli 2>/dev/null || true)"
+  fi
+  if [[ -z "$candidate" && -x "$SCRIPT_DIR/../../harness-core/bin/harness-cross-cli" ]]; then
+    candidate="$SCRIPT_DIR/../../harness-core/bin/harness-cross-cli"
+  fi
+  if [[ -z "$candidate" ]]; then
+    for cache_root in "${CODEX_HOME:-$HOME/.codex}/plugins/cache" "$HOME/.claude/plugins/cache"; do
+      [[ -d "$cache_root" ]] || continue
+      while IFS= read -r match; do
+        candidate="$match"
+      done < <(find "$cache_root" -type f \
+        -path '*/harness-core/*/bin/harness-cross-cli' -perm -u+x 2>/dev/null | sort)
+    done
+  fi
+  [[ -x "$candidate" ]] || {
+    echo "formation: harness-cross-cli is required for tmux identity isolation." >&2
+    return 1
+  }
+  printf '%s' "$candidate"
+}
+
+codex_cache_preflight() {
+  local safe_launcher="${CODEX_CACHE_SAFE_BIN:-}"
+  if [[ -z "$safe_launcher" ]]; then
+    safe_launcher="$(command -v codex-cache-safe 2>/dev/null || true)"
+  fi
+  if [[ -z "$safe_launcher" &&
+        -x "$SCRIPT_DIR/../../harness-core/bin/codex-cache-safe" ]]; then
+    safe_launcher="$SCRIPT_DIR/../../harness-core/bin/codex-cache-safe"
+  fi
+  [[ -x "$safe_launcher" ]] || {
+    echo "formation: codex-cache-safe is required before spawning Codex workers." >&2
+    return 1
+  }
+  CODEX_CACHE_SAFE_CHECK_ONLY=1 "$safe_launcher" || return
+  CODEX_LAUNCH_BIN="$safe_launcher"
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
   # window 名を巻き込み identity drift。 別 window 化で隔離。 --split で旧挙動)
-  # Claude defaults to bypass. Codex defaults to workspace-write + never-ask,
-  # with FORMATION_HOME as its only extra writable directory.
+  # All Formation workers default to full capability. The harness provides the
+  # control plane; --sandbox is an explicit per-spawn opt-in.
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
@@ -307,6 +357,13 @@ cmd_spawn() {
   done
   [[ "$cli" == "claude" || "$cli" == "codex" || "$cli" == "kimi" ]] || { echo "unknown --cli: $cli (claude|codex|kimi)" >&2; exit 2; }
   [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+
+  # Delegate to the same cache guard used by direct launches. This happens
+  # before pane/registry mutation and avoids a second, recursively acquired
+  # generation lock inside Formation.
+  if [[ "$cli" == "codex" ]]; then
+    codex_cache_preflight
+  fi
 
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
@@ -350,7 +407,9 @@ cmd_spawn() {
     echo "worker already exists: $name" >&2; exit 2
   fi
 
-  local parent_id; parent_id="$(self_id)"
+  local parent_id guard_path
+  parent_id="$(self_id)"
+  guard_path="$(resolve_cross_cli_guard)"
   # Generate a spawn-scoped UUID so mailbox entries from this worker are
   # distinguishable from a different session that happened to pick the same codename.
   local spawn_id; spawn_id="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || date +%s%N)"
@@ -369,6 +428,9 @@ cmd_spawn() {
   task_label="$(derive_task_label "$task" "$briefing")"
   goal="$(extract_goal "$briefing")"
 
+  # Set once at pane creation. Header/self-routing read the locked value so
+  # later task/status updates cannot drift the worker identity.
+  tmux set-option -p -t "$pane_id" @formation_identity_locked "$name" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_task "$task_label" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_cli "$cli" >/dev/null
@@ -379,6 +441,14 @@ cmd_spawn() {
   # self-identifies; non-formation panes render their plain title (#93).
   tmux set-option -w -t "$pane_id" pane-border-status top >/dev/null
   tmux set-option -w -t "$pane_id" pane-border-format "$FORMATION_BORDER_FORMAT" >/dev/null
+
+  local guard_command expected_window
+  guard_command="$(printf '%q' "$guard_path") --target-pane $(printf '%q' "$pane_id") --allow-self-name"
+  if [[ "$placement" == "new-window" ]]; then
+    expected_window="$(formation_window_name "$cli" "$name")"
+    guard_command="$guard_command --expected-window $(printf '%q' "$expected_window")"
+  fi
+  guard_command="$guard_command --"
 
   # Seed prompt shared by both CLIs.
   local seed
@@ -393,11 +463,11 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     [[ -n "$model" ]] && codex_model_flag="-m $model"
     codex_sandbox_flag="$(codex_launch_flags "$bypass")"
     if [[ "$bypass" == "1" ]]; then
-      echo "formation: WARNING: spawning codex worker '$name' with EXPLICIT FULL SANDBOX/APPROVAL BYPASS (--bypass-sandbox). The briefing can drive unrestricted local commands." >&2
+      echo "formation: spawning codex worker '$name' with FULL SANDBOX/APPROVAL BYPASS (default). Harness controls remain active; the worker has unrestricted local authority." >&2
     else
-      echo "formation: spawning codex worker '$name' with workspace-write, approvals disabled, and scoped mailbox write access at $FORMATION_HOME. Use --bypass-sandbox only inside an external sandbox." >&2
+      echo "formation: spawning codex worker '$name' with EXPLICIT workspace-write sandbox (--sandbox), approvals disabled, and scoped mailbox write access at $FORMATION_HOME." >&2
     fi
-    tmux send-keys -t "$pane_id" "codex $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
     # Kimi: launch the interactive TUI, then inject the seed. Kimi has no
@@ -414,7 +484,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning kimi worker '$name' with -y (auto-approve tool calls, agent may still ask). harness-kimi guard active." >&2
     fi
-    tmux send-keys -t "$pane_id" "kimi $kimi_auto_flag $kimi_model_flag" Enter
+    tmux send-keys -t "$pane_id" "$guard_command kimi $kimi_auto_flag $kimi_model_flag" Enter
     # Poll for the Kimi TUI prompt (its input box draws the same '│ >' as
     # claude's) up to 30s before injecting the seed — a fixed sleep would drop
     # the double-tap submit into a not-yet-ready textarea on a slow/cold spawn,
@@ -430,16 +500,15 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     tmux_send_submit "$pane_id" "$seed"
   else
     # Claude Code: launch interactive then inject seed once prompt is ready.
-    # Default (per #38): normal approval mode (security win) — claude does not
-    # need to escape the workspace for the formation protocol.
-    # --bypass-sandbox opts into --permission-mode bypassPermissions.
+    # Default: permission bypass for an autonomous peer. --sandbox explicitly
+    # opts back into Claude's normal approval mode.
     local claude_model_flag="" claude_perm_flag=""
     [[ -n "$model" ]] && claude_model_flag="--model $model"
     if [[ "$bypass" == "1" ]]; then
       claude_perm_flag="--permission-mode bypassPermissions"
-      echo "formation: spawning claude worker '$name' with permission BYPASS (--bypass-sandbox) — no approval prompts." >&2
+      echo "formation: spawning claude worker '$name' with permission BYPASS (default) — no approval prompts." >&2
     else
-      echo "formation: spawning claude worker '$name' in normal approval mode (claude default — security win). Use --bypass-sandbox to opt into --permission-mode bypassPermissions." >&2
+      echo "formation: spawning claude worker '$name' in EXPLICIT normal approval mode (--sandbox)." >&2
     fi
 
     # Goal pin (#93): per-launch --settings keeps the user's settings.json
@@ -455,7 +524,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
       settings_json="$(echo "$settings_json" | jq -c '. + {theme:"formation-bypass"}')"
     fi
     goal_prompt="Session goal: $goal — if you notice your work drifting from this goal, stop and realign, or surface the conflict via 'formation ask'."
-    tmux send-keys -t "$pane_id" "claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
 
     # Wait for claude prompt. Poll up to 30s.
     local i

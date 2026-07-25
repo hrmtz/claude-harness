@@ -7,12 +7,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pipeline_preflight_gate.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pipeline_preflight_gate.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-rails hooks/pipeline_preflight_gate.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/phase_review_gate.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/phase_review_gate.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-rails hooks/phase_review_gate.sh",
             "timeout": 5
           }
         ]
@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/ssh_fanout_canonical_check.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ssh_fanout_canonical_check.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-rails hooks/ssh_fanout_canonical_check.sh",
             "timeout": 5
           }
         ]
@@ -34,12 +34,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/self_check_reminder.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/self_check_reminder.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-rails hooks/self_check_reminder.sh",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/vastai_create_followup_check.sh",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/vastai_create_followup_check.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-rails hooks/vastai_create_followup_check.sh",
             "timeout": 5
           }
         ]

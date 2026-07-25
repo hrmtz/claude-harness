@@ -1,0 +1,11 @@
+{
+  "schema": "magi-canonical-templates/v1",
+  "templates": {
+    "bug-hunt/templates/gnat_prompt.md": "dee488c1f6f5641a302b71d5a3ded7332beae5ecae00e206cc84f8b71b2c6386",
+    "bug-hunt/templates/hornet_prompt.md": "4526ec64c11494935009c575ecc8120f3a84052a9ffce6131f9586d4c192f66c",
+    "bug-hunt/templates/wasp_prompt.md": "d83358736aa5b78d56b10191bc5d80e837b3bb9dcb22752850e84e3f22fed349",
+    "magi/templates/balthasar_prompt.md": "670d029fc4d47482c85999afb020e7c44cb24236f09f183ce9713966131bc340",
+    "magi/templates/caspar_prompt.md": "415cddf8877fad71265c50c1b96b344cf35c8ddb81b926fcf43395a3e33235fc",
+    "magi/templates/melchior_prompt.md": "45daef406cc32f4be4fbbc30ec621985d6038d8bc73e4be4c44c3fe573f2c3e5"
+  }
+}

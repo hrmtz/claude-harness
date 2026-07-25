@@ -116,7 +116,8 @@ class ProfileMirrorTest(unittest.TestCase):
                 check=False,
                 env=env,
             )
-            self.assertEqual(removed.returncode, 0)
+            self.assertEqual(removed.returncode, 1)
+            self.assertIn("invalid ownership marker", removed.stderr)
             self.assertTrue((home / "skills/magi/SKILL.md").is_file())
 
     def test_default_symlink_install_resolves_runtime_outside_plugin_tree(self) -> None:

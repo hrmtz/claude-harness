@@ -77,12 +77,14 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   [--model <model>] [--orchestrator] [--task <label>] <path/to/briefing.md> [worker_name]
 ```
 
-- **Claude defaults to permission bypass** so an unattended worker does not
-  stall. **Codex defaults to `workspace-write` with `--ask-for-approval never`**
-  and adds only `FORMATION_HOME` as an extra writable directory, which keeps
-  `formation report/done/ask` autonomous without full filesystem bypass.
-  `--bypass-sandbox` is an explicit high-risk Codex opt-in intended only when
-  the process is already externally sandboxed. Flags go before the briefing.
+- **Claude and Codex default to full permission/sandbox bypass** so an
+  autonomous peer has the authority needed to finish its briefing. Safety is
+  enforced by the Formation harness: scoped briefing and decision boundaries,
+  credential refusal, mailbox/audit trails, stop conditions, and review gates.
+  `--sandbox` is an explicit per-spawn opt-in; for Codex it selects
+  `workspace-write`, disables approval prompts, and adds `FORMATION_HOME` as a
+  writable directory for `formation report/done/ask`. Flags go before the
+  briefing.
 - **Kimi (`--cli kimi`)** launches the Kimi Code TUI with `--auto` (fully
   autonomous); `--sandbox` picks the softer `-y` (auto-approve tools, may still
   ask). Kimi has no CLI-level sandbox — its safety layer is the always-on
@@ -107,13 +109,16 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
 - Registers the worker in `~/.formation/formation/registry.jsonl`.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
-- **Identity is unified (#101):** `FORMATION_SELF` / pane `@formation_id` is
-  the routing and self-reference source of truth. A dedicated worker window is
-  named `<cli>-<name>`; SessionStart/compact/resume reassert that same identity
-  instead of generating a second random codename. Standalone CLI auto-naming
-  remains independent.
+- **Identity is unified and locked (#101):** `FORMATION_SELF` /
+  `@formation_identity_locked` is the routing, header, and self-reference source
+  of truth. `@formation_id` remains a compatibility alias, but later task/status
+  updates cannot change the locked identity. A dedicated worker window is named
+  `<cli>-<name>`; SessionStart/compact/resume reassert that same identity instead
+  of generating a second random codename. Standalone CLI auto-naming remains
+  independent.
 - **Pane visibility (#93)**: the worker window gets a `pane-border-status`
-  strip showing `<id> · <task>` — blue for claude, orange for codex, plus a
+  strip showing `<locked-id> · <task> — <live-status>` — blue for claude,
+  orange for codex, magenta for kimi, plus a
   `🔒sandbox` marker on the rare non-bypass workers (bypass is the de facto
   universal mode, so marking it would carry no signal) — and
   `formation report/done` update the strip's status suffix live. The task label is `--task` if given, else the briefing

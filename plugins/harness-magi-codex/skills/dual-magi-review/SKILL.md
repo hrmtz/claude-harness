@@ -69,9 +69,10 @@ before invoking a bundled script.
 1. fan-out    scripts/magi_fanout_codex.sh <doc> <round> <state-dir>
                 [--persona-set magi] [--prior <prior-synthesis.json|->]
               -> three `codex exec` processes, read-only, schema-constrained output
-2. synthesize read the three round_<N>_<persona>.json; write round_<N>_codex.json with
-              reviewer=SYNTHESIS, exact source_artifacts digests, and one disposition for every
-              source finding
+2. synthesize python3 scripts/magi_synthesize.py <doc> <round> <state-dir>
+                <state-dir>/round_<N>_magi_synthesis.json --persona-set magi
+              -> deterministic reviewer=SYNTHESIS envelope with exact source digests and one
+                 carried disposition for every source finding
 2b. converge  python3 scripts/magi_design_convergence_gate.py evaluate <doc>
               -> bounded next action; stop on REDESIGN, SCOPE_SPLIT, or BLOCKED
 3. cross-family (MANDATORY before any plateau claim)
@@ -88,10 +89,11 @@ preceding synthesis JSON. It must be schema-valid, live in the active state dire
 same canonical document, and carry `round == current_round - 1`. Do not silently start a fresh
 broad review in the middle of a campaign.
 
-A synthesis may deduplicate or resolve findings, but it must not silently omit them. For every
-`<source-file>#<finding_id>`, add one disposition: `carried`, `duplicate`, `resolved`, or `deferred`.
-Carried/duplicate entries must name a real `synthesis_finding_id`. The validator discovers every
-preceding-round JSON source in the active state directory and verifies exact path/digest coverage.
+Never hand-build a synthesis. `magi_synthesize.py` discovers every expected preceding-round JSON
+source in the active state directory, verifies exact path/digest coverage, and carries every
+`<source-file>#<finding_id>` into the required provenance-specific output basename. After a
+cross-family phase, use `--persona-set xfamily` and
+`round_<N>_xfamily_synthesis.json`.
 
 State lives in `${doc_dir}/.dual-magi/` (already gitignored via `docs/**/.dual-magi/`).
 
@@ -216,11 +218,22 @@ write a marker, so an opted-out review **cannot claim plateau**.
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (legacy fallback `MAGI_XFAMILY_MODEL`, default
 `claude-fable-5`), `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`), and
 `MAGI_XFAMILY_TIMEOUT_S` (default `900`).
+`MAGI_MAX_ARTIFACT_BYTES` may tighten the shared review-artifact ceiling from
+10 MiB into `1..10485760`; oversized input is rejected before accounting or launch.
 
 Adapter exit codes: `0` = round complete · `2` = fail-closed, no usable result · `3` = lock held
 (recursion, or a concurrent review of the same doc) · `4` = autonomous campaign budget exhausted,
 autonomous pivot or definitive blocked result required · `64` = invalid invocation or
 ceiling arguments.
+
+Fan-out also exits `1` for a CLI preflight or reviewer failure. A preflight failure writes
+`round_<N>_fanout.PREFLIGHT_FAILED.json`; a charged reviewer failure writes
+`round_<N>_fanout.<claim-id>.FAILED.json`. These are bounded metadata envelopes only (classification,
+exit codes, byte/redaction counts, and artifact/claim identity), never canonical reviewer artifacts
+or retained provider response/log content. Inspect the envelope before deciding whether a retry is
+safe; its bounded classifications distinguish missing child status, provider/scrubber/timeout
+failure, live-document drift, parse/schema/convergence/identity rejection, and post-scrub
+corruption. It does not relax the campaign fuse.
 
 Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 16 but cannot extend it.
 There is no acknowledgement or authorization path that extends the fuse.

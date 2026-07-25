@@ -12,10 +12,29 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
+PROTOCOL="$SELF_DIR/magi_protocol.py"
+VERIFY_XFAMILY="$SELF_DIR/magi_verify_xfamily_artifacts.py"
+CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    CROSS_CLI_GUARD="$(command -v harness-cross-cli 2>/dev/null || true)"
+fi
+if [ -z "$CROSS_CLI_GUARD" ] && [ -x "$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli" ]; then
+    CROSS_CLI_GUARD="$REPO_ROOT/plugins/harness-core/bin/harness-cross-cli"
+fi
+if [ -z "$CROSS_CLI_GUARD" ]; then
+    for cache_root in "${CODEX_HOME:-$HOME/.codex}/plugins/cache" "$HOME/.claude/plugins/cache"; do
+        [ -d "$cache_root" ] || continue
+        while IFS= read -r candidate; do
+            CROSS_CLI_GUARD="$candidate"
+        done < <(find "$cache_root" -type f \
+            -path '*/harness-core/*/bin/harness-cross-cli' -perm -u+x 2>/dev/null | sort)
+    done
+fi
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
 
@@ -38,6 +57,26 @@ case "$REVIEWER" in claude|grok) ;; *) usage ;; esac
 
 DOC_PATH="$1"; ROUND="$2"; PRIOR="$3"; OUT_PREFIX="$4"
 [ -f "$DOC_PATH" ] || { echo "magi-xfamily: doc not found: $DOC_PATH" >&2; exit 64; }
+MAX_ARTIFACT_BYTES="${MAGI_MAX_ARTIFACT_BYTES:-10485760}"
+case "$MAX_ARTIFACT_BYTES" in
+    ''|*[!0-9]*) echo "magi-xfamily: MAGI_MAX_ARTIFACT_BYTES must be an integer" >&2; exit 64 ;;
+esac
+[ "$MAX_ARTIFACT_BYTES" -ge 1 ] && [ "$MAX_ARTIFACT_BYTES" -le 10485760 ] || {
+    echo "magi-xfamily: MAGI_MAX_ARTIFACT_BYTES must tighten the default into 1..10485760" >&2
+    exit 64
+}
+ARTIFACT_BYTES="$(stat -c %s -- "$DOC_PATH")" || {
+    echo "magi-xfamily: cannot stat review artifact: $DOC_PATH" >&2
+    exit 64
+}
+[ "$ARTIFACT_BYTES" -ge 1 ] || {
+    echo "magi-xfamily: review artifact must not be empty" >&2
+    exit 64
+}
+[ "$ARTIFACT_BYTES" -le "$MAX_ARTIFACT_BYTES" ] || {
+    echo "magi-xfamily: review artifact exceeds ${MAX_ARTIFACT_BYTES}-byte limit" >&2
+    exit 64
+}
 [ -f "$SCHEMA_FILE" ] || { echo "magi-xfamily: schema not found: $SCHEMA_FILE" >&2; exit 64; }
 case "$ROUND" in ''|*[!0-9]*) echo "magi-xfamily: round must be an integer: $ROUND" >&2; exit 64 ;; esac
 [ "$ROUND" -ge 1 ] || { echo "magi-xfamily: round must be at least 1" >&2; exit 64; }
@@ -58,6 +97,7 @@ if [ "$PRIOR" != "-" ]; then
         echo "magi-xfamily: prior synthesis failed identity/round/schema validation" >&2
         exit 64
     }
+    PRIOR_SHA="$(sha256sum "$PRIOR" | cut -d' ' -f1)"
 fi
 TIMEOUT_S="${MAGI_XFAMILY_TIMEOUT_S:-900}"
 case "$TIMEOUT_S" in
@@ -75,20 +115,51 @@ PROMPT_FILE=""
 RAW_FILE=""
 STAGING_FINDINGS=""
 STAGING_META=""
+SNAPSHOT_ROOT=""
+SNAPSHOT_DOC=""
+SNAPSHOT_PRIOR=""
+PUBLISHED=()
 PROVIDER_PID=""
 CLAIM_ID=""
 CLAIM_FINISHED=0
 _cleanup() {
+    local original_rc=$? cleanup_failed=0 claim_status="" claim_status_rc=0
+    set +e
     if [ -n "$PROVIDER_PID" ]; then
         kill -TERM "$PROVIDER_PID" 2>/dev/null || true
         wait "$PROVIDER_PID" 2>/dev/null || true
     fi
-    [ -n "$PROMPT_FILE" ] && rm -f "$PROMPT_FILE"
-    [ -n "$RAW_FILE" ] && rm -f "$RAW_FILE" "${RAW_FILE}.err"
-    [ -n "$STAGING_FINDINGS" ] && rm -f "$STAGING_FINDINGS"
-    [ -n "$STAGING_META" ] && rm -f "$STAGING_META"
+    if [ -n "$PROMPT_FILE" ] && ! rm -f "$PROMPT_FILE"; then cleanup_failed=1; fi
+    if [ -n "$RAW_FILE" ] && ! rm -f "$RAW_FILE" "${RAW_FILE}.err"; then cleanup_failed=1; fi
+    if [ -n "$STAGING_FINDINGS" ] && ! rm -f "$STAGING_FINDINGS"; then cleanup_failed=1; fi
+    if [ -n "$STAGING_META" ] && ! rm -f "$STAGING_META"; then cleanup_failed=1; fi
     if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
-        python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+        claim_status="$(python3 "$GUARD" claim-status "$DOC_PATH" "$CLAIM_ID")"
+        claim_status_rc=$?
+        if [ "$claim_status" = "success" ]; then
+            CLAIM_FINISHED=1
+            PUBLISHED=()
+        else
+            [ "$claim_status_rc" -eq 0 ] || cleanup_failed=1
+            if [ ${#PUBLISHED[@]} -gt 0 ] && ! rm -f -- "${PUBLISHED[@]}"; then
+                cleanup_failed=1
+            fi
+            if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null; then
+                echo "magi-xfamily: ERROR: failed to finalize claim $CLAIM_ID as failed" >&2
+                cleanup_failed=1
+            fi
+        fi
+    fi
+    if [ -n "$SNAPSHOT_DOC" ] && ! rm -f "$SNAPSHOT_DOC"; then cleanup_failed=1; fi
+    if [ -n "$SNAPSHOT_PRIOR" ] && [ "$SNAPSHOT_PRIOR" != "-" ] \
+            && ! rm -f "$SNAPSHOT_PRIOR"; then cleanup_failed=1; fi
+    if [ -n "$SNAPSHOT_ROOT" ] && ! rm -rf "$SNAPSHOT_ROOT"; then cleanup_failed=1; fi
+    [ "$cleanup_failed" -eq 0 ] || {
+        echo "magi-xfamily: ERROR: cleanup was incomplete for claim ${CLAIM_ID:-unclaimed}" >&2
+    }
+    if [ "$cleanup_failed" -ne 0 ] && [ "$original_rc" -eq 0 ]; then
+        trap - EXIT
+        exit 1
     fi
     return 0
 }
@@ -108,24 +179,88 @@ case "$REVIEWER" in
     claude) MODEL="${MAGI_XFAMILY_CLAUDE_MODEL:-${MAGI_XFAMILY_MODEL:-claude-fable-5}}" ;;
     grok) MODEL="${MAGI_XFAMILY_GROK_MODEL:-grok-4.5}" ;;
 esac
+[ -x "$CROSS_CLI_GUARD" ] || {
+    echo "magi-xfamily: harness-cross-cli is required for provider identity isolation" >&2
+    exit 2
+}
 FINDINGS_OUT="${OUT_PREFIX}.json"
 META_OUT="${OUT_PREFIX}.meta.json"
 FAILED_OUT="${OUT_PREFIX}.FAILED.json"
 rm -f "$FAILED_OUT"
 
 ARTIFACT_SHA="$(sha256sum "$DOC_PATH" | cut -d' ' -f1)"
+PROTOCOL_SHA="$(python3 "$PROTOCOL" sha)" || {
+    echo "magi-xfamily: runtime protocol manifest is invalid or stale" >&2
+    exit 2
+}
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 _fail_closed() {
-    local reason="$1"
-    python3 - "$FAILED_OUT" "$reason" "$ROUND" "$ARTIFACT_SHA" "$REVIEWER" <<'PY'
+    local reason="$1" provider_status="${2:-}" diagnostic_published=0
+    if python3 - "$FAILED_OUT" "$reason" "$ROUND" "$ARTIFACT_SHA" "$REVIEWER" \
+        "$provider_status" "${RAW_FILE:+${RAW_FILE}.err}" "$SCRUB" <<'PY'
+import json, os, stat, subprocess, sys
+out, reason, rnd, sha, reviewer, status, stderr_path, scrubber = sys.argv[1:9]
+diagnostic = ""
+diagnostic_truncated = False
+diagnostic_unavailable = ""
+try:
+    info = os.stat(stderr_path, follow_symlinks=False)
+except FileNotFoundError:
+    diagnostic_unavailable = "missing"
+except OSError as exc:
+    diagnostic_unavailable = f"io-error:{type(exc).__name__}"
+else:
+    if stat.S_ISREG(info.st_mode):
+        with open(stderr_path, "rb") as handle:
+            raw = handle.read(65537)
+        diagnostic_truncated = len(raw) > 65536
+        raw = raw[:65536]
+        scrubbed = subprocess.run(
+            [sys.executable, scrubber],
+            input=raw,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if scrubbed.returncode == 0:
+            diagnostic = scrubbed.stdout.decode("utf-8", errors="replace")
+        else:
+            diagnostic = "provider stderr scrub failed closed"
+payload = {"verdict": "UNPARSEABLE", "reason": reason, "round": int(rnd),
+           "artifact_sha": sha, "reviewer_family": reviewer,
+           "provider_command": reviewer, "diagnostic": diagnostic,
+           "diagnostic_truncated": diagnostic_truncated}
+if diagnostic_unavailable:
+    payload["diagnostic_unavailable"] = diagnostic_unavailable
+if status:
+    payload["provider_exit_status"] = int(status)
+with open(out, "w") as fh:
+    json.dump(payload, fh, indent=2)
+PY
+    then
+        [ -s "$FAILED_OUT" ] && diagnostic_published=1
+    else
+        echo "magi-xfamily[$REVIEWER]: ERROR: detailed failure diagnostic publication failed" >&2
+    fi
+    if [ "$diagnostic_published" -eq 0 ]; then
+        if python3 - "$FAILED_OUT" "$reason" "$ROUND" "$ARTIFACT_SHA" "$REVIEWER" <<'PY'
 import json, sys
 out, reason, rnd, sha, reviewer = sys.argv[1:6]
 with open(out, "w") as fh:
-    json.dump({"verdict": "UNPARSEABLE", "reason": reason, "round": int(rnd),
-               "artifact_sha": sha, "reviewer_family": reviewer}, fh, indent=2)
+    json.dump({"verdict":"UNPARSEABLE", "reason":reason, "round":int(rnd),
+               "artifact_sha":sha, "reviewer_family":reviewer,
+               "diagnostic_unavailable":"publication-failed"}, fh)
 PY
-    echo "magi-xfamily[$REVIEWER]: FAIL-CLOSED ($reason). No plateau may be claimed. -> $FAILED_OUT" >&2
+        then
+            [ -s "$FAILED_OUT" ] && diagnostic_published=1
+        fi
+    fi
+    if [ "$diagnostic_published" -eq 1 ]; then
+        echo "magi-xfamily[$REVIEWER]: FAIL-CLOSED ($reason). No plateau may be claimed. -> $FAILED_OUT" >&2
+    else
+        echo "magi-xfamily[$REVIEWER]: FAIL-CLOSED ($reason). Durable diagnostics unavailable." >&2
+    fi
     exit 2
 }
 
@@ -140,12 +275,50 @@ claim_line="$(
 echo "$claim_line"
 CLAIM_ID="${claim_line##*CLAIM_ID=}"
 [ -n "$CLAIM_ID" ] || _fail_closed "campaign guard returned no claim id"
+CLAIM_PROTOCOL_SHA="${claim_line#*PROTOCOL_SHA=}"
+CLAIM_PROTOCOL_SHA="${CLAIM_PROTOCOL_SHA%%;*}"
+[[ "$CLAIM_PROTOCOL_SHA" =~ ^[0-9a-f]{64}$ ]] || {
+    _fail_closed "campaign guard returned an invalid protocol digest"
+}
+[ "$CLAIM_PROTOCOL_SHA" = "$PROTOCOL_SHA" ] || {
+    _fail_closed "protocol changed between adapter preflight and campaign claim"
+}
 # Once this attempt is durably charged, stale canonical output from an earlier attempt must not
 # masquerade as its result. New bytes remain claim-scoped until successful finish and promotion.
 rm -f "$FINDINGS_OUT" "$META_OUT" "$FAILED_OUT"
 STAGING_PREFIX="$STATE_DIR/.$(basename "$OUT_PREFIX").claim-${CLAIM_ID}"
 STAGING_FINDINGS="${STAGING_PREFIX}.json"
 STAGING_META="${STAGING_PREFIX}.meta.json"
+SNAPSHOT_ROOT="${STAGING_PREFIX}.protocol"
+python3 "$PROTOCOL" snapshot "$SNAPSHOT_ROOT" "$CLAIM_PROTOCOL_SHA" >/dev/null || {
+    _fail_closed "protocol inputs changed while creating the claim snapshot"
+}
+SNAPSHOT_PLUGIN="$SNAPSHOT_ROOT/plugins/harness-magi-codex"
+SCHEMA_FILE="$SNAPSHOT_PLUGIN/schemas/finding.schema.json"
+SCRUB="$SNAPSHOT_PLUGIN/scripts/magi_scrub.py"
+GUARD="$SNAPSHOT_PLUGIN/scripts/magi_campaign_guard.py"
+VALIDATOR="$SNAPSHOT_PLUGIN/scripts/magi_validate_findings.py"
+VERIFY_XFAMILY="$SNAPSHOT_PLUGIN/scripts/magi_verify_xfamily_artifacts.py"
+python3 - "$DOC_PATH" "${STAGING_PREFIX}.document" "$ARTIFACT_SHA" <<'PY'
+import hashlib, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:3])
+digest = hashlib.sha256()
+with source.open("rb") as reader, target.open("wb") as writer:
+    for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+        digest.update(chunk)
+        writer.write(chunk)
+if digest.hexdigest() != sys.argv[3]:
+    raise SystemExit("review artifact changed after campaign admission")
+PY
+SNAPSHOT_DOC="${STAGING_PREFIX}.document"
+SNAPSHOT_PRIOR="-"
+if [ "$PRIOR" != "-" ]; then
+    cp -- "$PRIOR" "${STAGING_PREFIX}.prior.json"
+    SNAPSHOT_PRIOR="${STAGING_PREFIX}.prior.json"
+    [ "$(sha256sum "$SNAPSHOT_PRIOR" | cut -d' ' -f1)" = "$PRIOR_SHA" ] || {
+        _fail_closed "prior synthesis changed after preflight validation"
+    }
+fi
 
 PROMPT_FILE="$(mktemp)"
 {
@@ -183,12 +356,12 @@ HDR
     printf '\nREVIEWER FAMILY: %s\nROUND: %s\n' "$REVIEWER" "$ROUND"
     printf 'TARGET DOC (absolute path): %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n' \
         "$DOC_PATH" "$DOC_LOCK_ID" "$ARTIFACT_SHA"
-    if [ "$PRIOR" != "-" ] && [ -f "$PRIOR" ]; then
+    if [ "$SNAPSHOT_PRIOR" != "-" ]; then
         printf '\nPRIOR FINDINGS (check resolution, do not merely repeat):\n'
-        python3 "$SCRUB" < "$PRIOR"
+        python3 "$SCRUB" < "$SNAPSHOT_PRIOR"
     fi
     printf '\nDOCUMENT CONTENT:\n---\n'
-    cat "$DOC_PATH"
+    cat "$SNAPSHOT_DOC"
     printf '\n---\n'
 } > "$PROMPT_FILE"
 
@@ -197,7 +370,8 @@ set +e
 if [ "$REVIEWER" = "claude" ]; then
     (
         eval "exec ${MAGI_LOCK_FD}>&-"
-        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
+        exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
+            timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
             --output-format json \
             --json-schema "$(cat "$SCHEMA_FILE")" \
             --model "$MODEL" \
@@ -211,7 +385,8 @@ if [ "$REVIEWER" = "claude" ]; then
 else
     (
         eval "exec ${MAGI_LOCK_FD}>&-"
-        exec timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
+        exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
+            timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
             --prompt-file "$PROMPT_FILE" \
             --cwd "$PWD" \
             --model "$MODEL" \
@@ -235,15 +410,53 @@ PROVIDER_PID=""
 set -e
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-[ $rc -eq 0 ] || _fail_closed "$REVIEWER exited $rc (timeout=${TIMEOUT_S}s)"
+[ $rc -eq 0 ] || _fail_closed "$REVIEWER exited $rc (timeout=${TIMEOUT_S}s)" "$rc"
 
 if ! python3 - "$RAW_FILE" "$STAGING_FINDINGS" "$STAGING_META" "$ARTIFACT_SHA" \
-        "$STARTED_AT" "$FINISHED_AT" "$SCRUB" "$REVIEWER" "$MODEL" <<'PY'
-import glob, hashlib, json, os, re, subprocess, sys
+        "$STARTED_AT" "$FINISHED_AT" "$SCRUB" "$REVIEWER" "$MODEL" "$PROTOCOL_SHA" <<'PY'
+import glob, hashlib, json, os, re, stat, subprocess, sys
 
 (raw_path, findings_out, meta_out, artifact_sha, started, finished,
- scrub, reviewer, requested_model) = sys.argv[1:10]
+ scrub, reviewer, requested_model, protocol_sha) = sys.argv[1:11]
+raw_info = os.stat(raw_path, follow_symlinks=False)
+if not stat.S_ISREG(raw_info.st_mode) or raw_info.st_size > 10 * 1024 * 1024:
+    raise SystemExit("provider envelope is not a bounded regular file")
 env = json.load(open(raw_path))
+
+MAX_TRANSCRIPT_LINE_BYTES = 1024 * 1024
+
+def bounded_jsonl(path, label, digest):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"{label} transcript open failed: {type(exc).__name__}") from exc
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise SystemExit(f"{label} transcript is not a regular file")
+    if info.st_size > 256 * 1024 * 1024:
+        os.close(fd)
+        raise SystemExit(f"{label} transcript exceeds the size limit")
+    with os.fdopen(fd, "rb") as fh:
+        line_number = 0
+        while True:
+            raw = fh.readline(MAX_TRANSCRIPT_LINE_BYTES + 1)
+            if not raw:
+                return
+            digest.update(raw)
+            line_number += 1
+            if len(raw) > MAX_TRANSCRIPT_LINE_BYTES:
+                raise SystemExit(
+                    f"{label} transcript line exceeds the size limit at {line_number}"
+                )
+            try:
+                yield line_number, raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise SystemExit(
+                    f"{label} transcript is not UTF-8 at line {line_number}"
+                ) from exc
 
 if reviewer == "claude":
     obj = env.get("structured_output")
@@ -259,16 +472,34 @@ if reviewer == "claude":
     # order there is arbitrary — picking its first key mislabels the reviewer. The transcript's
     # assistant messages are authoritative; take the last recorded model (the final reviewer).
     transcript_model = None
+    transcript_digest = hashlib.sha256()
     if len(transcript_matches) == 1:
-        with open(transcript_matches[0], encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                m = (rec.get("message") or {}).get("model")
-                if m:
-                    transcript_model = m
+        for line_number, line in bounded_jsonl(
+            transcript_matches[0], "Claude", transcript_digest
+        ):
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"malformed transcript JSON at {transcript_matches[0]}:"
+                    f"{line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(rec, dict):
+                raise SystemExit(
+                    f"transcript record must be an object at "
+                    f"{transcript_matches[0]}:{line_number}"
+                )
+            message = rec.get("message") or {}
+            if not isinstance(message, dict):
+                raise SystemExit(
+                    f"Claude transcript message must be an object at "
+                    f"{transcript_matches[0]}:{line_number}"
+                )
+            m = message.get("model")
+            if m:
+                transcript_model = m
     model_id = transcript_model or next(iter(model_usage), None)
 else:
     obj = env.get("structuredOutput")
@@ -282,17 +513,29 @@ else:
     ))
     model_ids = []
     num_turns = 0
+    transcript_digest = hashlib.sha256()
     if transcript_matches:
-        with open(transcript_matches[0], encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("type") == "assistant":
-                    num_turns += 1
-                    if rec.get("model_id"):
-                        model_ids.append(rec["model_id"])
+        for line_number, line in bounded_jsonl(
+            transcript_matches[0], "Grok", transcript_digest
+        ):
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"malformed transcript JSON at {transcript_matches[0]}:"
+                    f"{line_number}: {exc.msg}"
+                ) from exc
+            if not isinstance(rec, dict):
+                raise SystemExit(
+                    f"transcript record must be an object at "
+                    f"{transcript_matches[0]}:{line_number}"
+                )
+            if rec.get("type") == "assistant":
+                num_turns += 1
+                if rec.get("model_id"):
+                    model_ids.append(rec["model_id"])
     model_id = model_ids[-1] if model_ids else requested_model
     model_keys = sorted(set(model_ids or [model_id]))
 
@@ -311,6 +554,13 @@ def scrubbed(value):
                           capture_output=True, check=True)
     return json.loads(proc.stdout)
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 obj = scrubbed(obj)
 with open(findings_out, "w") as fh:
     json.dump(obj, fh, indent=2, ensure_ascii=False)
@@ -328,14 +578,16 @@ meta = {
     "model_usage_keys": model_keys,
     "num_turns": num_turns,
     "permission_denials": denials,
+    "round": obj.get("round"),
     "artifact_sha": artifact_sha,
+    "protocol_sha": protocol_sha,
     "started_at": started,
     "finished_at": finished,
     "transcript_path": transcript_path,
-    "transcript_sha": hashlib.sha256(open(transcript_path, "rb").read()).hexdigest(),
+    "transcript_sha": transcript_digest.hexdigest(),
 }
 meta = scrubbed(meta)
-meta["output_sha"] = hashlib.sha256(open(findings_out, "rb").read()).hexdigest()
+meta["output_sha"] = file_sha256(findings_out)
 with open(meta_out, "w") as fh:
     json.dump(meta, fh, indent=2, ensure_ascii=False)
 print(f"magi-xfamily[{reviewer}]: verdict={obj.get('verdict')} "
@@ -349,14 +601,28 @@ fi
 if ! python3 "$VALIDATOR" "$STAGING_FINDINGS" "$SCHEMA_FILE" --doc "$DOC_PATH"; then
     _fail_closed "findings violate schema or convergence contract"
 fi
-
-if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null; then
-    _fail_closed "claim no longer permits successful output promotion"
+if ! python3 "$VERIFY_XFAMILY" "$DOC_PATH" "$ROUND" \
+        "$STAGING_FINDINGS" "$STAGING_META" --reviewer "$REVIEWER"; then
+    _fail_closed "cross-family findings/meta provenance validation failed"
 fi
-CLAIM_FINISHED=1
+
+# Publish the complete pair while the claim is still non-authoritative. The ledger transition is
+# the commit point; cleanup removes both names if promotion or finalization loses a race.
+PUBLISHED=("$FINDINGS_OUT" "$META_OUT")
 mv "$STAGING_FINDINGS" "$FINDINGS_OUT"
 STAGING_FINDINGS=""
 mv "$STAGING_META" "$META_OUT"
 STAGING_META=""
+if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null; then
+    _fail_closed "claim no longer permits successful output promotion"
+fi
+CLAIM_FINISHED=1
+PUBLISHED=()
+rm -f "$SNAPSHOT_DOC"
+[ "$SNAPSHOT_PRIOR" = "-" ] || rm -f "$SNAPSHOT_PRIOR"
+SNAPSHOT_DOC=""
+SNAPSHOT_PRIOR=""
+rm -rf "$SNAPSHOT_ROOT"
+SNAPSHOT_ROOT=""
 rm -f "$FAILED_OUT"
 echo "magi-xfamily[$REVIEWER]: wrote $FINDINGS_OUT + $META_OUT"

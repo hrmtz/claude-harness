@@ -55,7 +55,7 @@ OUT_TMP="$(mktemp)"
 trap 'rm -f "$OUT_TMP"' EXIT
 
 python3 - "$OVERLAY" "$HARNESS_DIR" "$CONFIG" > "$OUT_TMP" <<'PYEOF'
-import json, sys, collections
+import json, shlex, sys, collections
 
 overlay_path, harness_dir, config_path = sys.argv[1], sys.argv[2], sys.argv[3]
 plugins_dir = f"{harness_dir}/plugins"
@@ -79,7 +79,24 @@ for plugin in sorted({(h if isinstance(h, str) else h["path"]).split("/")[0]
         for blk in blocks:
             matcher = blk.get("matcher")
             for h in blk.get("hooks", []):
-                name = h["command"].split("/hooks/")[-1]
+                # hooks.json commands may use the cache-safe dispatcher with a
+                # direct plugin-root fallback before the final dispatcher call.
+                # Tokenize the authoritative final command so shell arguments
+                # and redirections do not become part of the hook lookup key.
+                tail = h["command"].rsplit(";", 1)[-1]
+                try:
+                    tokens = shlex.split(tail)
+                except ValueError:
+                    continue
+                hook_tokens = [
+                    token for token in tokens
+                    if token.startswith("hooks/") or "/hooks/" in token
+                ]
+                if not hook_tokens:
+                    continue
+                token = hook_tokens[0]
+                name = (token.split("/hooks/", 1)[1]
+                        if "/hooks/" in token else token[len("hooks/"):])
                 lookup[f"{plugin}/hooks/{name}"] = (event, matcher, h.get("timeout", 5))
 
 def toml_str(s):
@@ -96,10 +113,15 @@ for item in overlay["hooks"]:
         path, ev_ov, m_ov = item, None, None
     else:
         path, ev_ov, m_ov = item["path"], item.get("event"), item.get("matcher")
-    if path not in lookup:
+    try:
+        path_token = shlex.split(path)[0]
+    except (ValueError, IndexError):
+        print(f"error: invalid hook path in Kimi overlay: {path}", file=sys.stderr)
+        sys.exit(1)
+    if path_token not in lookup:
         print(f"error: {path} not registered in its plugin hooks.json", file=sys.stderr)
         sys.exit(1)
-    event, matcher, timeout = lookup[path]
+    event, matcher, timeout = lookup[path_token]
     event = ev_ov or event
     matcher = m_ov if m_ov is not None else matcher
     if event in LIFECYCLE:

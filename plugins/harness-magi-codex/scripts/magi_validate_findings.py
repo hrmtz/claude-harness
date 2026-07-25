@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import sys
 from pathlib import Path
 
 import jsonschema
+from magi_protocol import sha256_file, strict_json_loads
 
 
 NONBLOCKING = {"readiness-gap", "scope-expansion"}
@@ -16,7 +18,7 @@ BLOCKING_SEVERITIES = {"REJECT", "CRITICAL", "HIGH"}
 
 
 def artifact_id(doc: Path) -> str:
-    return hashlib.sha256(str(doc.resolve()).encode()).hexdigest()[:16]
+    return hashlib.sha256(os.fsencode(doc.resolve())).hexdigest()[:16]
 
 
 def validate(
@@ -25,15 +27,29 @@ def validate(
     *,
     doc: Path | None = None,
     same_doc_only: bool = False,
+    expected_reviewer: str | None = None,
+    expected_round: int | None = None,
 ) -> None:
     jsonschema.validate(instance=payload, schema=schema)
     if not isinstance(payload, dict):
         raise ValueError("findings payload must be an object")
+    if expected_reviewer is not None and payload.get("reviewer") != expected_reviewer:
+        raise ValueError("reviewer does not match the launched persona")
+    if expected_round is not None and payload.get("round") != expected_round:
+        raise ValueError("round does not match the launched review round")
+    grounding = payload.get("schema_grounding_verdict")
+    commands = payload.get("verify_commands_executed")
+    if grounding == "FAIL":
+        raise ValueError("schema_grounding_verdict=FAIL is unusable reviewer output")
+    if grounding in {"PASS", "PARTIAL"} and not commands:
+        raise ValueError(
+            f"schema_grounding_verdict={grounding} requires verification commands"
+        )
     if doc is not None:
         if payload.get("artifact_id") != artifact_id(doc):
             raise ValueError("artifact_id does not match the canonical document path")
         if not same_doc_only:
-            expected_sha = hashlib.sha256(doc.read_bytes()).hexdigest()
+            expected_sha = sha256_file(doc)
             if payload.get("artifact_sha") != expected_sha:
                 raise ValueError("artifact_sha does not match the current document revision")
     findings = payload.get("findings") or []
@@ -100,10 +116,10 @@ def validate_prior_envelope(
         assert isinstance(item, dict)
         name = item["path"]
         source_path = candidates[name]
-        actual_sha = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        actual_sha = sha256_file(source_path)
         if item.get("sha256") != actual_sha:
             raise ValueError(f"source artifact digest mismatch: {name}")
-        source_payload = json.loads(source_path.read_text(encoding="utf-8"))
+        source_payload = strict_json_loads(source_path.read_bytes())
         validate(source_payload, schema, doc=doc, same_doc_only=True)
         if source_payload.get("round") != source_round:
             raise ValueError(f"source artifact has wrong round: {name}")
@@ -149,16 +165,25 @@ def main() -> int:
     mode.add_argument("--same-doc")
     parser.add_argument("--prior-for-round", type=int)
     parser.add_argument("--state-dir")
+    parser.add_argument("--reviewer")
+    parser.add_argument("--round", type=int)
     args = parser.parse_args()
     payload_path = Path(args.findings)
     schema_path = Path(args.schema) if args.schema else (
         Path(__file__).resolve().parent.parent / "schemas" / "finding.schema.json"
     )
     try:
-        payload = json.loads(payload_path.read_text(encoding="utf-8"))
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        payload = strict_json_loads(payload_path.read_bytes())
+        schema = strict_json_loads(schema_path.read_bytes())
         expected_doc = Path(args.doc or args.same_doc).resolve() if (args.doc or args.same_doc) else None
-        validate(payload, schema, doc=expected_doc, same_doc_only=bool(args.same_doc))
+        validate(
+            payload,
+            schema,
+            doc=expected_doc,
+            same_doc_only=bool(args.same_doc),
+            expected_reviewer=args.reviewer,
+            expected_round=args.round,
+        )
         if args.prior_for_round is not None:
             if args.prior_for_round <= 1:
                 raise ValueError("--prior-for-round must be greater than 1")

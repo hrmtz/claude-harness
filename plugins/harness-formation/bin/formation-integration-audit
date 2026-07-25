@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+import argparse, datetime as dt, json, os, pathlib, re, subprocess, sys
+ISSUE_RE = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|gh|issue)"
+                      r"\s*:?\s*(?:(?:https://github\.com/)?([\w.-]+/[\w.-]+)(?:#|/issues/)|#)(\d+)\b")
+CLOSE_RE = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+                      r"\s*:?\s*(?:(?:https://github\.com/)?([\w.-]+/[\w.-]+)(?:#|/issues/)|#)(\d+)\b")
+TEST_RE = re.compile(
+    r"(?im)^\s*(?:(?:[-*]\s*)?(?:tests?|test evidence|verification|validation)\s*[:\-]\s*\S|"
+    r"#{1,6}\s*(?:tests?|validation|verification)\s*$\n\s*[-*]\s*\S)"
+)
+PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefName,headRefOid,url,mergedAt,isCrossRepository,reviewDecision,latestReviews,statusCheckRollup"
+def safe(text, fallback):
+    line = next((x.strip() for x in text.splitlines() if x.strip()), fallback)
+    line = re.sub(r"[\x00-\x1f\x7f]", "", line)
+    line = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[REDACTED]@", line)
+    line = re.sub(r"(?i)(?:token|password|secret|api[_-]?key)\s*=\s*\S+|"
+                  r"\b(?:gh[opsu]_|github_pat_|sk-)[A-Za-z0-9_-]{8,}", "[REDACTED]", line)
+    return line[:200]
+def command(argv, cwd=None):
+    try:
+        result = subprocess.run(
+            argv, cwd=cwd, text=True, capture_output=True, check=False, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(safe(str(exc), f"{argv[0]} unavailable")) from exc
+    if result.returncode:
+        raise RuntimeError(safe(result.stderr, f"{argv[0]} exited {result.returncode}"))
+    return result.stdout
+def json_command(argv, cwd=None):
+    try:
+        return json.loads(command(argv, cwd))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{argv[0]} returned invalid JSON") from exc
+def issue_numbers(body, repo, pattern):
+    return sorted({int(number) for qualifier, number in pattern.findall(body)
+                   if not qualifier or qualifier.casefold() == repo.casefold()})
+def remote_repo(url):
+    match = re.search(r"github\.com[/:]([^/\s]+/[^/\s]+?)(?:\.git)?$", url.strip(), re.I)
+    return match.group(1).removesuffix(".git").casefold() if match else ""
+def read_github(repo):
+    data = {"prs": [], "issues": {}, "errors": []}
+    try:
+        command(["gh", "auth", "status", "--hostname", "github.com"])
+    except RuntimeError as exc:
+        data["errors"].append(("github", "GITHUB_AUTH_UNKNOWN", str(exc)))
+        return data
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)).date()
+    base = ["gh", "pr", "list", "--repo", repo, "--limit", "101", "--json", PR_FIELDS]
+    try:
+        opened = json_command(base + ["--state", "open"])
+        merged = json_command(base + ["--state", "merged", "--search", f"merged:>={cutoff}"])
+    except RuntimeError as exc:
+        data["errors"].append(("github", "PR_INVENTORY_UNKNOWN", str(exc)))
+        return data
+    if len(opened) > 100 or len(merged) > 100:
+        data["errors"].append(("github", "PR_INVENTORY_TRUNCATED", "PR query exceeded the 100-item audit cap"))
+    seen = set()
+    for pr in (opened[:100] + merged[:100]):
+        if pr.get("number") in seen:
+            continue
+        seen.add(pr.get("number"))
+        body = str(pr.get("body") or "")
+        pr["issue_numbers"] = issue_numbers(body, repo, ISSUE_RE)
+        pr["closing_issue_numbers"] = issue_numbers(body, repo, CLOSE_RE)
+        data["prs"].append(pr)
+    for number in sorted({n for pr in data["prs"] for n in pr["issue_numbers"]}):
+        try:
+            issue = json_command(
+                [
+                    "gh", "issue", "view", str(number), "--repo", repo,
+                    "--json", "number,state,title,url",
+                ]
+            )
+            if "/issues/" not in str(issue.get("url") or ""): raise RuntimeError("reference resolves to a pull request")
+            data["issues"][str(number)] = issue.get("state", "UNKNOWN")
+        except RuntimeError as exc:
+            data["issues"][str(number)] = "UNKNOWN"
+            data["errors"].append(("issues", "ISSUE_QUERY_FAILED", f"issue #{number}: {exc}"))
+    return data
+def parse_worktrees(raw):
+    rows, row = [], {}
+    for line in raw.splitlines() + [""]:
+        if not line:
+            if row:
+                rows.append(row)
+                row = {}
+        else:
+            key, _, value = line.partition(" ")
+            row[key] = value or True
+    return rows
+def read_git(parent, repo=None):
+    data = {"remote_branches": {}, "remote_known": True, "worktrees": [], "parent": {}, "errors": []}
+    try:
+        if repo and remote_repo(command(["git", "remote", "get-url", "origin"], parent)) != repo.casefold():
+            raise RuntimeError("parent origin does not match --repo")
+        for line in command(["git", "ls-remote", "--heads", "origin"], parent).splitlines():
+            sha, _, ref = line.partition("\t")
+            if ref.startswith("refs/heads/"):
+                data["remote_branches"][ref.removeprefix("refs/heads/")] = sha
+    except RuntimeError as exc:
+        data["remote_known"] = False
+        data["errors"].append(("branches", "REMOTE_REFS_UNKNOWN", str(exc)))
+    try:
+        head = command(["git", "rev-parse", "HEAD"], parent).strip()
+        dirty = command(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"], parent
+        ).splitlines()
+        data["worktrees"] = parse_worktrees(
+            command(["git", "worktree", "list", "--porcelain"], parent)
+        )
+        state = {"head": head, "dirty_paths": len(dirty), "ahead": None, "behind": None}
+        remote_sha = data["remote_branches"].get("dev")
+        if not remote_sha:
+            state["reason"] = "current origin/dev ref is unavailable"
+        else:
+            try:
+                command(["git", "cat-file", "-e", f"{remote_sha}^{{commit}}"], parent)
+                counts = command(
+                    ["git", "rev-list", "--left-right", "--count", f"{head}...{remote_sha}"],
+                    parent,
+                ).split()
+                state["ahead"], state["behind"] = map(int, counts)
+            except (RuntimeError, ValueError) as exc:
+                state["reason"] = (
+                    f"cannot compare parent HEAD with current origin/dev: {exc}; "
+                    "fetch outside the audit"
+                )
+        data["parent"] = state
+    except RuntimeError as exc:
+        data["errors"].append(("parent", "PARENT_STATE_UNKNOWN", str(exc)))
+    return data
+def load_jsonl(path):
+    rows = []
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    rows.append(value)
+    return rows
+def formation_home():
+    configured = os.environ.get("FORMATION_HOME") or os.environ.get("NJSLYR_HOME")
+    if configured:
+        return pathlib.Path(configured)
+    modern, legacy = pathlib.Path.home() / ".formation", pathlib.Path.home() / ".njslyr7"
+    return legacy if not modern.exists() and legacy.exists() else modern
+def read_formation(repo):
+    data = {"workers": [], "errors": []}
+    home = formation_home()
+    try:
+        registry = load_jsonl(home / "formation" / "registry.jsonl")
+    except (OSError, json.JSONDecodeError) as exc:
+        data["errors"].append(("workers", "FORMATION_REGISTRY_UNKNOWN", safe(str(exc), "registry unreadable")))
+        return data
+    try:
+        mailbox = load_jsonl(home / "mailbox" / "log.jsonl")
+    except (OSError, json.JSONDecodeError) as exc:
+        mailbox = []
+        data["errors"].append(("workers", "FORMATION_MAILBOX_UNKNOWN", safe(str(exc), "mailbox unreadable")))
+    latest_registry = {row["id"]: row for row in registry if isinstance(row.get("id"), str)}
+    for worker_id, row in latest_registry.items():
+        sid = row.get("session_id")
+        message = next((item for item in reversed(mailbox) if item.get("from") == worker_id
+                        and (not sid or item.get("session_id") == sid)), {})
+        body = str(message.get("body") or "")
+        state = "ASK" if body.startswith("[ASK]") else "DONE" if body.startswith("[DONE]") else "RUNNING"
+        pane = str(row.get("pane_id") or "")
+        try:
+            pane_state = command(["tmux", "display-message", "-p", "-t", pane,
+                                  "#{pane_dead}\t#{pane_current_path}"]).strip().split("\t", 1)
+            pane_alive = bool(pane) and pane_state[0] == "0"
+            if len(pane_state) != 2 or remote_repo(command(
+                    ["git", "remote", "get-url", "origin"], pane_state[1])) != repo.casefold():
+                continue
+            repo_known = True
+        except RuntimeError:
+            pane_alive, repo_known = False, False
+        ownership = " ".join(
+            str(value or "") for value in (
+                worker_id, row.get("task"), row.get("goal"),
+                pathlib.Path(str(row.get("briefing") or "")).name, body,
+            )
+        )
+        data["workers"].append(
+            {
+                "id": worker_id, "state": state, "pane_alive": pane_alive, "repo_known": repo_known,
+                "issue_numbers": sorted(set(issue_numbers(ownership, repo, ISSUE_RE)) | {
+                    int(n) for n in re.findall(r"(?i)\bissue[-_\s]*#?(\d+)\b", ownership)
+                }),
+                "pr_numbers": sorted({
+                    int(n) for n in re.findall(r"(?i)\bPR\s*#?\s*(\d+)\b", ownership)
+                }),
+            }
+        )
+    return data
+def audit(data):
+    findings = []
+    def add(status, area, code, message, action="", subjects=()):
+        findings.append(
+            {"status": status, "area": area, "code": code, "message": message,
+             "action": action or None, "subjects": list(subjects)}
+        )
+    for area, code, message in data.get("errors", []):
+        add("ACTION", area, code, message, "restore authoritative evidence and rerun")
+    prs, issues = data.get("prs", []), data.get("issues", {})
+    branches, worktrees = data.get("remote_branches", {}), data.get("worktrees", [])
+    workers = data.get("workers", [])
+    for pr in prs:
+        number, subject = pr.get("number"), f"PR #{pr.get('number')}"
+        merged = bool(pr.get("mergedAt")) or pr.get("state") == "MERGED"
+        checks = pr.get("statusCheckRollup") or []
+        check_evidence = ", ".join(f"{check.get('workflowName') or '-'}:{check.get('name') or check.get('context') or 'check'}={check.get('conclusion') or check.get('status') or check.get('state') or 'UNKNOWN'}" for check in checks)
+        if not checks:
+            add("ACTION", "evidence", "CHECKS_UNKNOWN", f"{subject}: no checks recorded", "record check evidence", (subject,))
+        else:
+            bad, pending, unknown = 0, 0, 0
+            for check in checks:
+                conclusion = str(check.get("conclusion") or "").upper()
+                status = str(check.get("status") or check.get("state") or "").upper()
+                if (conclusion and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}) or (
+                    not conclusion and status in {"FAILURE", "ERROR"}):
+                    bad += 1
+                elif not conclusion and status == "SUCCESS":
+                    continue
+                elif not conclusion and status in {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "EXPECTED"}:
+                    pending += 1
+                elif not conclusion:
+                    unknown += 1
+            if bad or unknown:
+                add("ACTION", "evidence", "CHECKS_FAILED_OR_UNKNOWN", f"{subject}: {check_evidence}", "repair or establish check evidence", (subject,))
+            elif pending:
+                add("WARN", "evidence", "CHECKS_PENDING", f"{subject}: {check_evidence}", "wait and rerun", (subject,))
+            else:
+                add("PASS", "evidence", "CHECKS_PASS", f"{subject}: {check_evidence}", subjects=(subject,))
+        decision, reviews = str(pr.get("reviewDecision") or ""), pr.get("latestReviews") or []
+        review_evidence = ", ".join(f"{(review.get('author') or {}).get('login') or 'unknown'}={review.get('state') or 'UNKNOWN'}" for review in reviews) or decision or "none"
+        if decision == "CHANGES_REQUESTED" or any(review.get("state") == "CHANGES_REQUESTED" for review in reviews):
+            add("ACTION", "evidence", "REVIEW_CHANGES_REQUESTED", f"{subject}: {review_evidence}", "resolve review findings", (subject,))
+        elif decision == "APPROVED" or reviews:
+            add("PASS", "evidence", "REVIEW_RECORDED", f"{subject}: {review_evidence}", subjects=(subject,))
+        else:
+            add("ACTION", "evidence", "REVIEW_UNKNOWN", f"{subject}: no review recorded", "record review evidence", (subject,))
+        add("PASS" if TEST_RE.search(str(pr.get("body") or "")) else "ACTION", "evidence",
+            "TEST_EVIDENCE_RECORDED" if TEST_RE.search(str(pr.get("body") or "")) else "TEST_EVIDENCE_MISSING",
+            f"{subject}: test evidence {'recorded' if TEST_RE.search(str(pr.get('body') or '')) else 'missing'}",
+            "" if TEST_RE.search(str(pr.get("body") or "")) else "record exact test results", (subject,))
+        linked = pr.get("issue_numbers") or []
+        if not linked:
+            add("WARN", "issues", "NO_LINKED_ISSUE", f"{subject}: no linked issue", "link the owning issue", (subject,))
+        for issue in linked:
+            issue_state, issue_subject = issues.get(str(issue), "UNKNOWN"), f"issue #{issue}"
+            if issue_state == "UNKNOWN":
+                add("ACTION", "issues", "ISSUE_STATE_UNKNOWN", f"{subject}: {issue_subject} state unknown", "restore issue evidence", (subject, issue_subject))
+            elif merged and pr.get("baseRefName") == "dev" and issue in pr.get("closing_issue_numbers", []) and issue_state == "OPEN":
+                add("ACTION", "issues", "DEV_MERGE_ISSUE_OPEN", f"{subject} merged to dev but {issue_subject} is open", f"verify and manually close {issue_subject}", (subject, issue_subject))
+            else:
+                add("PASS", "issues", "ISSUE_STATE_KNOWN", f"{subject}: {issue_subject} is {issue_state.lower()}", subjects=(subject, issue_subject))
+        head = str(pr.get("headRefName") or "")
+        if data.get("remote_known", True) and not pr.get("isCrossRepository") and head:
+            if merged and head in branches and head not in {"dev", "main", pr.get("baseRefName")}:
+                if branches[head] == pr.get("headRefOid"): add("WARN", "branches", "MERGED_REMOTE_BRANCH", f"{subject}: {head} remains remote", "review then explicitly delete the merged head branch", (subject, head))
+                else:
+                    add("ACTION", "branches", "MERGED_REMOTE_BRANCH_DRIFT", f"{subject}: {head} advanced after merge", "reconcile unintegrated commits before cleanup", (subject, head))
+            elif not merged and branches.get(head) != pr.get("headRefOid"):
+                add("ACTION", "branches", "OPEN_PR_BRANCH_DRIFT", f"{subject}: {head} missing or differs remotely", "restore or explain the branch", (subject, head))
+        matches = [
+            row for row in worktrees
+            if row.get("branch") == f"refs/heads/{head}"
+            or (row.get("detached") and pr.get("headRefOid") and row.get("HEAD") == pr.get("headRefOid"))
+        ]
+        if merged and matches:
+            add("WARN", "worktrees", "MERGED_WORKTREE_PRESENT", f"{subject}: {len(matches)} worktree(s) remain", "Sanada-back up then clean up explicitly", (subject,))
+        owners = [
+            worker for worker in workers
+            if worker.get("repo_known", True) and (number in worker.get("pr_numbers", [])
+            or any(issue in worker.get("issue_numbers", []) for issue in linked)
+            )
+        ]
+        for worker in owners:
+            if worker["state"] == "DONE" and not merged:
+                add("ACTION", "workers", "DONE_WITH_UNMERGED_PR", f"worker {worker['id']} DONE with unmerged {subject}", "reconcile completion and PR state", (f"worker {worker['id']}", subject))
+                if matches:
+                    add("WARN", "worktrees", "DONE_WORKTREE_PRESENT", f"worker {worker['id']} DONE with {len(matches)} worktree(s)", "Sanada-back up then clean up explicitly", (f"worker {worker['id']}",))
+    for worker in workers:
+        if not worker.get("repo_known", True):
+            add("ACTION", "workers", "WORKER_REPO_UNKNOWN", f"worker {worker['id']} repository unknown", "restore pane/worktree identity or reap explicitly", (f"worker {worker['id']}",)); continue
+        owned = any(pr.get("number") in worker.get("pr_numbers", []) or set(pr.get("issue_numbers", [])) & set(worker.get("issue_numbers", [])) for pr in prs)
+        if worker["state"] == "ASK":
+            add("ACTION", "workers", "WORKER_ASK", f"worker {worker['id']} latest state is ASK", "review and respond through Formation", (f"worker {worker['id']}",))
+        if worker["state"] == "RUNNING" and not worker["pane_alive"]:
+            add("ACTION", "workers", "RUNNING_PANE_DEAD", f"worker {worker['id']} RUNNING with dead pane", "reconcile the registry row", (f"worker {worker['id']}",))
+        if worker["state"] == "DONE" and not owned:
+            add("WARN", "workers", "DONE_OWNER_UNKNOWN", f"worker {worker['id']} DONE without selected ownership", "record its issue or PR ownership", (f"worker {worker['id']}",))
+    parent = data.get("parent", {})
+    if parent.get("reason"):
+        add("ACTION", "parent", "PARENT_DIVERGENCE_UNKNOWN", parent["reason"], "make origin/dev available without resetting parent")
+    elif isinstance(parent.get("behind"), int):
+        dirty, ahead, behind = parent["dirty_paths"], parent["ahead"], parent["behind"]
+        if dirty and behind:
+            add("ACTION", "parent", "DIRTY_PARENT_BEHIND", f"parent behind {behind}, ahead {ahead}, dirty paths {dirty}", "back up and reconcile; do not reset")
+        elif dirty or behind or ahead:
+            add("WARN", "parent", "PARENT_DRIFT", f"parent behind {behind}, ahead {ahead}, dirty paths {dirty}", "reconcile explicitly")
+        else:
+            add("PASS", "parent", "PARENT_ALIGNED", "parent is clean and aligned")
+    counts = {status: sum(x["status"] == status for x in findings) for status in ("PASS", "WARN", "ACTION")}
+    overall = "ACTION" if counts["ACTION"] else "WARN" if counts["WARN"] else "PASS"
+    return {"schema_version": 1, "overall": overall, "summary": counts, "findings": findings}
+def main():
+    parser = argparse.ArgumentParser(prog="formation integration-audit")
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--parent-checkout", default=".")
+    parser.add_argument("--fixture")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    if args.fixture:
+        try:
+            data = json.loads(pathlib.Path(args.fixture).read_text(encoding="utf-8"))
+            required = {"prs": list, "issues": dict, "errors": list, "remote_branches": dict, "worktrees": list, "workers": list, "parent": dict}
+            if not isinstance(data, dict) or any(not isinstance(data.get(k), t) for k, t in required.items()):
+                raise ValueError("fixture must contain the required audit collections")
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"formation integration-audit: {safe(str(exc), 'fixture unreadable')}", file=sys.stderr)
+            return 2
+    else:
+        github, git, formation = read_github(args.repo), read_git(args.parent_checkout, args.repo), read_formation(args.repo)
+        data = {**github, **git, **formation, "errors": github["errors"] + git["errors"] + formation["errors"]}
+    try:
+        report = audit(data)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        if not args.fixture: raise
+        print(f"formation integration-audit: invalid fixture: {safe(str(exc), 'malformed record')}", file=sys.stderr); return 2
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"{report['overall']} integration audit — " + " / ".join(f"{key} {value}" for key, value in report["summary"].items()))
+        groups = {}
+        for finding in report["findings"]:
+            if finding["status"] != "PASS":
+                key = finding["status"], finding["area"], finding["code"], finding["action"]
+                groups.setdefault(key, []).append(finding)
+        for (status, area, code, action), items in groups.items():
+            detail = items[0]["message"] if len(items) == 1 else ", ".join(s for item in items for s in item["subjects"])
+            print(f"{status:<6} {area:<9} {code}: {detail}")
+            if action:
+                print(f"       next: {action}")
+    return 1 if report["overall"] == "ACTION" else 0
+if __name__ == "__main__":
+    raise SystemExit(main())
