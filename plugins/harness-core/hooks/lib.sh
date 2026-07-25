@@ -110,7 +110,11 @@ parse_tool_file_path() {
             .path, .file_path, .file, .uri
         ]
         | map(select(type == "string" and test("[^[:space:]]")))
-        | first // empty' 2>/dev/null
+        | unique as $paths
+        | if ($paths | length) > 1
+          then error("conflicting non-empty path aliases")
+          else $paths[0] // empty
+          end' 2>/dev/null
 }
 
 # Write/Edit content or replacement text: `.content` (Write) or `.new_string`

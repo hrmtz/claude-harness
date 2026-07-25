@@ -19,25 +19,43 @@ source "$(dirname "$0")/lib.sh"
 
 HOOK_INPUT=$(cat)
 
-FILE_PATH=$(parse_tool_file_path)
+if ! FILE_PATH=$(parse_tool_file_path); then
+  printf '%s\n' "credential read guard path parsing failed; refusing tool execution" >&2
+  exit 2
+fi
 [ -z "$FILE_PATH" ] && exit 0
 
-# MCP filesystem tools commonly use file:// URIs. Decode only local file URIs;
-# non-file schemes are remote resources and outside this local-file guard.
-case "$FILE_PATH" in
-  file://*)
-    FILE_PATH=$(python3 - "$FILE_PATH" <<'PY' 2>/dev/null || true
+# MCP filesystem tools commonly use file:// URIs. URI schemes and hostnames are
+# case-insensitive. Decode only local file URIs; remote resources remain outside
+# this local-file guard. Decoder failure is distinct from an intentional remote.
+if [[ "$FILE_PATH" == *://* ]]; then
+  if ! URI_RESULT=$(python3 - "$FILE_PATH" <<'PY' 2>/dev/null
 import sys
 from urllib.parse import unquote, urlparse
 u = urlparse(sys.argv[1])
-if u.scheme == "file" and u.netloc in {"", "localhost"}:
-    print(unquote(u.path))
+scheme = u.scheme.lower()
+if scheme != "file":
+    print("REMOTE")
+elif u.netloc and (u.hostname or "").lower() != "localhost":
+    print("REMOTE")
+elif not u.path:
+    raise ValueError("local file URI has no path")
+else:
+    print("LOCAL:" + unquote(u.path))
 PY
-    )
-    [ -z "$FILE_PATH" ] && exit 0
-    ;;
-  *://*) exit 0 ;;
-esac
+  ); then
+    printf '%s\n' "credential read guard URI decoding failed; refusing tool execution" >&2
+    exit 2
+  fi
+  case "$URI_RESULT" in
+    LOCAL:*) FILE_PATH="${URI_RESULT#LOCAL:}" ;;
+    REMOTE) exit 0 ;;
+    *)
+      printf '%s\n' "credential read guard URI classification failed; refusing tool execution" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # ----------------------------------------
 # Exempt suffix list (= dummy / template / test fixture、 block しない)

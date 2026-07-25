@@ -242,6 +242,15 @@ expect_payload_block() {
     esac
 }
 
+expect_payload_failure() {
+    read_guard_payload_result "$1" "${3:-claude}"
+    case $? in
+        2) ok "$2" ;;
+        0) bad "$2 unexpectedly produced a normal deny instead of parser failure" ;;
+        1) bad "$2 became a clean allow" ;;
+    esac
+}
+
 expect_payload_allow() {
     read_guard_payload_result "$1" "${3:-claude}"
     case $? in
@@ -254,10 +263,14 @@ expect_payload_allow() {
 expect_payload_block '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/.env"}}' "MCP .path credential read blocks"
 expect_payload_block '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":".env"}}' "MCP relative credential read blocks"
 expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}' "MCP file URI credential read blocks after decode"
+expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"FILE:///tmp/proj/%2Eenv"}}' "uppercase local file URI credential read blocks"
+expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file://LOCALHOST/tmp/proj/%2Eenv"}}' "uppercase localhost file URI credential read blocks"
 expect_payload_allow '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}' "benign MCP read allowed"
 expect_payload_block '{"toolName":"read_file","toolInput":{"path":"/tmp/proj/.env"}}' "Grok camel-case credential read emits top-level deny" grok
 expect_payload_block '{"tool_input":{"file_path":"","path":"/tmp/proj/.env"}}' "empty snake-case primary alias falls through to classified path"
 expect_payload_block '{"toolInput":{"file_path":"  ","path":"/tmp/proj/.env"}}' "blank camel-case primary alias falls through to classified path" grok
+expect_payload_failure '{"tool_input":{"file_path":"/tmp/proj/README.md","path":"/tmp/proj/.env"}}' "conflicting snake-case path aliases fail closed"
+expect_payload_failure '{"toolInput":{"path":"/tmp/proj/README.md","uri":"file:///tmp/proj/.env"}}' "conflicting camel-case path aliases fail closed" grok
 
 oversized_payload="$(python3 -c 'import json; print(json.dumps({"tool_input":{"file_path":"/tmp/proj/.env","padding":"x"*3000000}}))')"
 expect_payload_block "$oversized_payload" "oversized valid payload still emits one deny JSON"
@@ -297,6 +310,30 @@ else
     [ $? -eq 2 ] \
         && ok "missing guard executable is an execution failure, never a clean allow" \
         || bad "missing guard executable did not return the fail-closed test status"
+fi
+
+dependency_failure_fails_closed() {
+    local command_name="$1" payload="$2" tmp_home fake_bin out rc
+    tmp_home="$(make_test_home "$TEST_ROOT")" || return 1
+    fake_bin="$(mktemp -d "$TEST_ROOT/fake-bin.XXXXXX")" || return 1
+    printf '#!/bin/sh\nexit 1\n' > "$fake_bin/$command_name"
+    chmod +x "$fake_bin/$command_name"
+    out="$(printf '%s' "$payload" \
+        | PATH="$fake_bin:$PATH" HOME="$tmp_home" \
+            bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+    rc=$?
+    [ "$rc" -ne 0 ] && [ -z "$out" ]
+}
+
+if dependency_failure_fails_closed jq '{"tool_input":{"path":"/tmp/proj/.env"}}'; then
+    ok "path parser dependency failure is nonzero, never a clean allow"
+else
+    bad "path parser dependency failure was masked"
+fi
+if dependency_failure_fails_closed python3 '{"tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}'; then
+    ok "local URI decoder failure is nonzero, never a clean allow"
+else
+    bad "local URI decoder failure was masked"
 fi
 
 # ----------------------------------------------------------------------------

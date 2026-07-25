@@ -325,8 +325,9 @@ For classified sources:
 
 - once classification succeeds, deny-envelope serialization failure exits nonzero with a
   value-free stderr diagnostic instead of returning an empty successful hook result;
-- unparsable hook input preserves current empty-path behavior; changing global pre-classification
-  policy is out of scope;
+- parser dependency failure, conflicting non-empty path aliases, and local file-URI decoder
+  failure exit nonzero with a value-free diagnostic instead of becoming a clean allow;
+- a valid payload with no supported path field preserves the clean empty-path behavior;
 - a valid classified path always emits the CLI-correct deny object;
 - marker filesystem errors cannot produce an allow because the marker is not consulted;
 - logging failure cannot produce an allow because `emit_deny` is independent of logging;
