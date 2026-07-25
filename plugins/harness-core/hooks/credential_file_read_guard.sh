@@ -17,7 +17,15 @@
 
 source "$(dirname "$0")/lib.sh"
 
-HOOK_INPUT=$(cat)
+if ! HOOK_INPUT=$(cat); then
+  printf '%s\n' "credential read guard input acquisition failed; refusing tool execution" >&2
+  exit 2
+fi
+if [ -z "$HOOK_INPUT" ] || ! printf '%s' "$HOOK_INPUT" \
+    | jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; then
+  printf '%s\n' "credential read guard input validation failed; refusing tool execution" >&2
+  exit 2
+fi
 
 if ! FILE_PATH=$(parse_tool_file_path); then
   printf '%s\n' "credential read guard path parsing failed; refusing tool execution" >&2
@@ -41,7 +49,10 @@ elif u.netloc and (u.hostname or "").lower() != "localhost":
 elif not u.path:
     raise ValueError("local file URI has no path")
 else:
-    print("LOCAL:" + unquote(u.path))
+    decoded = unquote(u.path)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
+        raise ValueError("local file URI contains unsupported control characters")
+    print("LOCAL:" + decoded)
 PY
   ); then
     printf '%s\n' "credential read guard URI decoding failed; refusing tool execution" >&2

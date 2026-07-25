@@ -327,6 +327,8 @@ For classified sources:
   value-free stderr diagnostic instead of returning an empty successful hook result;
 - parser dependency failure, conflicting non-empty path aliases, and local file-URI decoder
   failure exit nonzero with a value-free diagnostic instead of becoming a clean allow;
+- empty input, multiple JSON values, non-object JSON, and decoded URI control characters fail
+  closed before path classification;
 - a valid payload with no supported path field preserves the clean empty-path behavior;
 - a valid classified path always emits the CLI-correct deny object;
 - marker filesystem errors cannot produce an allow because the marker is not consulted;

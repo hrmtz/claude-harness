@@ -265,6 +265,7 @@ expect_payload_block '{"tool_name":"mcp__filesystem__read_file","tool_input":{"p
 expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}' "MCP file URI credential read blocks after decode"
 expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"FILE:///tmp/proj/%2Eenv"}}' "uppercase local file URI credential read blocks"
 expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file://LOCALHOST/tmp/proj/%2Eenv"}}' "uppercase localhost file URI credential read blocks"
+expect_payload_failure '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/%2Eenv%00.example"}}' "NUL-bearing local file URI fails closed before shell coercion"
 expect_payload_allow '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}' "benign MCP read allowed"
 expect_payload_block '{"toolName":"read_file","toolInput":{"path":"/tmp/proj/.env"}}' "Grok camel-case credential read emits top-level deny" grok
 expect_payload_block '{"tool_input":{"file_path":"","path":"/tmp/proj/.env"}}' "empty snake-case primary alias falls through to classified path"
@@ -334,6 +335,25 @@ if dependency_failure_fails_closed python3 '{"tool_input":{"uri":"file:///tmp/pr
     ok "local URI decoder failure is nonzero, never a clean allow"
 else
     bad "local URI decoder failure was masked"
+fi
+
+empty_out="$(HOME="$(make_test_home "$TEST_ROOT")" \
+    bash "$HOOKS/credential_file_read_guard.sh" </dev/null 2>/dev/null)"
+empty_rc=$?
+if [ "$empty_rc" -ne 0 ] && [ -z "$empty_out" ]; then
+    ok "empty hook input is nonzero, never a clean allow"
+else
+    bad "empty hook input was accepted (rc=$empty_rc)"
+fi
+
+multi_out="$(printf '%s' '{}{}' \
+    | HOME="$(make_test_home "$TEST_ROOT")" \
+        bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+multi_rc=$?
+if [ "$multi_rc" -ne 0 ] && [ -z "$multi_out" ]; then
+    ok "multiple JSON values are nonzero, never a clean allow"
+else
+    bad "multiple JSON values were accepted (rc=$multi_rc)"
 fi
 
 # ----------------------------------------------------------------------------
