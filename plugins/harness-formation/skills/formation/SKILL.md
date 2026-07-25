@@ -206,12 +206,13 @@ Do not rely on it to spread load; choose by the table above from the start.
   model; set it explicitly when a worker needs a different tier than the
   session default.
 - `--orchestrator` (claude workers, no explicit `--model`): asks `capacity-oracle
-  orchestrator-model --weight-class heavy` to pick the Claude tier by live
-  subscription headroom — **fable** for a heavy orchestration when there's ample
-  quota, else **opus**. A running session can't switch its own model, so this is
-  how you launch a *peer* orchestrator on the right tier. Fail-open: if
-  capacity-oracle isn't installed the worker just inherits the default tier. A
-  one-line stderr notice states the picked tier. (See capacity-oracle-mcp#92.)
+  orchestrator-model --weight-class heavy` for an authoritative admission
+  decision and Claude tier. It launches only when the oracle exits zero with
+  `admitted=true` and model **opus** or **fable**. Quota refusal, a missing
+  oracle, and missing/malformed/non-official output all fail closed before pane,
+  process, or registry mutation. The refusal notice includes measured headroom
+  and the stable reason code. A running session can't switch its own model, so
+  this is how you safely launch a *peer* orchestrator on the right tier.
 - **Placement defaults to a new tmux window** (isolates the worker's SessionStart
   window-rename from the parent — the ember-tanuki incident); pass `--split` for
   the old split-pane behavior. Either way it launches `claude --session-name

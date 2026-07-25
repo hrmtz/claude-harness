@@ -991,6 +991,80 @@ start_mailbox_relay() {
   return 1
 }
 
+# Ask capacity-oracle for an authoritative Claude launch decision. This is
+# intentionally fail-closed: the caller may proceed only when the command exits
+# zero and its JSON says admitted=true with an allowed model. The parser also
+# validates types/ranges so malformed or partial output cannot become an
+# accidental positive admission.
+resolve_orchestrator_admission() {
+  ORCHESTRATOR_MODEL=""
+
+  if ! command -v capacity-oracle >/dev/null 2>&1; then
+    echo "formation: --orchestrator: capacity-oracle is required; refusing Claude launch." >&2
+    return 4
+  fi
+
+  local oracle_json="" oracle_status=0 parsed=""
+  oracle_json="$(capacity-oracle orchestrator-model --weight-class heavy 2>/dev/null)" \
+    || oracle_status=$?
+
+  parsed="$(printf '%s' "$oracle_json" | python3 -c '
+import json
+import math
+import re
+import sys
+
+d = json.load(sys.stdin)
+admitted = d.get("admitted")
+model = d.get("model")
+headroom = d.get("claude_headroom")
+signal = d.get("claude_signal")
+reason_code = d.get("reason_code")
+
+if type(admitted) is not bool:
+    raise ValueError("admitted must be boolean")
+if admitted and model not in {"opus", "fable"}:
+    raise ValueError("admitted result requires an allowed model")
+if not admitted and model is not None:
+    raise ValueError("refusal must not contain a usable model")
+if headroom is not None:
+    if isinstance(headroom, bool) or not isinstance(headroom, (int, float)):
+        raise ValueError("headroom must be numeric or null")
+    if not math.isfinite(headroom) or not 0 <= headroom <= 1:
+        raise ValueError("headroom outside 0..1")
+if not isinstance(signal, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", signal):
+    raise ValueError("invalid claude_signal")
+if not isinstance(reason_code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", reason_code):
+    raise ValueError("invalid reason_code")
+
+print("|".join((
+    "true" if admitted else "false",
+    model if model is not None else "-",
+    str(headroom) if headroom is not None else "unavailable",
+    signal,
+    reason_code,
+)))
+' 2>/dev/null)" || parsed=""
+
+  local admitted="" picked="" headroom="" signal="" reason_code=""
+  IFS='|' read -r admitted picked headroom signal reason_code <<< "$parsed"
+
+  if [[ "$oracle_status" -eq 0 && "$admitted" == "true" &&
+        "$signal" == "official-api" && "$headroom" != "unavailable" &&
+        ( "$picked" == "opus" || "$picked" == "fable" ) ]]; then
+    ORCHESTRATOR_MODEL="$picked"
+    echo "formation: --orchestrator: capacity-oracle admitted claude tier '$picked' (headroom=$headroom)." >&2
+    return 0
+  fi
+
+  if [[ "$admitted" == "false" && "$picked" == "-" && -n "$reason_code" ]]; then
+    echo "formation: --orchestrator: Claude launch refused: $reason_code (headroom=$headroom)." >&2
+  else
+    echo "formation: --orchestrator: invalid capacity-oracle admission response; refusing Claude launch." >&2
+  fi
+  return 4
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
@@ -1029,25 +1103,12 @@ cmd_spawn() {
   # Resolve the per-cli default when neither override was given.
   bypass="$(resolve_bypass_default "$cli" "$bypass")"
 
-  # --orchestrator: for a heavyweight claude orchestrator with no explicit
-  # --model, let capacity-oracle pick the Claude tier (opus vs fable) by live
-  # subscription headroom (fable only when there's ample quota). Fail-open — a
-  # missing oracle CLI or any error leaves --model unset so the worker inherits
-  # the global default tier. Only meaningful for claude (fable/opus are Claude
-  # models); ignored for codex/kimi.
+  # --orchestrator: admission-gate a heavyweight Claude orchestrator before any
+  # pane/process/registry mutation, then use the admitted Opus/Fable tier.
+  # Missing/malformed/non-authoritative oracle responses fail closed.
   if [[ -n "$orchestrator" && "$cli" == "claude" && -z "$model" ]]; then
-    if command -v capacity-oracle >/dev/null 2>&1; then
-      local picked
-      picked="$(capacity-oracle orchestrator-model --weight-class heavy -q '.model' 2>/dev/null)"
-      if [[ "$picked" == "opus" || "$picked" == "fable" ]]; then
-        model="$picked"
-        echo "formation: --orchestrator: capacity-oracle picked claude tier '$model' by live headroom." >&2
-      else
-        echo "formation: --orchestrator: capacity-oracle returned no usable tier; inheriting the default." >&2
-      fi
-    else
-      echo "formation: --orchestrator: capacity-oracle not installed; inheriting the default tier." >&2
-    fi
+    resolve_orchestrator_admission || return $?
+    model="$ORCHESTRATOR_MODEL"
   fi
 
   local briefing="$1" name="${2:-}"

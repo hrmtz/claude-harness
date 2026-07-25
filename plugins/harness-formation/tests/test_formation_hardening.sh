@@ -683,6 +683,84 @@ if python3 "$HERE/test_babysit_skill.py"; then ok "babysit skill boundaries"; el
 if bash "$HERE/test_claude_skill_install.sh"; then ok "babysit Claude skill installer"; else bad "babysit Claude skill installer"; fi
 
 # ----------------------------------------------------------------------------
+# Group 6: Claude orchestrator admission is fail-closed before mutation
+# (capacity-oracle-mcp#2)
+# ----------------------------------------------------------------------------
+echo "== orchestrator admission gate (capacity-oracle-mcp#2) =="
+
+ORACLE_BIN="$TMPDIR_T/oracle-bin"
+mkdir -p "$ORACLE_BIN"
+cat > "$ORACLE_BIN/capacity-oracle" <<'ORACLE'
+#!/bin/bash
+case "${ORACLE_FIXTURE:-deny}" in
+  deny)
+    printf '%s\n' '{"admitted":false,"model":null,"claude_headroom":0.02,"claude_signal":"official-api","reason_code":"CLAUDE_HEADROOM_BELOW_LAUNCH_FLOOR"}'
+    exit 3
+    ;;
+  empty)
+    exit 0
+    ;;
+  malformed)
+    printf '%s\n' '{"admitted":"yes","model":"opus"}'
+    exit 0
+    ;;
+  nonofficial)
+    printf '%s\n' '{"admitted":true,"model":"opus","claude_headroom":0.8,"claude_signal":"ledger-estimate","reason_code":"CLAUDE_ADMITTED_OPUS"}'
+    exit 0
+    ;;
+esac
+ORACLE
+chmod +x "$ORACLE_BIN/capacity-oracle"
+
+cat > "$ORACLE_BIN/tmux" <<'TMUX'
+#!/bin/bash
+printf '%s\n' "$*" >> "${TMUX_CALL_LOG:?}"
+printf '%%99\n'
+TMUX
+chmod +x "$ORACLE_BIN/tmux"
+
+ADMISSION_BRIEF="$TMPDIR_T/admission-brief.md"
+printf '%s\n' '# Refused worker must never launch' > "$ADMISSION_BRIEF"
+
+# A structurally valid positive response is the only path that yields a model.
+capacity-oracle() {
+  printf '%s\n' '{"admitted":true,"model":"opus","claude_headroom":0.3,"claude_signal":"official-api","reason_code":"CLAUDE_ADMITTED_OPUS"}'
+}
+if resolve_orchestrator_admission 2>/dev/null && [[ "$ORCHESTRATOR_MODEL" == "opus" ]]; then
+  ok "valid positive admission yields the allowed model"
+else
+  bad "valid positive admission was rejected"
+fi
+unset -f capacity-oracle
+
+expect_admission_refusal() { # fixture label expected-message
+  local fixture="$1" label="$2" expected="$3"
+  local run_home="$TMPDIR_T/admission-$fixture" tmux_log="$TMPDIR_T/tmux-$fixture.log"
+  local stderr_file="$TMPDIR_T/stderr-$fixture.log" rc
+  mkdir -p "$run_home"
+  : > "$tmux_log"
+  PATH="$ORACLE_BIN:$PATH" FORMATION_HOME="$run_home" \
+    TMUX_CALL_LOG="$tmux_log" ORACLE_FIXTURE="$fixture" \
+    bash "$BIN" spawn --cli claude --orchestrator "$ADMISSION_BRIEF" "blocked-$fixture" \
+    >/dev/null 2>"$stderr_file"
+  rc=$?
+
+  if [[ "$rc" -eq 4 ]]; then ok "$label exits with refusal status"; else bad "$label exit=$rc, want 4"; fi
+  if [[ ! -s "$tmux_log" ]]; then ok "$label creates no pane/process"; else bad "$label invoked tmux"; fi
+  if [[ ! -s "$run_home/formation/registry.jsonl" ]]; then ok "$label creates no registry entry"; else bad "$label mutated registry"; fi
+  if grep -q "$expected" "$stderr_file"; then ok "$label surfaces refusal detail"; else bad "$label missing refusal detail"; fi
+}
+
+expect_admission_refusal deny "official low headroom" \
+  'CLAUDE_HEADROOM_BELOW_LAUNCH_FLOOR (headroom=0.02)'
+expect_admission_refusal empty "missing oracle output" \
+  'invalid capacity-oracle admission response'
+expect_admission_refusal malformed "malformed oracle output" \
+  'invalid capacity-oracle admission response'
+expect_admission_refusal nonofficial "non-official positive output" \
+  'invalid capacity-oracle admission response'
+
+# ----------------------------------------------------------------------------
 echo
 printf 'RESULT: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
