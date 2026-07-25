@@ -1,0 +1,65 @@
+{
+  "errors": [],
+  "issues": {"140": "OPEN", "141": "OPEN"},
+  "parent": {
+    "ahead": 0,
+    "behind": 31,
+    "dirty_paths": 70
+  },
+  "prs": [
+    {
+      "baseRefName": "dev",
+      "body": "Closes #140\n\nTests: passed",
+      "closing_issue_numbers": [140],
+      "headRefName": "agent/merged-140",
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "isCrossRepository": false,
+      "isDraft": false,
+      "issue_numbers": [140],
+      "latestReviews": [{"state": "APPROVED"}],
+      "mergedAt": "2026-07-24T00:00:00Z",
+      "number": 200,
+      "reviewDecision": "APPROVED",
+      "state": "MERGED",
+      "statusCheckRollup": [{"conclusion": "SUCCESS"}]
+    },
+    {
+      "baseRefName": "dev",
+      "body": "Refs #141\n\nTest evidence: passed",
+      "closing_issue_numbers": [],
+      "headRefName": "agent/draft-141",
+      "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "isCrossRepository": false,
+      "isDraft": true,
+      "issue_numbers": [141],
+      "latestReviews": [],
+      "mergedAt": null,
+      "number": 201,
+      "reviewDecision": "",
+      "state": "OPEN",
+      "statusCheckRollup": []
+    }
+  ],
+  "remote_branches": {
+    "agent/draft-141": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "agent/merged-140": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dev": "dddddddddddddddddddddddddddddddddddddddd"
+  },
+  "remote_known": true,
+  "workers": [
+    {
+      "id": "issue141-worker",
+      "issue_numbers": [141],
+      "pane_alive": false,
+      "pr_numbers": [201],
+      "state": "DONE"
+    }
+  ],
+  "worktrees": [
+    {
+      "HEAD": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "branch": "refs/heads/agent/draft-141",
+      "worktree": "/fixture/stale-draft-worktree"
+    }
+  ]
+}
