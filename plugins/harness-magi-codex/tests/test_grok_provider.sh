@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Provider fallback regression: Grok adapter provenance is accepted only as Grok.
 set -uo pipefail
+export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
@@ -33,12 +34,29 @@ if [ -e "/proc/\$\$/fd/9" ]; then
 else
   printf 'absent\n' > "$TMP/grok_fd9"
 fi
+if [ "\${STUB_FAIL:-}" = 1 ]; then
+  printf 'provider detail: password=%s\n' 'fixture-value' >&2
+  exit 9
+fi
 mkdir -p "$TMP/home/.grok/sessions/workspace/$SID"
 cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
 {"type":"assistant","content":"reviewing","model_id":"grok-4.5","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
 {"type":"tool_result","content":"verified"}
 {"type":"assistant","content":"done","model_id":"grok-4.5","tool_calls":[]}
 JSONL
+if [ -n "\${STUB_TRANSCRIPT_BYTES:-}" ]; then
+  python3 - "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" \
+      "\$STUB_TRANSCRIPT_BYTES" <<'PY'
+import sys
+path, raw_target = sys.argv[1:3]
+target = int(raw_target)
+prefix = b'{"type":"assistant","content":"done","model_id":"grok-4.5","tool_calls":[],"padding":"'
+suffix = b'"}\n'
+if target < len(prefix) + len(suffix):
+    raise SystemExit("invalid transcript fixture size")
+open(path, "wb").write(prefix + b"x" * (target - len(prefix) - len(suffix)) + suffix)
+PY
+fi
 python3 - <<'PY'
 import json
 finding = {"reviewer":"GROK-XFAMILY","round":2,"artifact_id":"$DOC_ID",
@@ -121,6 +139,49 @@ HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_2_xfamily" \
     --orchestrator-family codex --reviewer-family grok >/dev/null 2>&1
 [ $? -ne 0 ] && ok "post-adapter Grok transcript mutation rejected" \
               || bad "mutated Grok transcript passed gate"
+
+python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'grok failure diagnostic fixture' >/dev/null || exit 1
+claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || exit 1
+claim_id="${claim_line##*CLAIM_ID=}"
+python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || exit 1
+FAILED_PREFIX="$STATE/round_2_grok_failure"
+PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_FAIL=1 "$ADAPTER" --reviewer grok \
+    "$DOC" 2 "$PRIOR" "$FAILED_PREFIX" >/dev/null 2>&1
+failed_rc=$?
+python3 - "$FAILED_PREFIX.FAILED.json" <<'PY' >/dev/null 2>&1
+import json, sys
+payload = json.load(open(sys.argv[1]))
+assert payload["provider_exit_status"] == 9
+assert payload["provider_command"] == "grok"
+assert "REDACTED" in payload["diagnostic"]
+assert "fixture-value" not in payload["diagnostic"]
+PY
+diag_rc=$?
+[ $failed_rc -eq 2 ] && [ $diag_rc -eq 0 ] \
+    && ok "Grok failure preserves bounded scrubbed provider stderr" \
+    || bad "Grok failure diagnostic was absent or unsanitized"
+
+# The embedded provider-envelope parser must bound each line before decoding or allocating the
+# remainder. Exactly 1 MiB is legal; one byte more fails closed.
+for transcript_bytes in 1048576 1048577; do
+  python3 "$GUARD" new-campaign "$DOC" --operator test \
+      --reason "Grok bounded transcript fixture $transcript_bytes" >/dev/null || exit 1
+  claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || exit 1
+  claim_id="${claim_line##*CLAIM_ID=}"
+  python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || exit 1
+  bounded_prefix="$STATE/round_2_grok_line_$transcript_bytes"
+  PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_TRANSCRIPT_BYTES="$transcript_bytes" \
+      "$ADAPTER" --reviewer grok "$DOC" 2 "$PRIOR" "$bounded_prefix" \
+      >/dev/null 2>&1
+  bounded_rc=$?
+  if { [ "$transcript_bytes" -eq 1048576 ] && [ "$bounded_rc" -eq 0 ]; } \
+      || { [ "$transcript_bytes" -eq 1048577 ] && [ "$bounded_rc" -eq 2 ] \
+           && [ -f "$bounded_prefix.FAILED.json" ]; }; then
+    ok "Grok transcript line boundary $transcript_bytes bytes"
+  else
+    bad "Grok transcript line boundary $transcript_bytes returned $bounded_rc"
+  fi
+done
 
 # Grok symmetric to claude g6e: requested grok-4.5 but the transcript served the truncated grok-4.
 # The directional served_satisfies must deny this downgrade on the fallback path too.

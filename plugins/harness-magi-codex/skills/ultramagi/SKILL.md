@@ -73,10 +73,44 @@ missing: <family/phase/reason>
 degraded_until: <what must run before ship>
 ```
 
+## Epic admission gate (before [0])
+
+Classify the request before drafting a design. Treat it as an **epic**, not one ultramagi task, if
+any of these hold:
+
+- it contains two or more outcomes that can be merged, verified, or rolled back independently;
+- one invariant plus one acceptance-test/rollback pair cannot describe the whole change;
+- it crosses ordered phases whose failure modes need separate gates; or
+- the proposed design would contain multiple task-level implementation plans.
+
+For an epic:
+
+1. Create one parent Epic in the repository's native issue tracker before design review. Give it
+   the global invariant, explicit non-goals, ordered dependency-aware slices, acceptance criteria,
+   rollback boundaries, and a checkbox/status link for every slice. If no remote tracker is
+   configured, create `docs/designs/<EPIC>-EPIC.md` with the same fields and record that the remote
+   Epic is pending; do not silently collapse the work back into one task.
+2. Split the work into the smallest **vertical, independently mergeable slices** that preserve the
+   global invariant. Prefer one pull request and one observable acceptance test per slice. Create
+   child issues only when separate ownership or scheduling needs them; otherwise the parent
+   checklist is enough.
+3. Keep the Epic document at coordination altitude: scope, dependencies, shared invariants,
+   sequencing, and completion state. Put implementable detail in one local design doc per slice,
+   normally `docs/designs/<EPIC>/<NN>-<SLICE>.md`.
+4. Select only the first unblocked slice and run [0] through [5] on that slice. Never send the
+   whole Epic or its umbrella document through the design plateau loop, and never implement later
+   slices merely because they appear in the same plan.
+5. After the slice passes its gates, update the Epic with evidence and discovered dependency
+   changes, then select the next unblocked slice at [6].
+
+If the request is already one independently mergeable slice, do not create ceremonial Epic
+overhead.
+
 ## The loop (one pass per task)
 
 ```
-[0] SCOPE      one task. State the invariant that must not break.
+[0] SCOPE      one independently mergeable task/slice. State the local and inherited epic
+               invariants that must not break.
 [1] PLAN       design doc, preferably Claude-led for hard planning, written LOCALLY into
                docs/designs/<NAME>.md.
 [2] DUAL-MAGI  run bounded dual-magi-review campaigns on the doc toward PLATEAU.
@@ -118,7 +152,7 @@ degraded_until: <what must run before ship>
                Existing exact-revision plateau + human judgment remain the ship authority.
 [5] CODE-REVIEW on the final diff. Prefer Claude for design-intent/adversarial review,
                then Codex for final fixes/tests. Commit only when requested or policy allows.
-[6] NEXT       update the epic; pick the next task; back to [0].
+[6] NEXT       update the epic with gate/test evidence; pick the next unblocked slice; back to [0].
 ```
 
 ## Gates that block the irreversible step
@@ -202,6 +236,7 @@ For a product/launch task, swap in security-abuse and business/GTM lenses.
 | reviewers that don't run commands | self-reported grounding = hallucination passes | require `verify_commands_executed`; degrade empty rounds |
 | `--confirm` as the only swap guard | an agent clears it on bad state | programmatic invariant gate inside the script |
 | one mega design doc for a whole epic | un-reviewable, un-shippable | one task per loop |
+| reviewing or implementing the umbrella Epic as one task | rigor amplifies scope instead of convergence | admit the Epic, then gate one mergeable slice at a time |
 | specifying a mechanism you have not verified exists | ships an unimplementable spec | probe the interface *before* writing it into the design |
 
 That last row is not hypothetical: this plugin's own design specified a `--json-schema @file` flag

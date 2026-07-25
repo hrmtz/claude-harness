@@ -112,6 +112,35 @@ class FailureClassificationTests(unittest.TestCase):
         self.write_meta(parsed=True)
         self.assertEqual(self.result()["classification"], "ok")
 
+    def test_grounding_failure_diagnostic_is_bounded_and_scrubbed(self) -> None:
+        payload = self.valid_payload()
+        payload["verify_commands_executed"] = []
+        self.output.write_text(json.dumps(payload))
+        self.write_meta(parsed=True)
+        validator_error = self.base / "validator.err"
+        validator_error.write_text(
+            "schema_grounding_verdict=PASS requires commands; password="
+            + "fixture-value"
+        )
+        result = classify(
+            output=self.output,
+            log=self.log,
+            scrub_meta=self.meta,
+            provider_exit=0,
+            scrub_exit=0,
+            status_valid=True,
+            schema_path=self.schema,
+            doc=self.doc,
+            reviewer="MELCHIOR",
+            round_number=1,
+            expected_artifact_id=artifact_id(self.doc),
+            expected_artifact_sha=hashlib.sha256(self.doc.read_bytes()).hexdigest(),
+            validator_error=validator_error,
+        )
+        self.assertEqual(result["classification"], "convergence-rule-rejection")
+        self.assertIn("REDACTED", result["diagnostic"])
+        self.assertNotIn("fixture-value", result["diagnostic"])
+
     def test_doc_mutation_is_distinct_from_claim_bound_identity(self) -> None:
         payload = self.valid_payload()
         self.output.write_text(json.dumps(payload))

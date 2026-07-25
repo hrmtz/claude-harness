@@ -25,6 +25,9 @@ schema=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; shift 2
   elif [ "$1" = "--output-schema" ]; then schema="$2"; shift 2
+  elif [ "$1" = "-C" ]; then
+    [ -z "${STUB_ARGS_LOG:-}" ] || printf '%s\n' "$2" >> "$STUB_ARGS_LOG"
+    shift 2
   else shift; fi
 done
 [ -z "${STUB_CALLED:-}" ] || printf 'called\n' >> "$STUB_CALLED"
@@ -42,8 +45,11 @@ reviewer="$(printf '%s\n' "$prompt" | sed -n 's/^You are the \([^ ]*\) reviewer.
 [ -z "${STUB_WRONG_REVIEWER:-}" ] || reviewer="WRONG"
 marker="Bearer "
 marker="${marker}AAAAAAAAAAAA"
-printf '{"reviewer":"%s","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["%s"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
-  "$reviewer" "$artifact_id" "$artifact_sha" "$marker" > "$out"
+grounding="${STUB_GROUNDING:-PASS}"
+commands='["'"$marker"'"]'
+[ -z "${STUB_EMPTY_COMMANDS:-}" ] || commands='[]'
+printf '{"reviewer":"%s","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"%s","verify_commands_executed":%s,"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$reviewer" "$artifact_id" "$artifact_sha" "$grounding" "$commands" > "$out"
 printf '%s\n' "$marker"
 [ -z "${STUB_EXIT:-}" ] || exit 70
 if [ -n "${STUB_CANCEL:-}" ] && printf '%s\n' "$prompt" | grep -q 'You are the CASPAR reviewer'; then
@@ -221,6 +227,29 @@ if [ "$wrong_rc" -ne 0 ] && [ -s "$wrong_diag" ] \
 else
   bad "reviewer identity mismatch escaped or was misclassified"
 fi
+
+for grounding in PASS PARTIAL FAIL; do
+  grounding_dir="$TMP/grounding-$grounding"
+  grounding_doc="$TMP/grounding-$grounding.md"
+  mkdir -p "$grounding_dir"
+  printf 'grounding fixture %s\n' "$grounding" > "$grounding_doc"
+  STUB_GROUNDING="$grounding" STUB_EMPTY_COMMANDS=1 PATH="$TMP/bin:$PATH" \
+    "$FANOUT" "$grounding_doc" 1 "$grounding_dir" >"$grounding_dir/run.log" 2>&1
+  grounding_rc=$?
+  grounding_diag="$(
+    find "$grounding_dir" -maxdepth 1 -name 'round_1_fanout.*.FAILED.json' \
+      -type f | head -n 1
+  )"
+  if [ "$grounding_rc" -ne 0 ] && [ -s "$grounding_diag" ] \
+      && [ "$(jq -r '[.reviewers[].classification] | unique | join(",")' \
+          "$grounding_diag")" = "convergence-rule-rejection" ] \
+      && jq -e '[.reviewers[].diagnostic] | all(test("grounding|verification"))' \
+          "$grounding_diag" >/dev/null; then
+    ok "$grounding with empty verification commands is rejected with diagnostics"
+  else
+    bad "$grounding with empty verification commands escaped grounding validation"
+  fi
+done
 
 mkdir -p "$TMP/provider-exit"
 EXIT_DOC="$TMP/provider-exit-design.md"; printf '%s\n' 'provider exit fixture' > "$EXIT_DOC"

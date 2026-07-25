@@ -10,6 +10,7 @@ from pathlib import Path
 
 import jsonschema
 
+from magi_scrub import scrub_text
 from magi_validate_findings import validate
 
 
@@ -42,6 +43,7 @@ def classify(
     round_number: int,
     expected_artifact_id: str,
     expected_artifact_sha: str,
+    validator_error: Path | None = None,
 ) -> dict[str, object]:
     meta = load_scrub_meta(scrub_meta)
     result: dict[str, object] = {
@@ -107,8 +109,20 @@ def classify(
             return result
     try:
         validate(payload, schema)
-    except ValueError:
+    except ValueError as exc:
         result["classification"] = "convergence-rule-rejection"
+        diagnostic = str(exc)
+        if validator_error is not None:
+            try:
+                raw = validator_error.read_bytes()
+            except FileNotFoundError:
+                result["diagnostic_unavailable"] = "missing"
+            except OSError as error:
+                result["diagnostic_unavailable"] = f"io-error:{type(error).__name__}"
+            else:
+                result["diagnostic_truncated"] = len(raw) > 65536
+                diagnostic = raw[:65536].decode("utf-8", errors="replace")
+        result["diagnostic"] = scrub_text(diagnostic)[:65536]
         return result
     return result
 
@@ -128,6 +142,7 @@ def main() -> int:
     parser.add_argument("--claim-id", required=True)
     parser.add_argument("--artifact-id", required=True)
     parser.add_argument("--artifact-sha", required=True)
+    parser.add_argument("--validator-error")
     args = parser.parse_args()
 
     result = classify(
@@ -143,6 +158,7 @@ def main() -> int:
         round_number=args.round,
         expected_artifact_id=args.artifact_id,
         expected_artifact_sha=args.artifact_sha,
+        validator_error=Path(args.validator_error) if args.validator_error else None,
     )
     result["claim_id"] = args.claim_id
     result["artifact_id"] = args.artifact_id

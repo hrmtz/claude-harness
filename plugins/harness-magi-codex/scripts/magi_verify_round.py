@@ -10,12 +10,15 @@ import glob
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
 from magi_validate_findings import validate as validate_findings
+from magi_protocol import protocol_sha, strict_json_loads
+from magi_campaign_guard import load_ledger
 
 
 MAGI_GATE_OWNERSHIP = ("G1", "G2", "G3", "G4", "G5", "G6", "G9")
@@ -27,36 +30,88 @@ FAMILY_MARKERS = {
 }
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+MAX_ROUND_JSON_BYTES = 10 * 1024 * 1024
+MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
+MAX_TRANSCRIPT_LINE_BYTES = 1024 * 1024
+
+
+def _regular_size(path: Path, label: str, maximum: int | None = None) -> int:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{label} must be a regular file: {path}")
+    if maximum is not None and info.st_size > maximum:
+        raise ValueError(f"{label} exceeds {maximum}-byte limit: {path}")
+    return info.st_size
+
+
+def _sha(path: Path, maximum: int | None = None) -> str:
+    _regular_size(path, "hashed artifact", maximum)
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _bounded_jsonl(path: Path):
+    with path.open("rb") as handle:
+        line_number = 0
+        while True:
+            raw = handle.readline(MAX_TRANSCRIPT_LINE_BYTES + 1)
+            if not raw:
+                return
+            line_number += 1
+            if len(raw) > MAX_TRANSCRIPT_LINE_BYTES:
+                raise ValueError(
+                    f"transcript line exceeds {MAX_TRANSCRIPT_LINE_BYTES}-byte limit "
+                    f"at {path}:{line_number}"
+                )
+            try:
+                yield line_number, raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"transcript is not UTF-8 at {path}:{line_number}"
+                ) from exc
 
 
 def _models_and_tools(path: Path, reviewer_family: str) -> tuple[set[str], int]:
+    _regular_size(path, "transcript", MAX_TRANSCRIPT_BYTES)
     models: set[str] = set()
     tool_uses = 0
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if reviewer_family == "claude":
-                message = record.get("message") or {}
-                model = message.get("model")
-                content = message.get("content")
-                if isinstance(content, list):
-                    tool_uses += sum(
-                        1
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "tool_use"
-                    )
-            else:
-                model = record.get("model_id") if record.get("type") == "assistant" else None
-                calls = record.get("tool_calls")
-                if isinstance(calls, list):
-                    tool_uses += len(calls)
-            if model:
-                models.add(str(model))
+    for line_number, line in _bounded_jsonl(path):
+        if not line.strip():
+            continue
+        try:
+            record = strict_json_loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"malformed transcript JSON at {path}:{line_number}: {exc.msg}"
+            ) from exc
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"transcript record must be an object at {path}:{line_number}"
+            )
+        if reviewer_family == "claude":
+            message = record.get("message") or {}
+            if not isinstance(message, dict):
+                raise ValueError(
+                    f"Claude transcript message must be an object at {path}:{line_number}"
+                )
+            model = message.get("model")
+            content = message.get("content")
+            if isinstance(content, list):
+                tool_uses += sum(
+                    1
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "tool_use"
+                )
+        else:
+            model = record.get("model_id") if record.get("type") == "assistant" else None
+            calls = record.get("tool_calls")
+            if isinstance(calls, list):
+                tool_uses += len(calls)
+        if model:
+            models.add(str(model))
     return models, tool_uses
 
 
@@ -67,6 +122,7 @@ def verify_round(
     reviewer_family: str | None,
     *,
     expected_artifact_sha: str | None = None,
+    require_successful_claim: bool = False,
 ) -> dict[str, Any]:
     """Return parsed artifacts and failures without changing any file."""
 
@@ -81,18 +137,21 @@ def verify_round(
     findings: dict[str, Any] | None = None
     meta: dict[str, Any] | None = None
     findings_sha: str | None = None
+    expected_protocol_sha: str | None = None
     if not findings_path.exists():
         fail("G1", f"no cross-family findings at {findings_path}")
     elif not meta_path.exists():
         fail("G1", f"no provenance meta at {meta_path}")
     else:
         try:
+            _regular_size(findings_path, "findings", MAX_ROUND_JSON_BYTES)
+            _regular_size(meta_path, "metadata", MAX_ROUND_JSON_BYTES)
             findings_bytes = findings_path.read_bytes()
             meta_bytes = meta_path.read_bytes()
-            findings_raw = json.loads(findings_bytes)
-            meta_raw = json.loads(meta_bytes)
+            findings_raw = strict_json_loads(findings_bytes)
+            meta_raw = strict_json_loads(meta_bytes)
             findings_sha = hashlib.sha256(findings_bytes).hexdigest()
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, RecursionError, json.JSONDecodeError) as exc:
             fail("G1", f"unreadable round artifacts: {exc}")
         else:
             if not isinstance(findings_raw, dict) or not isinstance(meta_raw, dict):
@@ -105,7 +164,7 @@ def verify_round(
                     / "finding.schema.json"
                 )
                 try:
-                    schema = json.loads(schema_path.read_bytes())
+                    schema = strict_json_loads(schema_path.read_bytes())
                     validate_findings(
                         findings,
                         schema,
@@ -126,6 +185,7 @@ def verify_round(
             "meta": meta,
             "failures": failures,
             "transcript_path": None,
+            "protocol_sha": expected_protocol_sha,
         }
 
     if reviewer_family is None:
@@ -165,15 +225,52 @@ def verify_round(
         fail("G2", f"modelUsage keys {keys} are not all cross-family")
 
     actual_sha = expected_artifact_sha or _sha(doc)
+    g3_failures = []
     if meta.get("artifact_sha") != actual_sha:
-        fail(
-            "G3",
+        g3_failures.append(
             f"artifact_sha mismatch: round reviewed {str(meta.get('artifact_sha'))[:16]}…, "
             f"doc is now {actual_sha[:16]}… (stale round, or doc edited after review)",
         )
+    try:
+        expected_protocol_sha = protocol_sha()
+    except (OSError, RuntimeError, ValueError) as exc:
+        g3_failures.append(f"current protocol manifest is invalid: {exc}")
+    else:
+        if meta.get("protocol_sha") != expected_protocol_sha:
+            g3_failures.append(
+                "protocol_sha mismatch: cross-family round used a different runtime generation",
+            )
+    if g3_failures:
+        fail("G3", "; ".join(g3_failures))
 
     if meta.get("output_sha") != findings_sha:
         fail("G4", "output_sha mismatch: findings file changed since the adapter wrote it")
+
+    if require_successful_claim:
+        try:
+            ledger = load_ledger(doc, create=False)
+            review_round = findings.get("round")
+            state_dir = out_prefix.parent.resolve()
+            authorized = [
+                launch
+                for campaign in ledger["campaigns"]
+                if isinstance(campaign, dict)
+                for launch in campaign.get("launches", [])
+                if isinstance(launch, dict)
+                and launch.get("status") == "success"
+                and launch.get("phase") == "xfamily"
+                and launch.get("round") == review_round
+                and launch.get("artifact_sha") == actual_sha
+                and launch.get("protocol_sha") == expected_protocol_sha
+                and Path(str(launch.get("state_dir", ""))).resolve() == state_dir
+            ]
+            if len(authorized) != 1:
+                fail(
+                    "G6",
+                    "canonical cross-family pair lacks exactly one matching successful ledger claim",
+                )
+        except (OSError, RuntimeError, ValueError) as exc:
+            fail("G6", f"cannot authorize cross-family pair from campaign ledger: {exc}")
 
     turns = meta.get("num_turns")
     commands = findings.get("verify_commands_executed")
@@ -222,7 +319,7 @@ def verify_round(
                     "meta transcript_path does not match provider transcript resolution",
                 )
             recorded_sha = meta.get("transcript_sha")
-            actual_transcript_sha = _sha(transcript_path)
+            actual_transcript_sha = _sha(transcript_path, MAX_TRANSCRIPT_BYTES)
             if reviewer_family == "grok" and not recorded_sha:
                 fail("G6", "Grok meta records no transcript_sha")
             elif recorded_sha and recorded_sha != actual_transcript_sha:
@@ -286,4 +383,5 @@ def verify_round(
         "failures": failures,
         "transcript_path": str(transcript_path) if transcript_path else None,
         "findings_sha": findings_sha,
+        "protocol_sha": expected_protocol_sha,
     }

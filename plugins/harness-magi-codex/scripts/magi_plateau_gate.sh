@@ -28,18 +28,34 @@ case "$REVIEWER_FAMILY" in claude|grok) ;; *) usage ;; esac
 DOC_CONTROL_DIR="$(dirname "$(realpath "$DOC_PATH")")/.dual-magi"
 mkdir -p "$DOC_CONTROL_DIR"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOC_REAL="$(realpath "$DOC_PATH")"
+DOC_LOCK_ID="$(printf '%s' "$DOC_REAL" | sha256sum | cut -c1-16)"
+# Serialize verification, stale-marker revocation, and publication with fan-out,
+# synthesis, and cross-family phases for this exact document.
+# shellcheck source=magi_lock.sh
+source "$SCRIPT_DIR/magi_lock.sh"
+lock_rc=0
+magi_lock_acquire "$DOC_CONTROL_DIR/.review.${DOC_LOCK_ID}.lock" || lock_rc=$?
+case "$lock_rc" in
+    0) ;;
+    1) echo "gate: document review lock is held" >&2; exit 3 ;;
+    *) echo "gate: cannot acquire document review lock" >&2; exit 2 ;;
+esac
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
 python3 - "$DOC_PATH" "$OUT_PREFIX" "$DOC_CONTROL_DIR" "$ORCH_FAMILY" "$REVIEWER_FAMILY" <<'PY'
 import glob
 import hashlib
 import json
+import errno
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from magi_verify_round import verify_round
+from magi_protocol import protocol_sha
 
 MAGI_GATE_OWNERSHIP = ("G7", "G8")
 
@@ -59,6 +75,21 @@ def revoke_doc_markers():
     return revoked
 
 
+def fsync_control_dir():
+    try:
+        directory_fd = os.open(control_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        unsupported = {errno.EINVAL, errno.ENOTSUP}
+        if hasattr(errno, "EOPNOTSUPP"):
+            unsupported.add(errno.EOPNOTSUPP)
+        if exc.errno not in unsupported:
+            raise
+
+
 def gate_number(failure):
     match = re.match(r"G(\d+):", failure)
     return int(match.group(1)) if match else 99
@@ -70,6 +101,7 @@ try:
         Path(prefix),
         orch_family,
         reviewer_family,
+        require_successful_claim=True,
     )
 except Exception as exc:
     findings = meta = None
@@ -77,6 +109,7 @@ except Exception as exc:
 else:
     findings = result["findings"]
     meta = result["meta"]
+    verified_protocol_sha = result.get("protocol_sha")
     fails = list(result["failures"])
 
 if not fails and findings is not None and meta is not None:
@@ -104,26 +137,81 @@ if fails:
     raise SystemExit(1)
 
 assert findings is not None and meta is not None
+publish_sha = hashlib.sha256(Path(doc).read_bytes()).hexdigest()
+if publish_sha != actual_sha:
+    revoked = revoke_doc_markers()
+    detail = f"; revoked stale marker(s): {', '.join(revoked)}" if revoked else ""
+    print(
+        "PLATEAU DENIED:\n  - G3: document changed during gate evaluation" + detail,
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 verdict = findings["verdict"]
 model_id = meta.get("model_id") or ""
 sid = meta.get("session_id")
 grounding = findings.get("schema_grounding_verdict")
-revoke_doc_markers()
-with open(marker, "w") as fh:
-    json.dump(
-        {
-            "artifact": os.path.basename(doc),
-            "artifact_sha": actual_sha,
-            "verdict": verdict,
-            "model_id": model_id,
-            "reviewer_family": reviewer_family,
-            "session_id": sid,
-            "grounding": grounding,
-            "asserts_passed": ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9"],
-            "protects_against": "T1 (accidental skip). NOT T2 (adversarial same-UID).",
-        },
-        fh,
-        indent=2,
+if not isinstance(verified_protocol_sha, str) or not verified_protocol_sha:
+    print("PLATEAU DENIED:\n  - G3: verifier returned no protocol identity", file=sys.stderr)
+    raise SystemExit(1)
+publish_protocol_sha = protocol_sha()
+if publish_protocol_sha != verified_protocol_sha:
+    revoked = revoke_doc_markers()
+    detail = f"; revoked stale marker(s): {', '.join(revoked)}" if revoked else ""
+    print(
+        "PLATEAU DENIED:\n  - G3: runtime protocol changed during gate evaluation" + detail,
+        file=sys.stderr,
     )
+    raise SystemExit(1)
+revoke_doc_markers()
+fd, temporary = tempfile.mkstemp(
+    prefix=f".{os.path.basename(marker)}.", suffix=".tmp", dir=control_dir
+)
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(
+            {
+                "artifact": os.path.basename(doc),
+                "artifact_sha": actual_sha,
+                "protocol_sha": verified_protocol_sha,
+                "verdict": verdict,
+                "model_id": model_id,
+                "reviewer_family": reviewer_family,
+                "session_id": sid,
+                "grounding": grounding,
+                "asserts_passed": ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9"],
+                "protects_against": "T1 (accidental skip). NOT T2 (adversarial same-UID).",
+            },
+            fh,
+            indent=2,
+        )
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(temporary, marker)
+    try:
+        fsync_control_dir()
+    except OSError:
+        try:
+            os.unlink(marker)
+        except FileNotFoundError:
+            pass
+        raise
+    post_publish_sha = hashlib.sha256(Path(doc).read_bytes()).hexdigest()
+    if post_publish_sha != actual_sha:
+        try:
+            os.unlink(marker)
+        except FileNotFoundError:
+            pass
+        fsync_control_dir()
+        print(
+            "PLATEAU DENIED:\n  - G3: document changed during marker publication",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
 print(f"PLATEAU GRANTED: {verdict} by {model_id} -> {marker}")
 PY

@@ -86,10 +86,44 @@ missing: <family/phase/reason>
 degraded_until: <what must run before ship>
 ```
 
+## Epic admission gate (before [0])
+
+Classify the request before drafting a design. Treat it as an **epic**, not one ultramagi task, if
+any of these hold:
+
+- it contains two or more outcomes that can be merged, verified, or rolled back independently;
+- one invariant plus one acceptance-test/rollback pair cannot describe the whole change;
+- it crosses ordered phases whose failure modes need separate gates; or
+- the proposed design would contain multiple task-level implementation plans.
+
+For an epic:
+
+1. Create one parent Epic in the repository's native issue tracker before design review. Give it
+   the global invariant, explicit non-goals, ordered dependency-aware slices, acceptance criteria,
+   rollback boundaries, and a checkbox/status link for every slice. If no remote tracker is
+   configured, create `docs/designs/<EPIC>-EPIC.md` with the same fields and record that the remote
+   Epic is pending; do not silently collapse the work back into one task.
+2. Split the work into the smallest **vertical, independently mergeable slices** that preserve the
+   global invariant. Prefer one pull request and one observable acceptance test per slice. Create
+   child issues only when separate ownership or scheduling needs them; otherwise the parent
+   checklist is enough.
+3. Keep the Epic document at coordination altitude: scope, dependencies, shared invariants,
+   sequencing, and completion state. Put implementable detail in one local design doc per slice,
+   normally `docs/designs/<EPIC>/<NN>-<SLICE>.md`.
+4. Select only the first unblocked slice and run [0] through [5] on that slice. Never send the
+   whole Epic or its umbrella document through the design plateau loop, and never implement later
+   slices merely because they appear in the same plan.
+5. After the slice passes its gates, update the Epic with evidence and discovered dependency
+   changes, then select the next unblocked slice at [6].
+
+If the request is already one independently mergeable slice, do not create ceremonial Epic
+overhead.
+
 ## The loop (one pass per task; the task list is usually a gh epic)
 
 ```
-[0] SCOPE      one task from the epic/plan. State the invariant that must not break.
+[0] SCOPE      one independently mergeable task/slice. State the local and inherited epic
+               invariants that must not break.
 [1] PLAN       local design doc, preferably Claude-led for hard planning. GitHub transport for Plan is
                unreliable → plan LOCALLY into docs/designs/<NAME>.md.
 [2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU (see definition). N rounds.
@@ -112,7 +146,7 @@ degraded_until: <what must run before ship>
 [5] CODE-REVIEW /code-review (or /simplify for quality-only) on the final diff. Prefer
                Claude for design-intent/adversarial review, then Codex for final fixes/tests.
                Commit only when requested or policy allows.
-[6] NEXT       update the epic checkboxes; pick the next task; back to [0].
+[6] NEXT       update the epic with gate/test evidence; pick the next unblocked slice; back to [0].
 ```
 
 ## Plateau definition (when [2] stops) — severity-gated (v0.2.0)
@@ -242,6 +276,7 @@ never `build → swap` directly.
 | reviewers that don't run psql/grep | self-reported grounding = hallucination passes | `verify_commands_executed`, degrade empty rounds |
 | `--confirm` as the only swap guard | an agent / operator clears it on bad state | programmatic coverage/residual/invariant gate in the script |
 | one mega design doc for the whole epic | un-reviewable, un-shippable | one task per loop, epic tracks the list |
+| reviewing or implementing the umbrella Epic as one task | rigor amplifies scope instead of convergence | admit the Epic, then gate one mergeable slice at a time |
 | `--apply`/auto-mutate by default | overwrites work, hides drift | review-only default; mutation opt-in |
 | reviewing until zero findings | Fable-class reviewers never emit zero; loop runs away (41-round field datum) | severity-gated plateau + deferred ledger |
 | revising the doc for MED/LOW every round | revision churn — each fix is new review surface | defer to gate [4]/[5] via DEFERRED.md |
