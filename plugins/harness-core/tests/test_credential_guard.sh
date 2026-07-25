@@ -5,13 +5,27 @@
 # Run: bash plugins/harness-core/tests/test_credential_guard.sh
 # No network, no real credentials — synthetic fixtures only.
 
-set -u
+set -uo pipefail
 HOOKS="$(cd "$(dirname "$0")/../hooks" && pwd)"
 PASS=0
 FAIL=0
 
 ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
+
+# Security fixtures must fail closed. A missing temporary directory previously made every Read
+# setup fail while the suite still reported a full pass.
+TEST_ROOT="$(mktemp -d)" || { echo "fixture setup failed: mktemp -d" >&2; exit 1; }
+[ -d "$TEST_ROOT" ] && [ -w "$TEST_ROOT" ] \
+    || { echo "fixture setup failed: temporary root is not writable" >&2; exit 1; }
+trap 'rm -r -- "$TEST_ROOT"' EXIT
+
+make_test_home() {
+    local parent="$1" tmp_home
+    tmp_home="$(mktemp -d "$parent/home.XXXXXX")" || return 1
+    [ -d "$tmp_home" ] && [ -w "$tmp_home" ] || return 1
+    printf '%s\n' "$tmp_home"
+}
 
 # ----------------------------------------------------------------------------
 # Group 1: parse_tool_output is shape-agnostic (issue #7 load-bearing)
@@ -69,7 +83,7 @@ expect_block 'printenv | grep -i postgres' '#10 printenv piped to filter'
 expect_block 'set | rg postgres' '#10 set piped to non-keyword filter'
 expect_allow 'set -e' '#10 set -e is not an env dump'
 expect_allow 'set -o pipefail' '#10 set -o pipefail is not an env dump'
-expect_allow 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#10 ack-prefixed intentional read bypasses'
+expect_block 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#108 read ACK does not authorize env output'
 
 # --- #36: bare relative .env + non-enumerated readers (cross-family hole) ---
 expect_block 'cat .env' '#36 bare relative cat .env'
@@ -89,7 +103,7 @@ expect_allow 'cat environment.md' '#36 environment.md is not .env (no false posi
 expect_allow 'source ./venv/bin/activate' '#36 venv path substring env is not .env'
 expect_allow 'echo "loading credentials"' '#36 prose credentials (no ext) is not a file operand'
 expect_allow 'cat .environment' '#36 .environment dotfile is not .env'
-expect_allow 'HARNESS_ACK_CRED_READ=1 cat .env' '#36 ack-prefixed intentional read bypasses'
+expect_block 'HARNESS_ACK_CRED_READ=1 cat .env' '#108 read ACK does not authorize file output'
 
 # --- #36 REVISE HIGH: obfuscated token-construction bypasses are de-obfuscated ---
 expect_block 'cat .e"nv"' '#36 quote-splice bypass (cat .e"nv")'
@@ -128,9 +142,10 @@ expect_block 'grep KEY<.env' '#36 r3 no-space redirect grep KEY<.env'
 expect_block 'awk '\''{print}'\''<.env' '#36 r3 no-space redirect awk<.env'
 expect_block 'sed -n p<.env' '#36 r3 no-space redirect sed<.env'
 
-# --- #36 REVISE MED: ack is per-pattern (explicit flag), not free-text substring ---
-expect_block 'HARNESS_ACK_CRED_READ=1 sops -d secrets.enc.yaml' '#36 ack does NOT bypass non-ack pattern (sops -d)'
-expect_allow 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#36 ack DOES bypass ack-flagged pattern (printenv)'
+# --- #108: legacy read ACK is never a Bash plaintext-output capability ---
+expect_block 'HARNESS_ACK_CRED_READ=1 sops -d secrets.enc.yaml' '#108 ACK does not bypass sops policy'
+expect_block 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#108 ACK does not bypass value output'
+expect_allow 'HARNESS_ACK_CRED_READ=1 ls -la /tmp' '#108 inert prefix does not block benign commands'
 
 # --- existing guards still fire (no regression) ---
 expect_block 'sops -d secrets.enc.yaml | head' 'existing: sops -d'
@@ -143,14 +158,18 @@ expect_allow 'git commit -m "fix postgresql://[^:/@]+:...@ self-match note"' 'ex
 # ----------------------------------------------------------------------------
 echo "== credential_file_read_guard template exemption =="
 read_guard_blocks() {
-    local path="$1"
-    local tmp_home
-    tmp_home="$(mktemp -d)"
-    printf '%s' "{\"tool_input\":{\"file_path\":$(printf '%s' "$path" | jq -Rs .)}}" \
-        | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" >/dev/null 2>/dev/null
-    local rc=$?
-    rm -rf "$tmp_home"
-    [ "$rc" -eq 2 ]
+    local path="$1" tmp_home payload out
+    tmp_home="$(make_test_home "$TEST_ROOT")" \
+        || { bad "fixture HOME setup failed"; return 2; }
+    payload="{\"tool_input\":{\"file_path\":$(printf '%s' "$path" | jq -Rs .)}}"
+    out="$(printf '%s' "$payload" \
+        | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+    printf '%s' "$out" | jq -e '
+        .hookSpecificOutput.hookEventName == "PreToolUse"
+        and .hookSpecificOutput.permissionDecision == "deny"
+        and (.hookSpecificOutput.permissionDecisionReason
+             | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+    ' >/dev/null 2>&1
 }
 expect_read_block() { if read_guard_blocks "$1"; then ok "READ BLOCK: $2"; else bad "Read should BLOCK: $2 -> [$1]"; fi; }
 expect_read_allow() { if read_guard_blocks "$1"; then bad "Read should ALLOW: $2 -> [$1]"; else ok "READ ALLOW: $2"; fi; }
@@ -166,17 +185,58 @@ expect_read_block '/tmp/proj/.env.production' 'real .env.production'
 expect_read_block '/tmp/proj/.env.example.bak' 'template suffix not final segment'
 
 read_guard_payload_blocks() {
-    local payload="$1" tmp_home
-    tmp_home="$(mktemp -d)"
-    printf '%s' "$payload" | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" >/dev/null 2>/dev/null
-    local rc=$?
-    rm -rf "$tmp_home"
-    [ "$rc" -eq 2 ]
+    local payload="$1" family="${2:-claude}" tmp_home out
+    tmp_home="$(make_test_home "$TEST_ROOT")" \
+        || { bad "fixture HOME setup failed"; return 2; }
+    if [ "$family" = "grok" ]; then
+        out="$(printf '%s' "$payload" \
+            | GROK_SESSION_ID=fixture HOME="$tmp_home" \
+                bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+        printf '%s' "$out" | jq -e '
+            .decision == "deny"
+            and (.reason | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+        ' >/dev/null 2>&1
+    else
+        out="$(printf '%s' "$payload" \
+            | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+        printf '%s' "$out" | jq -e '
+            .hookSpecificOutput.permissionDecision == "deny"
+            and (.hookSpecificOutput.permissionDecisionReason
+                 | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+        ' >/dev/null 2>&1
+    fi
 }
 if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/.env"}}'; then ok "MCP .path credential read blocks"; else bad "MCP .path credential read escaped"; fi
 if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":".env"}}'; then ok "MCP relative credential read blocks"; else bad "MCP relative credential read escaped"; fi
 if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}'; then ok "MCP file URI credential read blocks after decode"; else bad "MCP file URI credential read escaped"; fi
 if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}'; then bad "benign MCP read blocked"; else ok "benign MCP read allowed"; fi
+if read_guard_payload_blocks '{"toolName":"read_file","toolInput":{"path":"/tmp/proj/.env"}}' grok; then ok "Grok camel-case credential read emits top-level deny"; else bad "Grok credential read escaped"; fi
+
+# Exact #108 incident regression: a fresh legacy marker must neither authorize the Read nor add
+# another stdout document. The marker is ignored and remains non-authoritative.
+marker_home="$(make_test_home "$TEST_ROOT")" \
+    || { echo "fixture HOME setup failed for marker regression" >&2; exit 1; }
+mkdir -p "$marker_home/.claude/state"
+touch "$marker_home/.claude/state/cred_read_ack"
+marker_out="$(printf '%s' '{"tool_input":{"file_path":"/tmp/proj/.env"}}' \
+    | HOME="$marker_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+if printf '%s' "$marker_out" | jq -e '
+    .hookSpecificOutput.permissionDecision == "deny"
+    and (.hookSpecificOutput.permissionDecisionReason
+         | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+' >/dev/null 2>&1 \
+   && [ "$(printf '%s' "$marker_out" | jq -s 'length')" -eq 1 ] \
+   && [ -f "$marker_home/.claude/state/cred_read_ack" ]; then
+    ok "#108 deny -> fresh read marker -> one structured deny, marker non-authoritative"
+else
+    bad "#108 fresh read marker exposed output or broke the single-JSON deny contract"
+fi
+
+if make_test_home "$TEST_ROOT/does-not-exist" >/dev/null 2>&1; then
+    bad "fixture setup helper accepted an unusable temporary parent"
+else
+    ok "fixture setup failure is nonzero (cannot false-green Read assertions)"
+fi
 
 # ----------------------------------------------------------------------------
 # Group 3: value_scrub allowlist skips catalog self-match (issue #7 tertiary)

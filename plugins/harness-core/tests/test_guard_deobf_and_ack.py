@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""gh #14 (bash_command_guard $IFS de-obfuscation) + #19 (credential_file_read_guard
-one-time/expiring ack). Run: python3 plugins/harness-core/tests/test_guard_deobf_and_ack.py"""
+"""Credential guard de-obfuscation and Issue #108 legacy-ACK denial regression."""
 import subprocess, json, os, tempfile, time
 
 HDIR = os.path.join(os.path.dirname(__file__), "..", "hooks")
@@ -33,17 +32,41 @@ def rg(home, make_marker=None):
         open(mk, "w").close(); old = time.time() - 200; os.utime(mk, (old, old))
     r = subprocess.run(["bash", RG], input=json.dumps({"tool_input": {"file_path": "/x/.env"}}),
                        capture_output=True, text=True, env=dict(os.environ, HOME=home))
-    return ("ALLOW" if r.returncode == 0 else "BLOCK"), os.path.exists(mk)
+    try:
+        envelope = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        envelope = {}
+    denied = (
+        envelope.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+        and "READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"
+        in envelope.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+    )
+    return ("BLOCK" if denied else "ALLOW"), os.path.exists(mk)
 
-h = tempfile.mkdtemp()
-v, _ = rg(h);                       ok &= (v == "BLOCK") or (print("  ✗ FAIL #19 no-marker should BLOCK") or False)
-v, left = rg(h, "fresh");           ok &= (v == "ALLOW" and not left) or (print("  ✗ FAIL #19 fresh marker should ALLOW + consume") or False)
-v, _ = rg(h);                       ok &= (v == "BLOCK") or (print("  ✗ FAIL #19 after-consume should BLOCK (one-time)") or False)
-v, left = rg(h, "stale");           ok &= (v == "BLOCK" and not left) or (print("  ✗ FAIL #19 stale marker should BLOCK + be cleared") or False)
-# env var must NOT bypass any more (exportable -> persistent was the bug)
-r = subprocess.run(["bash", RG], input=json.dumps({"tool_input": {"file_path": "/x/.env"}}),
-                   capture_output=True, text=True, env=dict(os.environ, HOME=tempfile.mkdtemp(), HARNESS_ACK_CRED_READ="1"))
-ok &= (r.returncode != 0) or (print("  ✗ FAIL #19 exported env should NO LONGER bypass") or False)
+with tempfile.TemporaryDirectory() as h:
+    v, _ = rg(h)
+    ok &= (v == "BLOCK") or (print("  ✗ FAIL #108 no-marker should BLOCK") or False)
+    v, left = rg(h, "fresh")
+    ok &= (v == "BLOCK" and left) or (
+        print("  ✗ FAIL #108 fresh read marker must BLOCK and remain non-authoritative") or False
+    )
+with tempfile.TemporaryDirectory() as h:
+    v, left = rg(h, "stale")
+    ok &= (v == "BLOCK" and left) or (
+        print("  ✗ FAIL #108 stale read marker must BLOCK and remain non-authoritative") or False
+    )
+with tempfile.TemporaryDirectory() as h:
+    r = subprocess.run(
+        ["bash", RG],
+        input=json.dumps({"tool_input": {"file_path": "/x/.env"}}),
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, HOME=h, HARNESS_ACK_CRED_READ="1"),
+    )
+    envelope = json.loads(r.stdout)
+    ok &= (
+        envelope.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    ) or (print("  ✗ FAIL #108 exported env must not authorize Read output") or False)
 
-print("guard deobf(#14) + ack(#19): ALL PASS ✓" if ok else "guard deobf(#14) + ack(#19): FAILURES ✗")
+print("guard deobf(#14) + legacy ACK deny(#108): ALL PASS ✓" if ok else "guard deobf(#14) + legacy ACK deny(#108): FAILURES ✗")
 raise SystemExit(0 if ok else 1)
