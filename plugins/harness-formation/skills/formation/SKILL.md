@@ -109,13 +109,16 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
 - Registers the worker in `~/.formation/formation/registry.jsonl`.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
-- **Identity is unified (#101):** `FORMATION_SELF` / pane `@formation_id` is
-  the routing and self-reference source of truth. A dedicated worker window is
-  named `<cli>-<name>`; SessionStart/compact/resume reassert that same identity
-  instead of generating a second random codename. Standalone CLI auto-naming
-  remains independent.
+- **Identity is unified and locked (#101):** `FORMATION_SELF` /
+  `@formation_identity_locked` is the routing, header, and self-reference source
+  of truth. `@formation_id` remains a compatibility alias, but later task/status
+  updates cannot change the locked identity. A dedicated worker window is named
+  `<cli>-<name>`; SessionStart/compact/resume reassert that same identity instead
+  of generating a second random codename. Standalone CLI auto-naming remains
+  independent.
 - **Pane visibility (#93)**: the worker window gets a `pane-border-status`
-  strip showing `<id> · <task>` — blue for claude, orange for codex, plus a
+  strip showing `<locked-id> · <task> — <live-status>` — blue for claude,
+  orange for codex, magenta for kimi, plus a
   `🔒sandbox` marker on the rare non-bypass workers (bypass is the de facto
   universal mode, so marking it would carry no signal) — and
   `formation report/done` update the strip's status suffix live. The task label is `--task` if given, else the briefing

@@ -91,7 +91,8 @@ generate_formation_id() {
 
 formation_id_in_use() {
     local id="$1"
-    tmux list-panes -a -F '#{@formation_id}' 2>/dev/null | grep -qx "$id"
+    tmux list-panes -a -F '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
+        | grep -qx "$id"
 }
 
 generate_unique_formation_id() {
@@ -136,13 +137,15 @@ setup_formation_identity() {
     fi
 
     # Formation id (stable mailbox identity).
-    local formation_id current_window
+    local formation_locked formation_id formation_owner current_window
+    formation_locked="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_identity_locked}' 2>/dev/null || true)"
     formation_id="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
+    formation_owner="${formation_locked:-$formation_id}"
     current_window="$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)"
     # A stale/inherited TMUX_PANE must not let this process rename a sibling
     # worker. Formation sets both values before launching the CLI.
     if [ -n "${FORMATION_SELF:-}" ] \
-        && [ "$formation_id" != "$FORMATION_SELF" ]; then
+        && [ "$formation_owner" != "$FORMATION_SELF" ]; then
         return 0
     fi
     has_foreign_chassis_ancestor() {
@@ -161,12 +164,25 @@ setup_formation_identity() {
 
     # A standalone Kimi launched as a child inside another chassis inherits its
     # parent's TMUX_PANE. Permit sequential reuse after that process exits.
-    if [ -z "${FORMATION_SELF:-}" ]; then
-        case "$current_window" in
-            claude-*|codex-*|grok-*)
-                has_foreign_chassis_ancestor && return 0
-                ;;
-        esac
+    has_foreign_chassis_ancestor && return 0
+
+    if [ -n "${FORMATION_SELF:-}" ]; then
+        if [ -z "$formation_locked" ]; then
+            formation_locked="$FORMATION_SELF"
+            tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_locked" >/dev/null 2>&1 || true
+        fi
+        if [ "$formation_id" != "$formation_locked" ]; then
+            formation_id="$formation_locked"
+            tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
+        fi
+    elif [ -n "$formation_locked" ]; then
+        # A standalone resumed pane keeps the first assigned identity and repairs
+        # the compatibility alias if another process changed it.
+        formation_id="$formation_locked"
+        tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
+    elif [ -n "$formation_id" ]; then
+        formation_locked="$formation_id"
+        tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_locked" >/dev/null 2>&1 || true
     fi
     if [ -z "$formation_id" ]; then
         formation_id="${HARNESS_KIMI_FORMATION_ID:-}"
@@ -180,10 +196,11 @@ setup_formation_identity() {
             formation_id="$(generate_unique_formation_id)"
         fi
         tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
+        tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_id" >/dev/null 2>&1 || true
     fi
 
-    # @formation_id is the single source of truth for routing, display, and
-    # self-reference in both Formation-managed and standalone Kimi sessions.
+    # The locked identity is the source of truth; @formation_id is retained as
+    # a compatibility routing alias and repaired from the lock on resume.
     local display_name
     display_name="kimi-${formation_id}"
     if [ -z "${FORMATION_SELF:-}" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then

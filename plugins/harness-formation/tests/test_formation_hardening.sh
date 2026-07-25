@@ -191,6 +191,22 @@ echo "== task label + goal extraction (#93) =="
 
 BRIEF_DIR="$TMPDIR_T/briefings"; mkdir -p "$BRIEF_DIR"
 
+if [[ "$FORMATION_BORDER_FORMAT" == *'@formation_identity_locked'* ]]; then
+  ok "pane header uses locked identity"
+else
+  bad "pane header does not use locked identity"
+fi
+if [[ "$FORMATION_BORDER_FORMAT" == *'@formation_id'* ]]; then
+  ok "pane header preserves legacy identity fallback"
+else
+  bad "pane header drops legacy identity fallback"
+fi
+if [[ "$FORMATION_BORDER_FORMAT" == *'@formation_task'* && "$FORMATION_BORDER_FORMAT" == *'@formation_status'* ]]; then
+  ok "pane header keeps task and live status visible together"
+else
+  bad "pane header must include both task and live status"
+fi
+
 cat > "$BRIEF_DIR/prs-388-binquant.md" <<'BRIEF'
 # Formation Worker Briefing
 

@@ -33,9 +33,11 @@ command -v tmux >/dev/null 2>&1 || exit 0
 # can be stale/inherited while a detached tmux client is starting; targeting
 # every command with -t is necessary, but not sufficient when the target itself
 # is wrong.
+PANE_FORMATION_LOCKED=$(tmux display-message -p -t "$PANE" '#{@formation_identity_locked}' 2>/dev/null || true)
 PANE_FORMATION_ID=$(tmux display-message -p -t "$PANE" '#{@formation_id}' 2>/dev/null || true)
-if [ -n "${FORMATION_SELF:-}" ] && [ "$PANE_FORMATION_ID" != "$FORMATION_SELF" ]; then
-    exit 0
+if [ -n "${FORMATION_SELF:-}" ]; then
+    PANE_FORMATION_OWNER="${PANE_FORMATION_LOCKED:-$PANE_FORMATION_ID}"
+    [ "$PANE_FORMATION_OWNER" = "$FORMATION_SELF" ] || exit 0
 fi
 
 if ! CURRENT_WINDOW_NAME=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null); then
@@ -64,6 +66,25 @@ has_foreign_chassis_ancestor() {
 # window label, so check ancestry before every rename path (#104). A sequential
 # CLI launch after the previous chassis exits has no foreign ancestor (#95).
 has_foreign_chassis_ancestor && exit 0
+
+# Only repair routing metadata after proving this is not a nested CLI borrowing
+# its parent's pane. The locked value remains authoritative if the legacy alias
+# has drifted.
+if [ -n "${FORMATION_SELF:-}" ]; then
+    [ -n "$PANE_FORMATION_LOCKED" ] \
+        || tmux set-option -p -t "$PANE" @formation_identity_locked "$FORMATION_SELF" >/dev/null 2>&1 || true
+    [ "$PANE_FORMATION_ID" = "$FORMATION_SELF" ] \
+        || tmux set-option -p -t "$PANE" @formation_id "$FORMATION_SELF" >/dev/null 2>&1 || true
+    PANE_FORMATION_LOCKED="$FORMATION_SELF"
+    PANE_FORMATION_ID="$FORMATION_SELF"
+elif [ -n "$PANE_FORMATION_LOCKED" ]; then
+    [ "$PANE_FORMATION_ID" = "$PANE_FORMATION_LOCKED" ] \
+        || tmux set-option -p -t "$PANE" @formation_id "$PANE_FORMATION_LOCKED" >/dev/null 2>&1 || true
+    PANE_FORMATION_ID="$PANE_FORMATION_LOCKED"
+elif [ -n "$PANE_FORMATION_ID" ]; then
+    tmux set-option -p -t "$PANE" @formation_identity_locked "$PANE_FORMATION_ID" >/dev/null 2>&1 || true
+    PANE_FORMATION_LOCKED="$PANE_FORMATION_ID"
+fi
 
 # Shared windows have one window name for multiple panes. Preserve an existing
 # foreign chassis label even when no foreign process remains in our ancestry.
@@ -110,7 +131,7 @@ find "$CLAIM_DIR" -mindepth 1 -maxdepth 1 -type d -mmin +5 -delete 2>/dev/null |
 # launcher or an earlier session. That routing id is authoritative: repair the
 # display/sentinel to match it instead of generating a second codename.
 if [ -n "$PANE_FORMATION_ID" ]; then
-    if tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+    if tmux list-panes -a -F '#{pane_id}|#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
         | awk -F '|' -v target="$PANE" -v ident="$PANE_FORMATION_ID" \
             '$1 != target && $2 == ident { found=1 } END { exit !found }'; then
         exit 0
@@ -151,7 +172,7 @@ generate_codename() {
 name_in_use() {
     local cand="$1" bare f n
     bare="${cand#codex-}"
-    tmux list-panes -a -F '#{pane_id}|#{@formation_id}' 2>/dev/null \
+    tmux list-panes -a -F '#{pane_id}|#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
         | awk -F '|' -v target="$PANE" -v ident="$bare" \
             '$1 != target && $2 == ident { found=1 } END { exit !found }' \
         && return 0
@@ -259,6 +280,7 @@ if [ -z "$FORMATION_ID" ]; then
     FORMATION_ID="${NAME#codex-}"
     tmux set-option -p -t "$PANE" @formation_id "$FORMATION_ID" >/dev/null 2>&1 || true
 fi
+tmux set-option -p -t "$PANE" @formation_identity_locked "$FORMATION_ID" >/dev/null 2>&1 || true
 
 if [ "$RESUMED" -eq 1 ]; then
     CTX="## Identity anchor (tmux pane $PANE)
@@ -267,7 +289,7 @@ if [ "$RESUMED" -eq 1 ]; then
 else
     CTX="## Identity assigned (tmux pane $PANE)
 
-あなたは **${NAME}** デス (= codex chassis)。 window/pane rename は hook が実行済み、 あなたの作業は不要。 user への第一声で「ドーモ、 **${NAME#codex-}** デス」と名乗り、 以降 self-reference にはこの codename を使う。 formation mailbox の identity は pane option @formation_id (= ${FORMATION_ID:-$NAME})。"
+あなたは **${NAME}** デス (= codex chassis)。 window/pane rename は hook が実行済み、 あなたの作業は不要。 user への第一声で「ドーモ、 **${NAME#codex-}** デス」と名乗り、 以降 self-reference にはこの codename を使う。 formation mailbox の identity は pane option @formation_identity_locked (= ${FORMATION_ID:-$NAME})。@formation_id は互換 alias。"
 fi
 
 jq -n --arg ctx "$CTX" '{

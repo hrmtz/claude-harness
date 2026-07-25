@@ -23,9 +23,10 @@ Kimi Code CLI >= 0.28 は **native hook API** を持つ (gh #54)。ペイロー�
 ### 2. AGENTS.md と tmux identity を管理する (wrapper)
 
 `~/.local/bin/kimi` を wrapper に置き換えると、`kimi` 起動時にカレントディレクトリへ
-`AGENTS.md` を自動配置する。tmux 内では pane の `@formation_id` を routing identity の
-SSOT として扱い、standalone Kimi の表示名を整える。別 chassis の nested child は親 pane
-を改名せず、Formation 管理 pane の identity も上書きしない。
+`AGENTS.md` を自動配置する。tmux 内では pane の `@formation_identity_locked` を routing
+identity の SSOT として扱い、互換 alias の `@formation_id` と standalone Kimi の表示名を
+揃える。別 chassis の nested child は親 pane を改名せず、Formation 管理 pane の identity
+も上書きしない。
 
 ```bash
 ~/projects/claude-harness/plugins/harness-kimi/install-kimi-wrapper.sh
