@@ -29,7 +29,7 @@ RAILS = os.path.join(REPO, "plugins", "harness-rails", "hooks")
 HOOKS = {
     "bcg":  (os.path.join(CORE, "bash_command_guard.sh"), "bash", "deny", 0),
     "pg":   (os.path.join(CORE, "pg_rotation_propagation_guard.sh"), "bash", "deny", 0),
-    "cfrg": (os.path.join(CORE, "credential_file_read_guard.sh"), "read", "exit2", 1),  # .tkc cookie gap (#14 follow-up)
+    "cfrg": (os.path.join(CORE, "credential_file_read_guard.sh"), "read", "deny", 1),  # .tkc cookie gap (#14 follow-up)
     "lta":  (os.path.join(CORE, "long_task_advisor.sh"), "bash", "ctx", 0),
     "bpg":  (os.path.join(CORE, "branch_policy_guard.sh"), "bash", "deny", 0),
     "ppg":  (os.path.join(RAILS, "pipeline_preflight_gate.sh"), "bash", "exit2", 0),

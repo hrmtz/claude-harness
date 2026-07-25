@@ -9,35 +9,70 @@
 # `grep -c <KEY> <file>` (件数のみ) / `cut -d= -f1 <file>` (key 名のみ) に置換。
 # ⚠ `grep -n <KEY>` は match 行全体 (= 値込み) を出すので NG (gh #15 訂正)。
 #
-# bypass: create ~/.claude/state/cred_read_ack before the one intentional read.
+# Issue #108: read acknowledgement is not disclosure authorization. A legacy
+# ~/.claude/state/cred_read_ack marker never permits tool/model-visible output.
 #
 # coverage: .env / .env.<suffix> / rclone.conf / .netrc / .aws/credentials /
 #           .cloudflared/*.json / *.pem / *.key / *.p12
 
 source "$(dirname "$0")/lib.sh"
 
-HOOK_INPUT=$(cat)
-export HOOK_INPUT
+MAX_HOOK_INPUT_BYTES=4194304
+if ! HOOK_INPUT=$(head -c $((MAX_HOOK_INPUT_BYTES + 1))); then
+  printf '%s\n' "credential read guard input acquisition failed; refusing tool execution" >&2
+  exit 2
+fi
+HOOK_INPUT_BYTES=$(LC_ALL=C printf '%s' "$HOOK_INPUT" | wc -c)
+if [ "$HOOK_INPUT_BYTES" -gt "$MAX_HOOK_INPUT_BYTES" ]; then
+  printf '%s\n' "credential read guard input exceeds size limit; refusing tool execution" >&2
+  exit 2
+fi
+if [ -z "$HOOK_INPUT" ] || ! printf '%s' "$HOOK_INPUT" \
+    | jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; then
+  printf '%s\n' "credential read guard input validation failed; refusing tool execution" >&2
+  exit 2
+fi
 
-FILE_PATH=$(parse_tool_file_path)
+if ! FILE_PATH=$(parse_tool_file_path_strict); then
+  printf '%s\n' "credential read guard path parsing failed; refusing tool execution" >&2
+  exit 2
+fi
 [ -z "$FILE_PATH" ] && exit 0
 
-# MCP filesystem tools commonly use file:// URIs. Decode only local file URIs;
-# non-file schemes are remote resources and outside this local-file guard.
-case "$FILE_PATH" in
-  file://*)
-    FILE_PATH=$(python3 - "$FILE_PATH" <<'PY' 2>/dev/null || true
+# MCP filesystem tools commonly use file:// URIs. URI schemes and hostnames are
+# case-insensitive. Decode only local file URIs; remote resources remain outside
+# this local-file guard. Decoder failure is distinct from an intentional remote.
+if [[ "$FILE_PATH" == *://* ]]; then
+  if ! URI_RESULT=$(python3 - "$FILE_PATH" <<'PY' 2>/dev/null
 import sys
 from urllib.parse import unquote, urlparse
 u = urlparse(sys.argv[1])
-if u.scheme == "file" and u.netloc in {"", "localhost"}:
-    print(unquote(u.path))
+scheme = u.scheme.lower()
+if scheme != "file":
+    print("REMOTE")
+elif u.netloc and (u.hostname or "").lower() != "localhost":
+    print("REMOTE")
+elif not u.path:
+    raise ValueError("local file URI has no path")
+else:
+    decoded = unquote(u.path)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in decoded):
+        raise ValueError("local file URI contains unsupported control characters")
+    print("LOCAL:" + decoded)
 PY
-    )
-    [ -z "$FILE_PATH" ] && exit 0
-    ;;
-  *://*) exit 0 ;;
-esac
+  ); then
+    printf '%s\n' "credential read guard URI decoding failed; refusing tool execution" >&2
+    exit 2
+  fi
+  case "$URI_RESULT" in
+    LOCAL:*) FILE_PATH="${URI_RESULT#LOCAL:}" ;;
+    REMOTE) exit 0 ;;
+    *)
+      printf '%s\n' "credential read guard URI classification failed; refusing tool execution" >&2
+      exit 2
+      ;;
+  esac
+fi
 
 # ----------------------------------------
 # Exempt suffix list (= dummy / template / test fixture、 block しない)
@@ -83,32 +118,14 @@ esac
 [ "$BLOCK" -eq 0 ] && exit 0
 
 # ----------------------------------------
-# ack bypass — genuinely ONE-TIME + EXPIRING (gh #19). The old `$HARNESS_ACK_CRED_READ`
-# env check was EXPORTABLE: `export HARNESS_ACK_CRED_READ=1` once → the bypass persisted
-# for ALL subsequent reads (neither one-time nor expiring). A Read tool call has no
-# command-prefix, so we use a CONSUMABLE marker file instead: create it to authorize
-# the NEXT credential-file read within 120s; the guard consumes it (one read) and
-# ignores a stale one.
-#   touch ~/.claude/state/cred_read_ack   # then do the one Read
-# ----------------------------------------
-ACK_FILE="$STATE_DIR/cred_read_ack"
-# Atomic one-shot claim: `mv` succeeds for exactly ONE racer, so two concurrent reads
-# can never both consume the same marker (codex #19 race).
-if [ -f "$ACK_FILE" ] && mv "$ACK_FILE" "$ACK_FILE.used.$$" 2>/dev/null; then
-  ack_age=$(( $(date +%s) - $(stat -c %Y "$ACK_FILE.used.$$" 2>/dev/null || echo 0) ))
-  rm -f "$ACK_FILE.used.$$" 2>/dev/null
-  if [ "$ack_age" -le 120 ]; then
-    echo "[credential_file_read_guard] BYPASS via cred_read_ack (consumed, age ${ack_age}s): $FILE_PATH" >> "$LOG_DIR/credential_file_read_guard.log"
-    exit 0
-  fi
-fi
-
-# ----------------------------------------
 # Block + alternative action
 # ----------------------------------------
-echo "Read of $REASON refused: $FILE_PATH" >&2
-echo "To check a key WITHOUT leaking its value: 'grep -c <KEY> $FILE_PATH' (count only) or 'cut -d= -f1 $FILE_PATH' (key names). For real use, 'sops exec-env <file> <cmd>'. NEVER 'grep -n <KEY>' — grep prints the whole matching line, which leaks the value (gh #15)." >&2
-echo "For Edit: Bash grep first → know line numbers → Edit with surrounding context (no Read needed)." >&2
-echo "Archeology bypass (ONE read, 120s expiry, incident risk 自覚): touch ~/.claude/state/cred_read_ack  then re-Read." >&2
-echo "Past leak: docs/runbooks/CREDENTIAL_ROTATION.md (TBD) for emergency rotation." >&2
-exit 2
+if [ -e "$STATE_DIR/cred_read_ack" ]; then
+  hook_log "credential_file_read_guard" \
+    "legacy read marker ignored for classified path (READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT)"
+fi
+MSG="READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT — Read of $REASON refused: $FILE_PATH
+To check a key without exposing its value: use a count-only check or list key names only. For real use, inject with 'sops exec-env <file> <repo-baked-consumer>' and keep the consumer from printing the value. Never use a matching-line grep because it prints the value.
+For Edit: locate line numbers without reading values, then Edit with bounded surrounding context.
+Destination-bound delivery is not part of this slice; handle emergency access outside agent tool output."
+emit_deny "$MSG"
