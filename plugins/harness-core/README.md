@@ -4,6 +4,24 @@ A defense-in-depth set of Claude Code hooks against credential leaks and workflo
 
 ## Hooks
 
+### Clickable links inside tmux
+
+Codex and other terminal UIs emit explicit links with OSC 8. tmux 3.4 and
+later preserves them when its outer-terminal feature set includes
+`hyperlinks`. The SessionStart `tmux_hyperlink_guard.sh` hook adds that feature
+to the running tmux server idempotently.
+
+For the feature to be present on the first client attached after a tmux server
+restart, keep the same declaration in `~/.tmux.conf`:
+
+```tmux
+set -as terminal-features ",*:hyperlinks"
+```
+
+After adding it to an already running server, detach and reattach once if the
+current client was created before the feature was declared. In WezTerm, the
+configured mouse modifier may still be required when opening a link.
+
 ### 1. `credential_value_scrub.sh` — PostToolUse / Bash
 
 Scans every Bash tool output for credential value patterns. If matched, **sanitizes the active session jsonl in-place** with `sed -i` (replacing the value with `<REDACTED>`) and emits a warning to Claude.

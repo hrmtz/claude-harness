@@ -152,6 +152,11 @@
           },
           {
             "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/tmux_hyperlink_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/tmux_hyperlink_guard.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/tmux_self_name.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/tmux_self_name.sh",
             "timeout": 5
           },

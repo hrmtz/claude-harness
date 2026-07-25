@@ -33,6 +33,7 @@
       "harness-core/hooks/admission_reminder.sh",
       "harness-core/hooks/code_review_suggest.sh",
       "harness-core/hooks/temporal_anchor.sh",
+      "harness-core/hooks/tmux_hyperlink_guard.sh",
       "harness-rails/hooks/self_check_reminder.sh",
       "harness-rails/hooks/vastai_create_followup_check.sh",
       "harness-formation/hooks/formation_suggest.sh"
