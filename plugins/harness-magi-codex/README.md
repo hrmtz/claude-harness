@@ -41,6 +41,8 @@ schemas/preflight-{review,decision}.schema.json
                               one-shot Magi evidence and decision contracts
 schemas/preflight-run.schema.json
                               structural three-reviewer run binding
+schemas/protocol.external.json
+                              generated hash-bound external protocol payloads
 scripts/
   magi_autorun.py             session-bound no-ack campaign controller
   magi_fanout_codex.sh        3 personas as parallel `codex exec` (sole author of their prompts)
@@ -53,7 +55,12 @@ scripts/
   magi_verify_round.py        write-free G1-G6/G9 verification
   magi_git.py                 ambient-config-free Git object reads
   magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
+  magi_protocol.py            closed protocol identity + immutable claim snapshots
   magi_rename_noreplace.py    atomic no-replace installer publication primitive
+  magi_verify_canonical_templates.py
+                              canonical prompt fingerprint verification
+  magi_verify_xfamily_artifacts.py
+                              cross-family findings/metadata pair verification
   magi_convergence_gate.py    report-only implementation convergence evaluator
   magi_convergence_kernel.py  pure normalization, delta, affordability, profile policy
   magi_design_convergence_gate.py
@@ -69,9 +76,11 @@ tests/                        exit codes, G-asserts, lock semantics, read-only r
 ```
 
 One-shot Magi prompts are built deterministically by `magi_preflight.py` from the exact brief and
-the bundled review contract. Multi-round dual-magi persona templates are **not** copied: fan-out
-reads the fingerprinted canonical files from `harness-magi`, and each campaign pins them through
-the closed protocol snapshot.
+the bundled review contract. Multi-round dual-magi persona templates are not maintained as
+hand-copied sources: fan-out reads the fingerprinted canonical files from `harness-magi` in a
+checkout. Native detached plugin packages carry a generated, hash-bound payload of those same
+external inputs. Each campaign materializes and pins one verified closed-protocol snapshot; the
+payload is not an independently editable template source.
 
 ## Install
 
