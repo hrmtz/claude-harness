@@ -48,20 +48,45 @@ if [ "\${STUB_HANG:-}" = 1 ]; then
   while :; do sleep 1; done
 fi
 if [ "\${STUB_FAIL:-}" = 1 ]; then
+  printf 'provider detail: password=%s\n' 'fixture-value' >&2
   exit 7
 fi
 PROJ="$TMP/home/.claude/projects/-tmp-fixture"
 mkdir -p "\$PROJ"
+rm -f "\$PROJ/$SID.jsonl" "\$PROJ/$SID.target"
 # The model the transcript records is what the CLI "actually ran"; override to simulate a downgrade.
 TMODEL="\${STUB_TRANSCRIPT_MODEL:-claude-fable-5}"
 cat > "\$PROJ/$SID.jsonl" <<JSONL
 {"message":{"model":"\$TMODEL","content":[{"type":"tool_use","name":"Read","input":{"file_path":"design.md"}}]}}
 {"message":{"model":"\$TMODEL","content":[{"type":"tool_result","content":"a grounded design","is_error":false}]}}
 JSONL
+if [ -n "\${STUB_TRANSCRIPT_BYTES:-}" ]; then
+  python3 - "\$PROJ/$SID.jsonl" "\$STUB_TRANSCRIPT_BYTES" <<'PY'
+import sys
+path, raw_target = sys.argv[1:3]
+target = int(raw_target)
+prefix = b'{"message":{"model":"claude-fable-5","content":[]},"padding":"'
+suffix = b'"}\n'
+if target < len(prefix) + len(suffix):
+    raise SystemExit("invalid transcript fixture size")
+open(path, "wb").write(prefix + b"x" * (target - len(prefix) - len(suffix)) + suffix)
+PY
+fi
+case "\${STUB_TRANSCRIPT_KIND:-}" in
+  symlink)
+    mv "\$PROJ/$SID.jsonl" "\$PROJ/$SID.target"
+    ln -s "\$PROJ/$SID.target" "\$PROJ/$SID.jsonl"
+    ;;
+  fifo)
+    rm -f "\$PROJ/$SID.jsonl"
+    mkfifo "\$PROJ/$SID.jsonl"
+    ;;
+esac
 python3 - <<'PY'
-import json
-finding = {"reviewer":"CLAUDE-XFAMILY","round":2,"artifact_id":"$DOC_ID",
- "artifact_sha":"$DOC_SHA","verdict":"GO",
+import json, os
+finding = {"reviewer":"CLAUDE-XFAMILY","round":2,
+ "artifact_id":os.environ.get("STUB_DOC_ID", "$DOC_ID"),
+ "artifact_sha":os.environ.get("STUB_DOC_SHA", "$DOC_SHA"),"verdict":"GO",
  "schema_grounding_verdict":"PASS","verify_commands_executed":["read_file design.md"],
  "source_artifacts":[],"dispositions":[],"findings":[]}
 env = {"structured_output":finding,"result":json.dumps(finding),
@@ -92,6 +117,13 @@ if find "$STATE" -maxdepth 1 -name '.round_8_xfamily.claim-*' | grep -q .; then
   bad "Claude adapter left claim-scoped staging files"
 else
   ok "Claude claim-scoped staging is removed after promotion"
+fi
+HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_8_xfamily" \
+    --orchestrator-family codex --reviewer-family claude >/dev/null 2>"$TMP/valid-gate.err"
+if [ $? -eq 0 ]; then
+  ok "Claude cross-family round can grant plateau"
+else
+  bad "valid Claude round was denied: $(tr '\n' ' ' < "$TMP/valid-gate.err")"
 fi
 
 # The default reviewer route must be Claude even with no --reviewer flag.
@@ -133,6 +165,61 @@ assert "/.claude/projects/" in m["transcript_path"], m["transcript_path"]
 PY
 [ $? -eq 0 ] && ok "Claude provenance recorded (model_id + requested_model)" || bad "Claude provenance invalid"
 
+# The embedded provider parser accepts an exact 1 MiB line and rejects one additional byte before
+# decoding the line body.
+BOUND_DOC="$TMP/bounded-design.md"; printf 'bounded transcript design\n' > "$BOUND_DOC"
+BOUND_SHA="$(sha256sum "$BOUND_DOC" | cut -d' ' -f1)"
+BOUND_ID="$(printf '%s' "$(realpath "$BOUND_DOC")" | sha256sum | cut -c1-16)"
+BOUND_STATE="$TMP/bounded-state"; mkdir -p "$BOUND_STATE"
+BOUND_SOURCE="$BOUND_STATE/round_1_source.json"
+printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
+  "$BOUND_ID" "$BOUND_SHA" > "$BOUND_SOURCE"
+BOUND_SOURCE_SHA="$(sha256sum "$BOUND_SOURCE" | cut -d' ' -f1)"
+BOUND_PRIOR="$BOUND_STATE/round_1_codex.json"
+printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[{"path":"%s","sha256":"%s"}],"dispositions":[],"findings":[]}\n' \
+  "$BOUND_ID" "$BOUND_SHA" "$(basename "$BOUND_SOURCE")" "$BOUND_SOURCE_SHA" > "$BOUND_PRIOR"
+for transcript_bytes in 1048576 1048577; do
+  if [ "$transcript_bytes" -eq 1048577 ]; then
+    python3 "$GUARD" new-campaign "$BOUND_DOC" --operator test \
+        --reason "Claude bounded transcript fixture $transcript_bytes" >/dev/null || exit 1
+  fi
+  bound_claim="$(python3 "$GUARD" claim "$BOUND_DOC" 1 fanout "$BOUND_STATE")" || exit 1
+  bound_claim_id="${bound_claim##*CLAIM_ID=}"
+  python3 "$GUARD" finish "$BOUND_DOC" "$bound_claim_id" success >/dev/null || exit 1
+  bounded_prefix="$BOUND_STATE/round_8_claude_line_$transcript_bytes"
+  PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_TRANSCRIPT_BYTES="$transcript_bytes" \
+      STUB_DOC_ID="$BOUND_ID" STUB_DOC_SHA="$BOUND_SHA" \
+      "$ADAPTER" --reviewer claude "$BOUND_DOC" 2 "$BOUND_PRIOR" "$bounded_prefix" \
+      >/dev/null 2>&1
+  bounded_rc=$?
+  if { [ "$transcript_bytes" -eq 1048576 ] && [ "$bounded_rc" -eq 0 ]; } \
+      || { [ "$transcript_bytes" -eq 1048577 ] && [ "$bounded_rc" -eq 2 ] \
+           && [ -f "$bounded_prefix.FAILED.json" ]; }; then
+    ok "Claude transcript line boundary $transcript_bytes bytes"
+  else
+    bad "Claude transcript line boundary $transcript_bytes returned $bounded_rc"
+  fi
+done
+
+for transcript_kind in symlink fifo; do
+  python3 "$GUARD" new-campaign "$BOUND_DOC" --operator test \
+      --reason "Claude nonregular transcript fixture $transcript_kind" >/dev/null || exit 1
+  bound_claim="$(python3 "$GUARD" claim "$BOUND_DOC" 1 fanout "$BOUND_STATE")" || exit 1
+  bound_claim_id="${bound_claim##*CLAIM_ID=}"
+  python3 "$GUARD" finish "$BOUND_DOC" "$bound_claim_id" success >/dev/null || exit 1
+  bounded_prefix="$BOUND_STATE/round_8_claude_$transcript_kind"
+  PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_TRANSCRIPT_KIND="$transcript_kind" \
+      STUB_DOC_ID="$BOUND_ID" STUB_DOC_SHA="$BOUND_SHA" \
+      "$ADAPTER" --reviewer claude "$BOUND_DOC" 2 "$BOUND_PRIOR" "$bounded_prefix" \
+      >/dev/null 2>&1
+  bounded_rc=$?
+  if [ "$bounded_rc" -eq 2 ] && [ -f "$bounded_prefix.FAILED.json" ]; then
+    ok "Claude rejects $transcript_kind transcript before parsing"
+  else
+    bad "Claude $transcript_kind transcript returned $bounded_rc"
+  fi
+done
+
 # End-to-end silent-downgrade: request opus, but the CLI (stub) runs fable. The adapter records
 # requested_model=opus while the transcript shows fable; the gate must deny — no hand-edited meta.
 python3 "$GUARD" new-campaign "$DOC" --operator test --reason 'independent downgrade fixture' >/dev/null || exit 1
@@ -149,11 +236,6 @@ if [ "$dg_req" = "claude-opus-4-8" ] && [ $gate_rc -ne 0 ]; then
 else
   bad "silent downgrade not caught (requested=$dg_req, gate did not deny)"
 fi
-
-HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_8_xfamily" \
-    --orchestrator-family codex --reviewer-family claude >/dev/null 2>&1
-[ $? -eq 0 ] && ok "Claude cross-family round can grant plateau" \
-              || bad "valid Claude round was denied"
 
 rm -f "$MARKER_DIR"/PLATEAU.*
 HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_8_xfamily" \
@@ -211,6 +293,16 @@ if [ $stale_rc -eq 2 ] && [ ! -e "$STALE.json" ] && [ ! -e "$STALE.meta.json" ] 
 else
   bad "failed claim left stale canonical output (rc=$stale_rc)"
 fi
+python3 - "$STALE.FAILED.json" <<'PY' >/dev/null 2>&1
+import json, sys
+payload = json.load(open(sys.argv[1]))
+assert payload["provider_exit_status"] == 7
+assert payload["provider_command"] == "claude"
+assert "REDACTED" in payload["diagnostic"]
+assert "fixture-value" not in payload["diagnostic"]
+PY
+[ $? -eq 0 ] && ok "Claude failure preserves bounded scrubbed provider stderr" \
+              || bad "Claude failure diagnostic was absent or unsanitized"
 
 # Requirement-revision cancellation owns the live adapter tree. Even when cancellation races a
 # provider invocation at the requested prefix, no findings/meta may reach canonical paths.

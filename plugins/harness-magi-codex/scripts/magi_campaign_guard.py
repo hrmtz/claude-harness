@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Iterator
 
 import magi_convergence_kernel as kernel
+from magi_protocol import (
+    protocol_sha as closed_protocol_sha,
+    sha256_file,
+    strict_json_loads,
+)
 
 
 DEFAULT_MAX_MODEL_LAUNCHES = 16
@@ -94,23 +99,15 @@ def canonical_doc(raw: str) -> Path:
 
 
 def doc_id(doc: Path) -> str:
-    return hashlib.sha256(str(doc).encode()).hexdigest()[:16]
+    return hashlib.sha256(os.fsencode(doc)).hexdigest()[:16]
 
 
 def file_sha(doc: Path) -> str:
-    return hashlib.sha256(doc.read_bytes()).hexdigest()
+    return sha256_file(doc)
 
 
 def protocol_sha() -> str:
-    root = Path(__file__).resolve().parent.parent
-    digest = hashlib.sha256()
-    for relative_path in PROTOCOL_FILES:
-        path = root / relative_path
-        digest.update(relative_path.encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+    return closed_protocol_sha()
 
 
 def now() -> str:
@@ -294,9 +291,9 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
             raise UsageError(f"no campaign ledger exists for {doc}")
         return new_ledger(doc)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-            raise StateError(f"campaign ledger is unreadable: {path}: {exc}") from exc
+        payload = strict_json_loads(path.read_bytes())
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise StateError(f"campaign ledger is unreadable: {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise StateError("campaign ledger must be a JSON object")
     expected = {"schema_version", "doc_id", "doc_path", "campaigns"}
@@ -697,6 +694,7 @@ def claim(
         if planned_rollover:
             campaigns.append(campaign)
         claim_id = str(uuid.uuid4())
+        claim_protocol_sha = protocol_sha()
         launch_payload = {
             "claim_id": claim_id,
             "sequence": len(launches) + 1,
@@ -706,7 +704,7 @@ def claim(
             "model_launches": weight,
             "state_dir": str(state),
             "artifact_sha": file_sha(doc),
-            "protocol_sha": protocol_sha(),
+            "protocol_sha": claim_protocol_sha,
             "claimed_at": now(),
             "status": "running",
         }
@@ -717,7 +715,8 @@ def claim(
     print(
         f"CAMPAIGN CLAIMED: {campaign['campaign_id']} global model launches "
         f"{total_used + weight}/{global_ceiling}, "
-        f"round {round_no} {phase}, attempt {attempt}; CLAIM_ID={claim_id}"
+        f"round {round_no} {phase}, attempt {attempt}; "
+        f"PROTOCOL_SHA={claim_protocol_sha}; CLAIM_ID={claim_id}"
     )
 
 

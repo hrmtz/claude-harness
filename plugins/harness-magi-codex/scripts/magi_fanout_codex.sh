@@ -33,7 +33,9 @@ GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
 CLASSIFIER="$SELF_DIR/magi_classify_failure.py"
 CONVERGENCE_GATE="$SELF_DIR/magi_convergence_gate.py"
-CANON="$REPO_ROOT/plugins/harness-magi/skills"
+VERIFY_CANON="$SELF_DIR/magi_verify_canonical_templates.py"
+PROTOCOL="$SELF_DIR/magi_protocol.py"
+CANON="${MAGI_CANONICAL_SKILLS_DIR:-$REPO_ROOT/plugins/harness-magi/skills}"
 CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
 if [ -z "$CROSS_CLI_GUARD" ]; then
     CROSS_CLI_GUARD="$(command -v harness-cross-cli 2>/dev/null || true)"
@@ -89,8 +91,37 @@ case "$REVIEW_MODE" in
 esac
 
 TEMPLATE_DIR="$CANON/$PERSONA_SET/templates"
-[ -d "$TEMPLATE_DIR" ] || { echo "fanout: canonical templates not found: $TEMPLATE_DIR" >&2; exit 64; }
+if [ -d "$TEMPLATE_DIR" ]; then
+    python3 "$VERIFY_CANON" "$CANON" "$PERSONA_SET" >/dev/null || {
+        echo "fanout: canonical template identity check failed: $CANON ($PERSONA_SET)" >&2
+        exit 64
+    }
+elif [ -n "${MAGI_CANONICAL_SKILLS_DIR:-}" ]; then
+    echo "fanout: canonical templates not found: $TEMPLATE_DIR" >&2
+    exit 64
+fi
 [ -f "$DOC_PATH" ] || { echo "fanout: doc not found: $DOC_PATH" >&2; exit 64; }
+DOC_PATH="$(realpath "$DOC_PATH")"
+MAX_ARTIFACT_BYTES="${MAGI_MAX_ARTIFACT_BYTES:-10485760}"
+case "$MAX_ARTIFACT_BYTES" in
+    ''|*[!0-9]*) echo "fanout: MAGI_MAX_ARTIFACT_BYTES must be an integer" >&2; exit 64 ;;
+esac
+[ "$MAX_ARTIFACT_BYTES" -ge 1 ] && [ "$MAX_ARTIFACT_BYTES" -le 10485760 ] || {
+    echo "fanout: MAGI_MAX_ARTIFACT_BYTES must tighten the default into 1..10485760" >&2
+    exit 64
+}
+ARTIFACT_BYTES="$(stat -c %s -- "$DOC_PATH")" || {
+    echo "fanout: cannot stat review artifact: $DOC_PATH" >&2
+    exit 64
+}
+[ "$ARTIFACT_BYTES" -ge 1 ] || {
+    echo "fanout: review artifact must not be empty" >&2
+    exit 64
+}
+[ "$ARTIFACT_BYTES" -le "$MAX_ARTIFACT_BYTES" ] || {
+    echo "fanout: review artifact exceeds ${MAX_ARTIFACT_BYTES}-byte limit" >&2
+    exit 64
+}
 case "$ROUND" in ''|*[!0-9]*) echo "fanout: round must be a positive integer: $ROUND" >&2; exit 64 ;; esac
 [ "$ROUND" -ge 1 ] || { echo "fanout: round must be at least 1" >&2; exit 64; }
 if [ "$ROUND" -gt 1 ] && [ "$PRIOR" = "-" ]; then
@@ -122,8 +153,9 @@ git_toplevel="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$(dirname "$DOC_PATH")" 
     rev-parse --show-toplevel 2>&1)" && TARGET_ROOT="$git_toplevel" || {
     case "$git_toplevel" in
         *"not a git repository"*) : ;;
-        *) echo "fanout: warning: git toplevel lookup failed ($git_toplevel);" \
-               "grounding reviewers in the document directory" >&2 ;;
+        *) echo "fanout: git toplevel lookup failed; refusing narrowed grounding:" >&2
+           echo "        $git_toplevel" >&2
+           exit 64 ;;
     esac
     TARGET_ROOT=""
 }
@@ -131,12 +163,16 @@ if [ -z "$TARGET_ROOT" ]; then
     TARGET_ROOT="$(dirname "$DOC_PATH")"
 fi
 unset git_toplevel
+# The target-root lookup above deliberately ignores ambient repository overrides.
+# Keep them from contaminating protocol snapshot git reads and reviewer subprocesses too.
+unset GIT_DIR GIT_WORK_TREE
 if [ "$PRIOR" != "-" ]; then
     python3 "$VALIDATOR" "$PRIOR" "$SCHEMA_FILE" --same-doc "$DOC_PATH" \
         --prior-for-round "$ROUND" --state-dir "$OUT_DIR" || {
         echo "fanout: prior synthesis failed identity/round/schema validation" >&2
         exit 64
     }
+    PRIOR_SHA="$(sha256sum "$PRIOR" | cut -d' ' -f1)"
 fi
 
 command -v codex >/dev/null 2>&1 || { echo "fanout: codex CLI not found" >&2; exit 1; }
@@ -159,6 +195,7 @@ ARTIFACT_SHA="$(sha256sum "$DOC_PATH" | cut -d' ' -f1)"
 ARTIFACT_ID="$(printf '%s' "$(realpath "$DOC_PATH")" | sha256sum | cut -c1-16)"
 DOC_CONTROL_DIR="$(dirname "$(realpath "$DOC_PATH")")/.dual-magi"
 mkdir -p "$DOC_CONTROL_DIR"
+REVIEW_WORKSPACE="$TARGET_ROOT"
 
 if [ "$REVIEW_MODE" = "incremental" ]; then
     decision_json="$(python3 "$CONVERGENCE_GATE" evaluate "$DOC_PATH")" || exit $?
@@ -238,8 +275,10 @@ CLAIM_ID=""
 CLAIM_FINISHED=0
 STAGE_DIR=""
 _cleanup_stage() {
-    local p label
+    local p label failed=0
+    set +e
     [ -n "$STAGE_DIR" ] || return 0
+    [ -d "$STAGE_DIR" ] || return 0
     for p in "${PERSONAS[@]}"; do
         label="$(artifact_label "$p")"
         rm -f -- \
@@ -251,27 +290,45 @@ _cleanup_stage() {
             "$STAGE_DIR"/.round_"${ROUND}_${p}".log.safe.* \
             "$STAGE_DIR/.round_${ROUND}_${p}.scrub-meta.json" \
             "$STAGE_DIR/.round_${ROUND}_${p}.status" \
-            "$STAGE_DIR/.round_${ROUND}_${p}.diagnostic.json"
+            "$STAGE_DIR/.round_${ROUND}_${p}.diagnostic.json" || failed=1
     done
-    [ "$REVIEW_MODE" = "incremental" ] \
-        && rm -f -- "$STAGE_DIR/round_${ROUND}_codex.json"
-    rmdir -- "$STAGE_DIR" 2>/dev/null || true
+    if [ "$REVIEW_MODE" = "incremental" ] \
+            && ! rm -f -- "$STAGE_DIR/round_${ROUND}_codex.json"; then failed=1; fi
+    rm -rf -- "$STAGE_DIR/protocol" || failed=1
+    rm -f -- "$STAGE_DIR/review-artifact" "$STAGE_DIR/prior.json" || failed=1
+    rmdir -- "$STAGE_DIR" || failed=1
+    return "$failed"
 }
 _cleanup() {
-    local pid status
+    local original_rc=$? pid status status_rc cleanup_failed=0
+    set +e
     for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
     for pid in "${PIDS[@]:-}"; do wait "$pid" 2>/dev/null || true; done
-    [ ${#PROMPTS[@]} -gt 0 ] && rm -f "${PROMPTS[@]}"
+    if [ ${#PROMPTS[@]} -gt 0 ] && ! rm -f "${PROMPTS[@]}"; then cleanup_failed=1; fi
     if [ -n "$CLAIM_ID" ] && [ "$CLAIM_FINISHED" -eq 0 ]; then
-        status="$(python3 "$GUARD" claim-status "$DOC_PATH" "$CLAIM_ID" 2>/dev/null || true)"
+        status="$(python3 "$GUARD" claim-status "$DOC_PATH" "$CLAIM_ID")"
+        status_rc=$?
         if [ "$status" = "success" ]; then
             CLAIM_FINISHED=1
         else
-            [ ${#PUBLISHED[@]} -gt 0 ] && rm -f -- "${PUBLISHED[@]}"
-            python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null 2>&1 || true
+            [ "$status_rc" -eq 0 ] || cleanup_failed=1
+            if [ ${#PUBLISHED[@]} -gt 0 ] && ! rm -f -- "${PUBLISHED[@]}"; then
+                cleanup_failed=1
+            fi
+            if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" failed >/dev/null; then
+                echo "fanout: ERROR: failed to finalize claim $CLAIM_ID as failed" >&2
+                cleanup_failed=1
+            fi
         fi
     fi
-    _cleanup_stage
+    _cleanup_stage || cleanup_failed=1
+    [ "$cleanup_failed" -eq 0 ] || {
+        echo "fanout: ERROR: cleanup was incomplete for claim ${CLAIM_ID:-unclaimed}" >&2
+    }
+    if [ "$cleanup_failed" -ne 0 ] && [ "$original_rc" -eq 0 ]; then
+        trap - EXIT
+        exit 1
+    fi
     return 0
 }
 trap _cleanup EXIT
@@ -284,10 +341,13 @@ trap 'exit 143' TERM
 # purpose is contamination control. Take the lock first.
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
-magi_lock_acquire "$DOC_CONTROL_DIR/.review.${ARTIFACT_ID}.lock" || {
-    echo "fanout: another fan-out is already running for round $ROUND in $OUT_DIR" >&2
-    exit 5
-}
+lock_rc=0
+magi_lock_acquire "$DOC_CONTROL_DIR/.review.${ARTIFACT_ID}.lock" || lock_rc=$?
+case "$lock_rc" in
+    0) ;;
+    1) echo "fanout: another fan-out is already running for round $ROUND in $OUT_DIR" >&2; exit 5 ;;
+    *) echo "fanout: cannot acquire document lock (I/O error) in $DOC_CONTROL_DIR" >&2; exit 2 ;;
+esac
 
 # INV-3: refuse to start if a sibling output for this round already exists.
 for p in "${PERSONAS[@]}"; do
@@ -319,8 +379,57 @@ CLAIM_ID="${claim_line##*CLAIM_ID=}"
     echo "fanout: campaign guard returned an invalid claim id" >&2
     exit 1
 }
+CLAIM_PROTOCOL_SHA="${claim_line#*PROTOCOL_SHA=}"
+CLAIM_PROTOCOL_SHA="${CLAIM_PROTOCOL_SHA%%;*}"
+[[ "$CLAIM_PROTOCOL_SHA" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "fanout: campaign guard returned an invalid protocol digest" >&2
+    exit 1
+}
 STAGE_DIR="$OUT_DIR/.claim-$CLAIM_ID"
 mkdir -m 700 "$STAGE_DIR"
+
+# Freeze every closed protocol input plus the exact document/prior bytes before composing any
+# provider prompt. Endpoint digest checks alone permit an ABA checkout mutation.
+python3 "$PROTOCOL" snapshot "$STAGE_DIR/protocol" "$CLAIM_PROTOCOL_SHA" >/dev/null || {
+    echo "fanout: protocol inputs changed while creating the claim snapshot" >&2
+    exit 1
+}
+SNAPSHOT_PLUGIN="$STAGE_DIR/protocol/plugins/harness-magi-codex"
+SNAPSHOT_REPO="$STAGE_DIR/protocol"
+TEMPLATE_DIR="$SNAPSHOT_REPO/plugins/harness-magi/skills/$PERSONA_SET/templates"
+python3 "$VERIFY_CANON" "$SNAPSHOT_REPO/plugins/harness-magi/skills" \
+    "$PERSONA_SET" >/dev/null || {
+    echo "fanout: snapshotted canonical template identity check failed" >&2
+    exit 1
+}
+SCHEMA_FILE="$SNAPSHOT_PLUGIN/schemas/finding.schema.json"
+PROVIDER_SCHEMA_FILE="$SNAPSHOT_PLUGIN/schemas/finding.codex.schema.json"
+SCRUB="$SNAPSHOT_PLUGIN/scripts/magi_scrub.py"
+GUARD="$SNAPSHOT_PLUGIN/scripts/magi_campaign_guard.py"
+VALIDATOR="$SNAPSHOT_PLUGIN/scripts/magi_validate_findings.py"
+CLASSIFIER="$SNAPSHOT_PLUGIN/scripts/magi_classify_failure.py"
+python3 - "$DOC_PATH" "$STAGE_DIR/review-artifact" "$ARTIFACT_SHA" <<'PY'
+import hashlib, pathlib, sys
+source, target = map(pathlib.Path, sys.argv[1:3])
+expected = sys.argv[3]
+digest = hashlib.sha256()
+with source.open("rb") as reader, target.open("wb") as writer:
+    for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+        digest.update(chunk)
+        writer.write(chunk)
+if digest.hexdigest() != expected:
+    raise SystemExit("review artifact changed after campaign admission")
+PY
+SNAPSHOT_DOC="$STAGE_DIR/review-artifact"
+SNAPSHOT_PRIOR="-"
+if [ "$PRIOR" != "-" ]; then
+    cp -- "$PRIOR" "$STAGE_DIR/prior.json"
+    SNAPSHOT_PRIOR="$STAGE_DIR/prior.json"
+    [ "$(sha256sum "$SNAPSHOT_PRIOR" | cut -d' ' -f1)" = "$PRIOR_SHA" ] || {
+        echo "fanout: prior synthesis changed after preflight validation" >&2
+        exit 1
+    }
+fi
 
 for p in "${PERSONAS[@]}"; do
     tmpl="$TEMPLATE_DIR/${p}_prompt.md"
@@ -371,16 +480,16 @@ for p in "${PERSONAS[@]}"; do
         fi
         printf 'ROUND: %s\nTARGET DOC: %s\nTARGET REPO ROOT: %s\nARTIFACT ID: %s\nARTIFACT SHA256: %s\n\n' \
             "$ROUND" "$DOC_PATH" "$TARGET_ROOT" "$ARTIFACT_ID" "$ARTIFACT_SHA"
-        if [ "$PRIOR" != "-" ]; then
+        if [ "$SNAPSHOT_PRIOR" != "-" ]; then
             printf 'PRIOR SYNTHESIS (check resolution and classify relationships; do not repeat):\n---\n'
             (
                 eval "exec ${MAGI_LOCK_FD}>&-"
-                exec python3 "$SCRUB" < "$PRIOR"
+                exec python3 "$SCRUB" < "$SNAPSHOT_PRIOR"
             )
             printf '\n---\n\n'
         fi
         printf 'DOCUMENT:\n---\n'
-        cat "$DOC_PATH"
+        cat "$SNAPSHOT_DOC"
         printf '\n---\n\nReturn ONLY a JSON object conforming to the output schema. reviewer="%s", round=%s, artifact_id="%s", artifact_sha="%s".\n' \
             "${p^^}" "$ROUND" "$ARTIFACT_ID" "$ARTIFACT_SHA"
     } > "$prompt"
@@ -459,13 +568,18 @@ done
 for p in "${PERSONAS[@]}"; do
     label="$(artifact_label "$p")"
     out="$STAGE_DIR/round_${ROUND}_${label}.json"
+    validator_error="$STAGE_DIR/.round_${ROUND}_${p}.validator.err"
     if [ ! -s "$out" ] || ! python3 "$VALIDATOR" "$out" "$SCHEMA_FILE" \
-        --doc "$DOC_PATH" --reviewer "${p^^}" --round "$ROUND" 2>/dev/null
+        --doc "$DOC_PATH" --reviewer "${p^^}" --round "$ROUND" 2>"$validator_error"
     then
         echo "fanout: reviewer $p produced no schema-valid output" >&2
         rc=1
         continue
     fi
+    rm -f -- "$validator_error" || {
+        echo "fanout: cannot remove successful validator diagnostic: $validator_error" >&2
+        rc=1
+    }
 done
 
 if [ $rc -ne 0 ]; then
@@ -490,6 +604,7 @@ if [ $rc -ne 0 ]; then
             --scrub-meta "$STAGE_DIR/.round_${ROUND}_${p}.scrub-meta.json" \
             --provider-exit "$provider_rc" --scrub-exit "$scrub_rc" \
             --status-valid "$status_valid" --schema "$SCHEMA_FILE" --doc "$DOC_PATH" \
+            --validator-error "$STAGE_DIR/.round_${ROUND}_${p}.validator.err" \
             --reviewer "${p^^}" --round "$ROUND" \
             --claim-id "$CLAIM_ID" --artifact-id "$ARTIFACT_ID" \
             --artifact-sha "$ARTIFACT_SHA" \
@@ -521,7 +636,8 @@ claim_id, artifact_id, artifact_sha, round_number = sys.argv[2:6]
 allowed = {
     "reviewer", "round", "classification", "provider_exit_code",
     "scrubber_exit_code", "output_bytes", "log_bytes", "input_bytes",
-    "input_parsed_json", "redactions", "identity_field",
+    "input_parsed_json", "redactions", "identity_field", "diagnostic",
+    "diagnostic_truncated", "diagnostic_unavailable",
 }
 reviewers = []
 for path in sys.argv[6:]:
@@ -603,5 +719,9 @@ fi
 python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
 CLAIM_FINISHED=1
 PUBLISHED=()
-_cleanup_stage
+if ! _cleanup_stage; then
+    echo "fanout: ERROR: final staging cleanup failed for claim $CLAIM_ID" >&2
+    exit 1
+fi
+STAGE_DIR=""
 echo "fanout: ${#PERSONAS[@]} reviewers complete -> $OUT_DIR"

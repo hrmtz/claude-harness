@@ -7,7 +7,11 @@
     "artifact_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "verdict": {"type": "string", "enum": ["GO", "GO-WITH-REVISE", "REVISE", "REJECT"]},
     "schema_grounding_verdict": {"type": "string", "enum": ["PASS", "PARTIAL", "FAIL"]},
-    "verify_commands_executed": {"type": "array", "items": {"type": "string"}},
+    "verify_commands_executed": {
+      "type": "array",
+      "maxItems": 768,
+      "items": {"type": "string", "maxLength": 4096}
+    },
     "source_artifacts": {
       "type": "array",
       "items": {

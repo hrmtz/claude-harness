@@ -205,6 +205,7 @@ class DesignConvergenceGateTest(unittest.TestCase):
             + "\n"
         )
         meta = {
+            "round": round_no,
             "session_id": sid,
             "model_id": "claude-fable-5",
             "requested_model": "claude-fable-5",
@@ -212,6 +213,7 @@ class DesignConvergenceGateTest(unittest.TestCase):
             "model_usage_keys": ["claude-fable-5"],
             "num_turns": 2,
             "artifact_sha": artifact_sha,
+            "protocol_sha": guard.protocol_sha(),
             "permission_denials": [],
             "output_sha": digest(findings_path),
             "transcript_path": str(transcript),
