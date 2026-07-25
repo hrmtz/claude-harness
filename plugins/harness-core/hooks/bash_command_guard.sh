@@ -14,8 +14,25 @@ source "$(dirname "$0")/lib.sh"
 
 # Cross-CLI: parse_tool_command handles Claude/Codex `.tool_input.command` AND
 # Grok `.toolInput.command`. HOOK_INPUT is set so the helper doesn't re-read stdin.
-HOOK_INPUT=$(cat); export HOOK_INPUT
-CMD=$(parse_tool_command)
+MAX_HOOK_INPUT_BYTES=4194304
+if ! HOOK_INPUT=$(head -c $((MAX_HOOK_INPUT_BYTES + 1))); then
+    printf '%s\n' "bash command guard input acquisition failed; refusing tool execution" >&2
+    exit 2
+fi
+HOOK_INPUT_BYTES=$(LC_ALL=C printf '%s' "$HOOK_INPUT" | wc -c)
+if [ "$HOOK_INPUT_BYTES" -gt "$MAX_HOOK_INPUT_BYTES" ]; then
+    printf '%s\n' "bash command guard input exceeds size limit; refusing tool execution" >&2
+    exit 2
+fi
+if [ -z "$HOOK_INPUT" ] || ! printf '%s' "$HOOK_INPUT" \
+    | jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1; then
+    printf '%s\n' "bash command guard input validation failed; refusing tool execution" >&2
+    exit 2
+fi
+if ! CMD=$(parse_tool_command_strict); then
+    printf '%s\n' "bash command guard command parsing failed; refusing tool execution" >&2
+    exit 2
+fi
 
 [ -z "$CMD" ] && exit 0
 

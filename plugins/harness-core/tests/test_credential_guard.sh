@@ -85,6 +85,40 @@ expect_allow 'set -e' '#10 set -e is not an env dump'
 expect_allow 'set -o pipefail' '#10 set -o pipefail is not an env dump'
 expect_block 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#108 read ACK does not authorize env output'
 
+bash_guard_failure_fails_closed() {
+    local payload="$1" command_name="${2:-}" tmp_home fake_bin out rc
+    tmp_home="$(make_test_home "$TEST_ROOT")" || return 1
+    if [ -n "$command_name" ]; then
+        fake_bin="$(mktemp -d "$TEST_ROOT/bash-fake-bin.XXXXXX")" || return 1
+        printf '#!/bin/sh\nexit 1\n' > "$fake_bin/$command_name"
+        chmod +x "$fake_bin/$command_name"
+        out="$(printf '%s' "$payload" \
+            | PATH="$fake_bin:$PATH" HOME="$tmp_home" \
+                bash "$HOOKS/bash_command_guard.sh" 2>/dev/null)"
+    else
+        out="$(printf '%s' "$payload" \
+            | HOME="$tmp_home" bash "$HOOKS/bash_command_guard.sh" 2>/dev/null)"
+    fi
+    rc=$?
+    [ "$rc" -ne 0 ] && [ -z "$out" ]
+}
+
+if bash_guard_failure_fails_closed '{"tool_input":{"command":"printenv MARS_POSTGRES_URL"}}' jq; then
+    ok "Bash command parser dependency failure is nonzero, never a clean allow"
+else
+    bad "Bash command parser dependency failure was masked"
+fi
+if bash_guard_failure_fails_closed ''; then
+    ok "empty Bash hook input is nonzero, never a clean allow"
+else
+    bad "empty Bash hook input was accepted"
+fi
+if bash_guard_failure_fails_closed '{"tool_input":{"command":123}}'; then
+    ok "non-string Bash command fails closed"
+else
+    bad "non-string Bash command was accepted"
+fi
+
 # --- #36: bare relative .env + non-enumerated readers (cross-family hole) ---
 expect_block 'cat .env' '#36 bare relative cat .env'
 expect_block 'grep KEY .env' '#36 bare relative grep KEY .env'
@@ -272,10 +306,17 @@ expect_payload_block '{"tool_input":{"file_path":"","path":"/tmp/proj/.env"}}' "
 expect_payload_block '{"toolInput":{"file_path":"  ","path":"/tmp/proj/.env"}}' "blank camel-case primary alias falls through to classified path" grok
 expect_payload_failure '{"tool_input":{"file_path":"/tmp/proj/README.md","path":"/tmp/proj/.env"}}' "conflicting snake-case path aliases fail closed"
 expect_payload_failure '{"toolInput":{"path":"/tmp/proj/README.md","uri":"file:///tmp/proj/.env"}}' "conflicting camel-case path aliases fail closed" grok
+expect_payload_failure '{"tool_input":{"file_path":123}}' "numeric path alias fails closed"
+expect_payload_failure '{"tool_input":{"file_path":false}}' "boolean path alias fails closed"
+expect_payload_failure '{"tool_input":{"file_path":[]}}' "array path alias fails closed"
+expect_payload_failure '{"tool_input":{"file_path":{}}}' "object path alias fails closed"
 
-oversized_payload="$(python3 -c 'import json; print(json.dumps({"tool_input":{"file_path":"/tmp/proj/.env","padding":"x"*3000000}}))')"
-expect_payload_block "$oversized_payload" "oversized valid payload still emits one deny JSON"
-unset oversized_payload
+below_limit_payload="$(python3 -c 'import json; print(json.dumps({"tool_input":{"file_path":"/tmp/proj/.env","padding":"x"*3000000}}))')"
+expect_payload_block "$below_limit_payload" "below-limit large payload still emits one deny JSON"
+unset below_limit_payload
+above_limit_payload="$(python3 -c 'import json; print(json.dumps({"tool_input":{"file_path":"/tmp/proj/.env","padding":"x"*4500000}}))')"
+expect_payload_failure "$above_limit_payload" "above-limit payload fails closed before parsing"
+unset above_limit_payload
 
 # Exact #108 incident regression: a fresh legacy marker must neither authorize the Read nor add
 # another stdout document. The marker is ignored and remains non-authoritative.

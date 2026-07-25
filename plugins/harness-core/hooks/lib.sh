@@ -96,6 +96,22 @@ parse_tool_command() {
     _hook_input | jq -r '.tool_input.command // .toolInput.command // empty' 2>/dev/null
 }
 
+parse_tool_command_strict() {
+    _hook_input | jq -r '
+        [.tool_input.command, .toolInput.command] as $values
+        | if any($values[]; . != null and type != "string")
+          then error("command alias has a non-string value")
+          else
+            ($values
+             | map(select(type == "string" and test("[^[:space:]]")))
+             | unique) as $commands
+            | if ($commands | length) > 1
+              then error("conflicting non-empty command aliases")
+              else $commands[0] // empty
+              end
+          end' 2>/dev/null
+}
+
 parse_tool_name() {
     _hook_input | jq -r '.tool_use_name // .tool_name // .toolName // .payload.name // empty' 2>/dev/null
 }
@@ -110,10 +126,26 @@ parse_tool_file_path() {
             .path, .file_path, .file, .uri
         ]
         | map(select(type == "string" and test("[^[:space:]]")))
-        | unique as $paths
-        | if ($paths | length) > 1
-          then error("conflicting non-empty path aliases")
-          else $paths[0] // empty
+        | first // empty' 2>/dev/null
+}
+
+parse_tool_file_path_strict() {
+    _hook_input | jq -r '
+        [
+            .tool_input.file_path, .tool_input.path, .tool_input.file, .tool_input.uri,
+            .toolInput.file_path, .toolInput.path, .toolInput.file, .toolInput.uri,
+            .path, .file_path, .file, .uri
+        ] as $values
+        | if any($values[]; . != null and type != "string")
+          then error("path alias has a non-string value")
+          else
+            ($values
+             | map(select(type == "string" and test("[^[:space:]]")))
+             | unique) as $paths
+            | if ($paths | length) > 1
+              then error("conflicting non-empty path aliases")
+              else $paths[0] // empty
+              end
           end' 2>/dev/null
 }
 

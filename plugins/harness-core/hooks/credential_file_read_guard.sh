@@ -17,8 +17,14 @@
 
 source "$(dirname "$0")/lib.sh"
 
-if ! HOOK_INPUT=$(cat); then
+MAX_HOOK_INPUT_BYTES=4194304
+if ! HOOK_INPUT=$(head -c $((MAX_HOOK_INPUT_BYTES + 1))); then
   printf '%s\n' "credential read guard input acquisition failed; refusing tool execution" >&2
+  exit 2
+fi
+HOOK_INPUT_BYTES=$(LC_ALL=C printf '%s' "$HOOK_INPUT" | wc -c)
+if [ "$HOOK_INPUT_BYTES" -gt "$MAX_HOOK_INPUT_BYTES" ]; then
+  printf '%s\n' "credential read guard input exceeds size limit; refusing tool execution" >&2
   exit 2
 fi
 if [ -z "$HOOK_INPUT" ] || ! printf '%s' "$HOOK_INPUT" \
@@ -27,7 +33,7 @@ if [ -z "$HOOK_INPUT" ] || ! printf '%s' "$HOOK_INPUT" \
   exit 2
 fi
 
-if ! FILE_PATH=$(parse_tool_file_path); then
+if ! FILE_PATH=$(parse_tool_file_path_strict); then
   printf '%s\n' "credential read guard path parsing failed; refusing tool execution" >&2
   exit 2
 fi

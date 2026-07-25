@@ -45,10 +45,15 @@ eq "parse_tool_file_path empty snake alias falls through" "$got" "/fallback/.env
 got=$(HOOK_INPUT='{"toolInput":{"file_path":"  ","path":"/grok-fallback/.env"}}' parse_tool_file_path)
 eq "parse_tool_file_path blank Grok alias falls through" "$got" "/grok-fallback/.env"
 if HOOK_INPUT='{"tool_input":{"file_path":"/benign.txt","path":"/classified/.env"}}' \
-    parse_tool_file_path >/dev/null; then
-    bad "parse_tool_file_path accepted conflicting non-empty aliases"
+    parse_tool_file_path_strict >/dev/null; then
+    bad "parse_tool_file_path_strict accepted conflicting non-empty aliases"
 else
-    ok "parse_tool_file_path rejects conflicting non-empty aliases"
+    ok "parse_tool_file_path_strict rejects conflicting non-empty aliases"
+fi
+if HOOK_INPUT='{"tool_input":{"file_path":123}}' parse_tool_file_path_strict >/dev/null; then
+    bad "parse_tool_file_path_strict accepted a non-string alias"
+else
+    ok "parse_tool_file_path_strict rejects non-string aliases"
 fi
 
 got=$(HOOK_INPUT='{"tool_name":"Agent","tool_response":{"output":"agent-result"}}' parse_tool_output)
