@@ -45,6 +45,15 @@ if grep -Fq "set-option" "$LOG"; then
     exit 1
 fi
 
+run_hook $'foot:hyperlinks\nxterm*:RGB'
+grep -Fqx "set-option -as terminal-features ,*:hyperlinks" "$LOG"
+
+run_hook "*:RGB:hyperlinks:title"
+if grep -Fq "set-option" "$LOG"; then
+    echo "duplicate wildcard hyperlink feature mutation" >&2
+    exit 1
+fi
+
 run_hook "xterm*:RGB" 0
 if grep -Fq "set-option" "$LOG"; then
     echo "stale pane mutated tmux options" >&2

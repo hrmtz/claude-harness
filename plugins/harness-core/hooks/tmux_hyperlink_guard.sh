@@ -14,7 +14,6 @@ command -v tmux >/dev/null 2>&1 || exit 0
 tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' >/dev/null 2>&1 || exit 0
 
 features="$(tmux show-options -sv terminal-features 2>/dev/null || true)"
-if ! printf '%s\n' "$features" | grep -Eq '(^|:)hyperlinks(:|$)'; then
+if ! printf '%s\n' "$features" | grep -Eq '^\*:([^:]+:)*hyperlinks(:|$)'; then
     tmux set-option -as terminal-features ',*:hyperlinks' >/dev/null 2>&1 || true
 fi
-
