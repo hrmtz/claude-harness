@@ -20,6 +20,13 @@ while [[ -L "$SELF" ]]; do SELF="$(readlink -f "$SELF")"; done
 SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 
+# The integration audit must not even initialize/touch Formation runtime state.
+# Dispatch it before mailbox helpers create directories or registry files.
+if [[ "${BASH_SOURCE[0]}" == "${0}" && "${1:-}" == "integration-audit" ]]; then
+  shift
+  exec "$SCRIPT_DIR/formation-integration-audit" "$@"
+fi
+
 if [[ -z "${FORMATION_HOME:-}" ]]; then
   if [[ -n "${NJSLYR_HOME:-}" ]]; then
     FORMATION_HOME="$NJSLYR_HOME"
@@ -161,6 +168,11 @@ usage() {
 formation - long-running peer AI agent panes (claude, codex, or kimi)
 
 Parent (lead) commands:
+  formation integration-audit --repo OWNER/REPO [options]
+                                          Read-only PASS/WARN/ACTION reconciliation of
+                                          PRs, issues, evidence, refs/worktrees, parent
+                                          checkout divergence, and Formation worker state.
+                                          Use --json for stable machine-readable output.
   formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator]
                   [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart

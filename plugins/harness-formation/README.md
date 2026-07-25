@@ -9,7 +9,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | Path | What it does |
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
-| `bin/formation` | CLI: `spawn / status / inbox / msg / report / done / ask / reap` |
+| `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
 | `lib/{mailbox,wake,redact,mailbox_relay}.sh` | Helpers sourced by `bin/formation` |
 | `hooks/formation_suggest.sh` | UserPromptSubmit hook: detects worker-spawn intent, injects a formation keyword to surface the skill |
 
@@ -47,11 +47,25 @@ After install:
    ```bash
    formation status   # → "(no workers)"
    ```
-3. The auto-suggest hook is **active by default** and injects the Formation skill hint for high-confidence worker-spawn prompts. To observe matches without injecting:
+3. Audit integration state without changing GitHub, branches, worktrees, or
+   checkouts:
+   ```bash
+   formation integration-audit --repo OWNER/REPO \
+     --parent-checkout /path/to/parent
+   formation integration-audit --repo OWNER/REPO \
+     --parent-checkout /path/to/parent --json
+   ```
+   The report reconciles open/draft/recently merged PRs, linked issues,
+   recorded checks/reviews/tests, remote branches, local worktrees, parent
+   divergence/dirty counts, and Formation worker state. Missing auth, refs, or
+   evidence—including pane-gone workers with unknown repository—is `ACTION`;
+   exit status is `1` when an `ACTION` is present, `0` for PASS/WARN-only reports, and `2` for invalid
+   invocation or unreadable fixture input.
+4. The auto-suggest hook is **active by default** and injects the Formation skill hint for high-confidence worker-spawn prompts. To observe matches without injecting:
    ```bash
    export FORMATION_SUGGEST_MODE=shadow
    ```
-4. Codex/Kimi panes: install the pane-messaging double-submit rail (gh #105/#130)
+5. Codex/Kimi panes: install the pane-messaging double-submit rail (gh #105/#130)
    into the always-loaded AGENTS surface so agents that have not loaded the
    Formation skill still route through `formation msg` / `tmux_send_submit`:
    ```bash

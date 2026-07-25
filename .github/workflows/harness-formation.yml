@@ -45,3 +45,5 @@ jobs:
         run: bash plugins/harness-core/tests/test_cross_cli_guard.sh
       - name: Check documented CLI dispatch
         run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py
+      - name: Test integration audit
+        run: python3 plugins/harness-formation/tests/test_integration_audit.py
