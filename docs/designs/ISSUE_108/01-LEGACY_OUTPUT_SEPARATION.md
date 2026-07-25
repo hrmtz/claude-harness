@@ -1,6 +1,6 @@
 # Issue #108 Slice 1 — Legacy output separation
 
-Status: design candidate for Ultramagi review
+Status: implemented locally; revised exact-revision plateau remains incomplete after campaign exhaustion
 Parent: `docs/designs/ISSUE_108_SECRET_DISCLOSURE_AUTHORIZATION.md`
 Issue: <https://github.com/hrmtz/claude-harness/issues/108>
 
@@ -67,7 +67,8 @@ permitted for this slice.
 - SSH/file delivery;
 - recent-destination lookup;
 - same-day/session recurrence state;
-- new persistent state;
+- new product authorization, disclosure, or recurrence state (value-free review/process artifacts
+  under the existing ignored `.dual-magi` area remain permitted);
 - general shell parsing or taint correlation;
 - expanding the credential source catalog;
 - credential rotation;
@@ -75,7 +76,12 @@ permitted for this slice.
 
 Out-of-scope recommendations must be recorded against Slice 2 or 3. They cannot expand this diff.
 
-## 4. Grounded current behavior
+## 4. Historical pre-change baseline
+
+This section describes the behavior at base commit
+`79b7f4d07d8a91978a160570b26c747aad313fb7`, before the Slice 1 implementation. The current
+working branch already implements the deny contracts in Sections 7 through 10; these statements
+must not be read as current authorization guidance.
 
 ### 4.1 Bash
 
@@ -184,7 +190,11 @@ current stderr plus exit-2 path.
 Denial messages and logs name the safety action and pattern class without file content or
 environment values.
 
-## 7. Bash design
+## 7. Bash as-built contract
+
+Sections 7 through 10 state required as-built invariants and validation evidence. The local
+implementation already contains these changes; remaining work is exact-revision review and
+shipping evidence, not removal of a still-live bypass.
 
 ### 7.1 Remove bypass semantics
 
@@ -236,7 +246,7 @@ network egress, or later tools.
 Therefore Slice 1 does not attempt to distinguish safe from unsafe arbitrary ACK-prefixed shell
 programs. Supported safe use is expressed as existing explicit non-output patterns.
 
-## 8. Read-tool design
+## 8. Read-tool as-built contract
 
 ### 8.1 Remove marker bypass
 
@@ -278,9 +288,10 @@ Expected behavior:
 
 - Claude/Codex/Kimi: exit 0 with one JSON document whose
   `hookSpecificOutput.hookEventName` is `PreToolUse`, whose
-  `permissionDecision` is `deny`, and whose reason contains the stable phrase;
-- Grok: exit 0 with one JSON document whose top-level `decision` is `deny` and whose reason contains
-  the stable phrase.
+  `permissionDecision` is `deny`, and whose
+  `hookSpecificOutput.permissionDecisionReason` contains the stable phrase;
+- Grok: exit 0 with one JSON document whose top-level `decision` is `deny` and whose top-level
+  `reason` contains the stable phrase.
 
 Tests parse the decision object and stable reason code, not exit 2 or the full prose. No second JSON
 document or extra stdout is permitted. Human guidance remains inside the reason string; debug
@@ -294,11 +305,12 @@ The end-to-end fixture table is exact:
 | Kimi Claude-compatible snake-case path | `.hookSpecificOutput.permissionDecision == "deny"` |
 | `GROK_SESSION_ID` plus camel-case path | `.decision == "deny"` |
 
-Every row also asserts the corresponding reason field contains
-`READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT`, exit status is zero, and stdout parses as exactly one JSON
-document. Existing `test_lib_grok_compat.sh` remains the shared-helper compatibility test; the new
-credential-guard rows prove the guard actually calls that helper. This does not add MCP surfaces or
-new hooks.
+Every Claude/Codex/Kimi row asserts
+`hookSpecificOutput.permissionDecisionReason`; the Grok row asserts top-level `reason`. Each
+contains `READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT`, exits zero, and parses as exactly one JSON document.
+Existing `test_lib_grok_compat.sh` remains the shared-helper compatibility test; the new
+credential-guard rows prove the guard actually calls that helper. This does not add MCP surfaces
+or new hooks.
 
 ### 8.4 MCP parity
 
@@ -311,8 +323,10 @@ File URI decoding, remote-scheme exclusion, and template exemptions remain uncha
 
 For classified sources:
 
-- missing `jq` or unparsable hook input preserves current empty-path behavior; changing global hook
-  fail-open policy is out of scope;
+- once classification succeeds, deny-envelope serialization failure exits nonzero with a
+  value-free stderr diagnostic instead of returning an empty successful hook result;
+- unparsable hook input preserves current empty-path behavior; changing global pre-classification
+  policy is out of scope;
 - a valid classified path always emits the CLI-correct deny object;
 - marker filesystem errors cannot produce an allow because the marker is not consulted;
 - logging failure cannot produce an allow because `emit_deny` is independent of logging;
@@ -410,8 +424,9 @@ Every remaining occurrence must be:
 
 Current operational instructions must not recommend it.
 
-This audit is a hard shipping checklist item. Its command/result is recorded in the Slice 1 stage
-manifest and cannot be replaced by a prose assertion.
+This audit is a hard shipping checklist item. Its authoritative evidence is the tracked regression
+suite plus a fresh deterministic tracked-file search on the exact Git revision under review.
+The optional Slice 1 operator note is not evidence and cannot replace either check.
 
 ## 11. Acceptance mapping
 
@@ -451,49 +466,32 @@ Budget:
 - focused code/test/docs work: at most 5 operator-hours;
 - complete design and implementation review path: at most 8 operator-hours and 12 wall-clock hours;
 - model-launch budget: the campaign guard's fixed 16 weighted launches, never extended.
+- Codex/Grok use the existing fixed/prepaid routes, so expected marginal cash cost is $0; abort
+  rather than introduce a metered fallback for this slice.
 
 If the evidence path reaches the effort cut line without discovering a new in-scope bypass, defer
 redundant fixture breadth and keep the focused removal. Neither deny invariant may be deferred.
 
-### 12.2 Resume checkpoint
+### 12.2 Non-authoritative operator note
 
-Maintain a value-free stage manifest at:
+An operator may maintain a value-free progress note at:
 
 ```text
 docs/designs/ISSUE_108/.dual-magi/slice1-execution/stage.json
 ```
 
-The existing `docs/**/.dual-magi/` ignore contract must be verified before implementation. It is
-state, not a review authority; the campaign ledger remains canonical for charged launches and
-plateau provenance.
+The existing `docs/**/.dual-magi/` ignore contract must be verified before use. This note is never
+a lock, resume authority, proof of exclusive execution, test result, review certificate, launch
+ledger, or shipping authority. It may be stale or overwritten. On restart, derive accepted state
+only from Git, deterministic test reruns, the canonical campaign ledger, and exact-revision
+plateau markers. Never use this note to reset campaign accounting or reuse stale review evidence.
 
-Before every stage, while holding a sibling `stage.lock` with `flock`:
-
-1. evaluate the fixed whole-run deadline;
-2. write `stage.json.tmp.<pid>` in the same directory with `status=in_progress`, stage name,
-   artifact SHA, `started_at`, and the fixed deadline;
-3. flush the file and atomically rename it to `stage.json`.
-
-After the stage, publish the same way with `status=completed`, end time, command identifier, exit
-status, evidence path, and next resumable stage. Each completed stage records:
-
-- stage name;
-- exact design or implementation artifact SHA;
-- start/end timestamps;
-- status;
-- test command identifier and exit status;
-- review artifact path;
-- next resumable stage.
-
-On restart, a corrupt/unreadable manifest, stale SHA, `in_progress` record, missing evidence, or
-deadline breach fails closed. Resume from the first incomplete SHA-matching stage and rerun its
-local deterministic work; never reset the canonical campaign ledger or reuse stale review
-artifacts. A mismatch invalidates all later stage evidence.
-
-The whole Slice 1 run deadline is 12 wall-clock hours from the first design fan-out. If exceeded,
-stop expanding evidence, preserve the focused fail-closed patch and value-free state, and report
-the exact incomplete gate. Evaluate this deadline before starting every new stage. Deadline expiry
-does not authorize shipping.
+Before starting another evidence-producing stage, check the fixed 12-hour deadline, available
+disk/memory/CPU, and whether another Magi campaign or harness-core sweep is active. Use no more than
+three parallel reviewers and one local test sweep. If host scheduling state cannot be queried,
+serialize local test work. If the deadline has passed, stop expanding evidence, preserve the
+focused fail-closed patch and value-free artifacts, and report the exact incomplete gate. Deadline
+expiry does not authorize shipping.
 
 ## 13. Rollback
 

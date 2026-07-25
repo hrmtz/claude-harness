@@ -18,7 +18,6 @@
 source "$(dirname "$0")/lib.sh"
 
 HOOK_INPUT=$(cat)
-export HOOK_INPUT
 
 FILE_PATH=$(parse_tool_file_path)
 [ -z "$FILE_PATH" ] && exit 0

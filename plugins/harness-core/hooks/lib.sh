@@ -104,9 +104,13 @@ parse_tool_name() {
 # Claude Read/Write use `file_path`. Covers all three (Phase 1.5 Read/Write guards).
 parse_tool_file_path() {
     _hook_input | jq -r '
-        .tool_input.file_path // .tool_input.path // .tool_input.file // .tool_input.uri //
-        .toolInput.file_path // .toolInput.path // .toolInput.file // .toolInput.uri //
-        .path // .file_path // .file // .uri // empty' 2>/dev/null
+        [
+            .tool_input.file_path, .tool_input.path, .tool_input.file, .tool_input.uri,
+            .toolInput.file_path, .toolInput.path, .toolInput.file, .toolInput.uri,
+            .path, .file_path, .file, .uri
+        ]
+        | map(select(type == "string" and test("[^[:space:]]")))
+        | first // empty' 2>/dev/null
 }
 
 # Write/Edit content or replacement text: `.content` (Write) or `.new_string`
@@ -130,18 +134,29 @@ parse_tool_content() {
 # of exit code; Claude/Codex expect exit 0 with the JSON). A deny is always the
 # end of a hook's logic, so callers need no separate exit.
 emit_deny() {
-    local msg="$1"
+    local msg="$1" payload
     if [ -n "${GROK_SESSION_ID:-}${GROK_HOOK_EVENT:-}" ]; then
-        jq -n --arg r "$msg" '{"decision":"deny","reason":$r}'
+        payload=$(jq -n --arg r "$msg" '{"decision":"deny","reason":$r}') || {
+            printf '%s\n' "harness hook deny serialization failed; refusing tool execution" >&2
+            exit 2
+        }
     else
-        jq -n --arg msg "$msg" '{
+        payload=$(jq -n --arg msg "$msg" '{
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": $msg
             }
-        }'
+        }') || {
+            printf '%s\n' "harness hook deny serialization failed; refusing tool execution" >&2
+            exit 2
+        }
     fi
+    [ -n "$payload" ] || {
+        printf '%s\n' "harness hook deny serialization produced no decision; refusing tool execution" >&2
+        exit 2
+    }
+    printf '%s\n' "$payload"
     exit 0
 }
 

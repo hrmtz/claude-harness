@@ -40,6 +40,10 @@ got=$(HOOK_INPUT='{"tool_name":"mcp__filesystem__read_file","tool_input":{"path"
 eq "parse_tool_file_path Codex MCP .path" "$got" "/m/.env"
 got=$(HOOK_INPUT='{"tool_name":"mcp__filesystem__read_file","tool_input":{"uri":"file:///u/.env"}}' parse_tool_file_path)
 eq "parse_tool_file_path Codex MCP .uri" "$got" "file:///u/.env"
+got=$(HOOK_INPUT='{"tool_input":{"file_path":"","path":"/fallback/.env"}}' parse_tool_file_path)
+eq "parse_tool_file_path empty snake alias falls through" "$got" "/fallback/.env"
+got=$(HOOK_INPUT='{"toolInput":{"file_path":"  ","path":"/grok-fallback/.env"}}' parse_tool_file_path)
+eq "parse_tool_file_path blank Grok alias falls through" "$got" "/grok-fallback/.env"
 
 got=$(HOOK_INPUT='{"tool_name":"Agent","tool_response":{"output":"agent-result"}}' parse_tool_output)
 printf '%s' "$got" | grep -q 'agent-result' \
@@ -65,6 +69,16 @@ out=$( (GROK_SESSION_ID=abc emit_deny "m2") ); rc=$?
 eq "emit_deny Grok shape decision"  "$(printf '%s' "$out" | jq -r '.decision')" "deny"
 eq "emit_deny Grok shape reason"    "$(printf '%s' "$out" | jq -r '.reason')"   "m2"
 eq "emit_deny Grok shape exit 0"    "$rc" "0"
+
+# A serializer failure must not be converted into a successful empty hook result.
+fake_bin=$(mktemp -d)
+printf '#!/bin/sh\nexit 1\n' > "$fake_bin/jq"
+chmod +x "$fake_bin/jq"
+out=$( (PATH="$fake_bin:$PATH" emit_deny "must fail closed") 2>/dev/null ); rc=$?
+rm -r -- "$fake_bin"
+[ "$rc" -ne 0 ] && [ -z "$out" ] \
+    && ok "emit_deny serializer failure exits nonzero with no false allow" \
+    || bad "emit_deny serializer failure was masked (rc=$rc)"
 
 # --- active_jsonl: Grok sessionId glob (only if a real grok session exists) ---
 grok_dir=$(ls -td "$HOME"/.grok/sessions/*/[0-9a-f]*/ 2>/dev/null | head -1)

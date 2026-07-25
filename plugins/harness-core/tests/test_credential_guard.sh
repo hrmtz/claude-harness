@@ -157,22 +157,71 @@ expect_allow 'git commit -m "fix postgresql://[^:/@]+:...@ self-match note"' 'ex
 # Group 2b: credential_file_read_guard parity for template files
 # ----------------------------------------------------------------------------
 echo "== credential_file_read_guard template exemption =="
-read_guard_blocks() {
-    local path="$1" tmp_home payload out
+run_read_guard() {
+    local payload="$1" family="${2:-claude}"
+    local hook="${3:-$HOOKS/credential_file_read_guard.sh}"
+    local tmp_home err_file
     tmp_home="$(make_test_home "$TEST_ROOT")" \
-        || { bad "fixture HOME setup failed"; return 2; }
-    payload="{\"tool_input\":{\"file_path\":$(printf '%s' "$path" | jq -Rs .)}}"
-    out="$(printf '%s' "$payload" \
-        | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
-    printf '%s' "$out" | jq -e '
-        .hookSpecificOutput.hookEventName == "PreToolUse"
-        and .hookSpecificOutput.permissionDecision == "deny"
-        and (.hookSpecificOutput.permissionDecisionReason
-             | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
-    ' >/dev/null 2>&1
+        || return 2
+    err_file="$tmp_home/guard.stderr"
+    if [ "$family" = "grok" ]; then
+        READ_OUT="$(printf '%s' "$payload" \
+            | GROK_SESSION_ID=fixture HOME="$tmp_home" bash "$hook" 2>"$err_file")"
+    else
+        READ_OUT="$(printf '%s' "$payload" \
+            | HOME="$tmp_home" bash "$hook" 2>"$err_file")"
+    fi
+    READ_RC=$?
 }
-expect_read_block() { if read_guard_blocks "$1"; then ok "READ BLOCK: $2"; else bad "Read should BLOCK: $2 -> [$1]"; fi; }
-expect_read_allow() { if read_guard_blocks "$1"; then bad "Read should ALLOW: $2 -> [$1]"; else ok "READ ALLOW: $2"; fi; }
+
+# Returns 0 only for one family-correct deny JSON with exit 0, 1 only for a clean
+# allow (exit 0 and no output), and 2 for every execution/envelope failure.
+read_guard_payload_result() {
+    local payload="$1" family="${2:-claude}" hook="${3:-$HOOKS/credential_file_read_guard.sh}"
+    run_read_guard "$payload" "$family" "$hook" || return 2
+    [ "$READ_RC" -eq 0 ] || return 2
+    [ -n "$READ_OUT" ] || return 1
+    [ "$(printf '%s' "$READ_OUT" | jq -s 'length' 2>/dev/null)" -eq 1 ] 2>/dev/null \
+        || return 2
+    if [ "$family" = "grok" ]; then
+        printf '%s' "$READ_OUT" | jq -e '
+            .decision == "deny"
+            and (.reason | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+        ' >/dev/null 2>&1 || return 2
+    else
+        printf '%s' "$READ_OUT" | jq -e '
+            .hookSpecificOutput.hookEventName == "PreToolUse"
+            and .hookSpecificOutput.permissionDecision == "deny"
+            and (.hookSpecificOutput.permissionDecisionReason
+                 | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
+        ' >/dev/null 2>&1 || return 2
+    fi
+    return 0
+}
+
+read_guard_blocks() {
+    local path="$1" payload
+    payload="{\"tool_input\":{\"file_path\":$(printf '%s' "$path" | jq -Rs .)}}"
+    read_guard_payload_result "$payload"
+}
+
+expect_read_block() {
+    read_guard_blocks "$1"
+    case $? in
+        0) ok "READ BLOCK: $2" ;;
+        1) bad "Read should BLOCK: $2 -> [$1]" ;;
+        *) bad "Read guard execution/envelope failure: $2 -> [$1]" ;;
+    esac
+}
+
+expect_read_allow() {
+    read_guard_blocks "$1"
+    case $? in
+        0) bad "Read should ALLOW: $2 -> [$1]" ;;
+        1) ok "READ ALLOW: $2" ;;
+        *) bad "Read guard execution/envelope failure: $2 -> [$1]" ;;
+    esac
+}
 
 expect_read_allow '/tmp/proj/.env.example' 'template .env.example'
 expect_read_allow '/tmp/proj/.env.sample' 'template .env.sample'
@@ -184,33 +233,35 @@ expect_read_block '/tmp/proj/.env' 'real .env'
 expect_read_block '/tmp/proj/.env.production' 'real .env.production'
 expect_read_block '/tmp/proj/.env.example.bak' 'template suffix not final segment'
 
-read_guard_payload_blocks() {
-    local payload="$1" family="${2:-claude}" tmp_home out
-    tmp_home="$(make_test_home "$TEST_ROOT")" \
-        || { bad "fixture HOME setup failed"; return 2; }
-    if [ "$family" = "grok" ]; then
-        out="$(printf '%s' "$payload" \
-            | GROK_SESSION_ID=fixture HOME="$tmp_home" \
-                bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
-        printf '%s' "$out" | jq -e '
-            .decision == "deny"
-            and (.reason | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
-        ' >/dev/null 2>&1
-    else
-        out="$(printf '%s' "$payload" \
-            | HOME="$tmp_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
-        printf '%s' "$out" | jq -e '
-            .hookSpecificOutput.permissionDecision == "deny"
-            and (.hookSpecificOutput.permissionDecisionReason
-                 | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
-        ' >/dev/null 2>&1
-    fi
+expect_payload_block() {
+    read_guard_payload_result "$1" "${3:-claude}"
+    case $? in
+        0) ok "$2" ;;
+        1) bad "$2 escaped" ;;
+        *) bad "$2 hit an execution/envelope failure" ;;
+    esac
 }
-if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/.env"}}'; then ok "MCP .path credential read blocks"; else bad "MCP .path credential read escaped"; fi
-if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":".env"}}'; then ok "MCP relative credential read blocks"; else bad "MCP relative credential read escaped"; fi
-if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}'; then ok "MCP file URI credential read blocks after decode"; else bad "MCP file URI credential read escaped"; fi
-if read_guard_payload_blocks '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}'; then bad "benign MCP read blocked"; else ok "benign MCP read allowed"; fi
-if read_guard_payload_blocks '{"toolName":"read_file","toolInput":{"path":"/tmp/proj/.env"}}' grok; then ok "Grok camel-case credential read emits top-level deny"; else bad "Grok credential read escaped"; fi
+
+expect_payload_allow() {
+    read_guard_payload_result "$1" "${3:-claude}"
+    case $? in
+        0) bad "$2 was unexpectedly blocked" ;;
+        1) ok "$2" ;;
+        *) bad "$2 hit an execution/envelope failure" ;;
+    esac
+}
+
+expect_payload_block '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/.env"}}' "MCP .path credential read blocks"
+expect_payload_block '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":".env"}}' "MCP relative credential read blocks"
+expect_payload_block '{"tool_name":"mcp__filesystem__read_text_file","tool_input":{"uri":"file:///tmp/proj/%2Eenv"}}' "MCP file URI credential read blocks after decode"
+expect_payload_allow '{"tool_name":"mcp__filesystem__read_file","tool_input":{"path":"/tmp/proj/README.md"}}' "benign MCP read allowed"
+expect_payload_block '{"toolName":"read_file","toolInput":{"path":"/tmp/proj/.env"}}' "Grok camel-case credential read emits top-level deny" grok
+expect_payload_block '{"tool_input":{"file_path":"","path":"/tmp/proj/.env"}}' "empty snake-case primary alias falls through to classified path"
+expect_payload_block '{"toolInput":{"file_path":"  ","path":"/tmp/proj/.env"}}' "blank camel-case primary alias falls through to classified path" grok
+
+oversized_payload="$(python3 -c 'import json; print(json.dumps({"tool_input":{"file_path":"/tmp/proj/.env","padding":"x"*3000000}}))')"
+expect_payload_block "$oversized_payload" "oversized valid payload still emits one deny JSON"
+unset oversized_payload
 
 # Exact #108 incident regression: a fresh legacy marker must neither authorize the Read nor add
 # another stdout document. The marker is ignored and remains non-authoritative.
@@ -220,11 +271,13 @@ mkdir -p "$marker_home/.claude/state"
 touch "$marker_home/.claude/state/cred_read_ack"
 marker_out="$(printf '%s' '{"tool_input":{"file_path":"/tmp/proj/.env"}}' \
     | HOME="$marker_home" bash "$HOOKS/credential_file_read_guard.sh" 2>/dev/null)"
+marker_rc=$?
 if printf '%s' "$marker_out" | jq -e '
     .hookSpecificOutput.permissionDecision == "deny"
     and (.hookSpecificOutput.permissionDecisionReason
          | contains("READ_ACK_DOES_NOT_AUTHORIZE_OUTPUT"))
 ' >/dev/null 2>&1 \
+   && [ "$marker_rc" -eq 0 ] \
    && [ "$(printf '%s' "$marker_out" | jq -s 'length')" -eq 1 ] \
    && [ -f "$marker_home/.claude/state/cred_read_ack" ]; then
     ok "#108 deny -> fresh read marker -> one structured deny, marker non-authoritative"
@@ -236,6 +289,14 @@ if make_test_home "$TEST_ROOT/does-not-exist" >/dev/null 2>&1; then
     bad "fixture setup helper accepted an unusable temporary parent"
 else
     ok "fixture setup failure is nonzero (cannot false-green Read assertions)"
+fi
+
+if read_guard_payload_result '{"tool_input":{"path":"/tmp/proj/README.md"}}' claude "$HOOKS/does-not-exist"; then
+    bad "missing guard executable was accepted as a valid result"
+else
+    [ $? -eq 2 ] \
+        && ok "missing guard executable is an execution failure, never a clean allow" \
+        || bad "missing guard executable did not return the fail-closed test status"
 fi
 
 # ----------------------------------------------------------------------------
