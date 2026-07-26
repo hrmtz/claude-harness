@@ -1,29 +1,46 @@
-# Formation pane messaging — double-submit rail
+# Formation pane messaging — mailbox-first rail
 
-Canonical source for the cross-CLI instruction rail (gh #105). This text is
+Canonical source for the cross-CLI instruction rail (gh #105 / #166). This text is
 embedded in the always-loaded instruction surfaces (Kimi `AGENTS.md.template`,
 and — via `bin/install-pane-messaging-rail.sh` — the Codex global
-`~/AGENTS.md`). The runtime contract itself lives in `lib/wake.sh`
-(`tmux_send_submit`) and is pinned by `tests/test_wake_submit.sh`; the
-instruction surfaces are pinned by `tests/test_pane_messaging_rail.sh`.
-Keep the wording, helper names, and timings in sync with
-`skills/formation/SKILL.md`.
+`~/AGENTS.md`). Durable delivery lives in `lib/mailbox.sh`; non-destructive
+signaling lives in `lib/mailbox_notify.sh`; the exceptional prompt-submit
+contract lives in `lib/wake.sh` (`tmux_send_submit`). Keep this rail in sync
+with `skills/formation/SKILL.md`.
 
 ---
 
 Messaging a Formation worker pane:
 
-1. Prefer `formation msg <worker-id> <message>` (or the shared
-   `tmux_send_submit` helper, used by `formation msg` and the mailbox relay).
-   Do not hand-roll `tmux send-keys` injection when those paths exist.
-2. A single `Enter` can leave the text visible-but-unsubmitted — the worker
-   stays stuck. Submit is ALWAYS the delayed double-submit:
-   `sleep ~0.4s` → `Enter` → `sleep ~0.5s` → `Enter`.
-3. If direct tmux injection is genuinely unavoidable:
+The mailbox-first contract is:
+
+1. Prefer `formation msg <worker-id> <message>`. It appends an immutable
+   mailbox row; the relay sets a badge/signal with **zero keystrokes** sent to
+   the recipient prompt. `mailbox-send <pane> <body>` has the same safe
+   default. The mailbox row is the delivery guarantee; a signal is not a
+   receipt. Recipients run `formation inbox` at turn boundaries.
+2. Never paste a body into a normal pane to wake it. An idle agent is not proof
+   that its prompt is empty, and paste alone can merge with a human draft.
+3. Prompt injection is exceptional: only an explicitly exclusive worker may
+   use `formation msg --inject <worker-id> <body>` or
+   `mailbox-send <pane> <body> --inject`. Exclusivity is established only by
+   `formation spawn --exclusive-input`, which records
+   `@formation_exclusive_input=1`; apparent idleness is not enough. Output remains
+   `receipt unconfirmed`; the body stays in the mailbox and only a short pull
+   nudge is injected.
+4. If that exclusive direct injection is genuinely unavoidable, use the
+   shared `tmux_send_submit` helper:
    - cancel copy-mode first (`send-keys -X cancel` when `#{pane_in_mode}` is 1);
    - inject via bracketed paste (`load-buffer` + `paste-buffer -p`), never
      `send-keys -l`;
-   - then the delayed double-submit above.
-4. Shell-command launches (starting a CLI or running a command in a pane)
+   - a single `Enter` can remain visible-but-unsubmitted, so use delayed
+     double-submit: `sleep ~0.4s` → `Enter` → `sleep ~0.5s` → `Enter`.
+5. Shell-command launches (starting a CLI or running a command in a pane)
    stay single-`Enter`. The double-submit rail applies to pane MESSAGE
    textareas only — do not conflate the two.
+
+`formation ask` is a semantic protocol above mailbox transport. It creates a
+durable request id and `WAITING_PARENT` state in a separate request event
+store. Transport receipt and semantic acknowledgement are not interchangeable:
+only `formation ack <request-id>` or `formation resolve <request-id> <summary>`
+closes an ASK. Ordinary reports and messages never clear it.

@@ -3,7 +3,7 @@
 
 The mailbox (~/.formation/mailbox/log.jsonl) is a transient inter-worker IPC device,
 NOT an archive. Its durable copy is captured elsewhere: each worker's session jsonl
-(which contains the injected mailbox exchanges) is ingested into hippocampus at the
+(which contains the worker's pulled/processed mailbox context) is ingested into hippocampus at the
 nightly 03:00 cron, and memories are ghost-dubbed at 03:30. So after 03:00 the prior
 mailbox content is redundant, and keeping months of it only grows blast-radius — a
 new agent that reads the whole log loads every past cluster's context (the
@@ -14,9 +14,9 @@ Keeps: entries whose ts is within --keep-days, PLUS the last --keep-tail physica
 lines (a margin for active relays and undated fragments). Drops the rest.
 
 SAFETY
-- Relay-gated: a mailbox_relay daemon tracks a last_line offset into log.jsonl that
-  truncation would invalidate. If any relay is running, this SKIPS (exit 0). Run it
-  in a quiet post-03:30 window.
+- Relay-gated (conservative): active relays track a sequence high-water and can
+  survive atomic replacement, but retention still skips while one is active to
+  avoid churning the live IPC file. Run it in a quiet post-03:30 window.
 - Snapshots the pre-trim log to <mailbox>/archive/log_pretrim_<ts>.jsonl.gz before
   truncating and prunes archives older than --archive-days. Reversible.
 - Atomic write (tmp + os.replace); a parse error on a line never drops newer data.
@@ -27,6 +27,7 @@ Exit 0 = trimmed or skipped (both fine) · 2 = usage/IO error.
 from __future__ import annotations
 import argparse
 import datetime as dt
+import fcntl
 import glob
 import gzip
 import json
@@ -67,23 +68,8 @@ def parse_ts(line: str):
     return parsed
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--keep-days", type=int, default=2, help="keep entries newer than N days (default 2)")
-    ap.add_argument("--keep-tail", type=int, default=50, help="always keep the last K physical lines (default 50)")
-    ap.add_argument("--archive-days", type=int, default=14, help="prune gz snapshots older than D days (default 14)")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-
-    if not os.path.exists(MAILBOX):
-        print(f"mailbox-retention: no mailbox at {MAILBOX}; nothing to do")
-        return 0
-
-    if relay_active():
-        print("mailbox-retention: a mailbox_relay is active — skipping (truncation would "
-              "invalidate its last_line offset). Try again in a quiet window.")
-        return 0
-
+def trim_locked(a: argparse.Namespace) -> int:
+    """Trim while holding the same lock used by every mailbox writer."""
     with open(MAILBOX, encoding="utf-8", errors="replace") as fh:
         lines = fh.readlines()
     n = len(lines)
@@ -138,6 +124,36 @@ def main() -> int:
     if pruned:
         print(f"  pruned {pruned} snapshot(s) older than {a.archive_days}d")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--keep-days", type=int, default=2, help="keep entries newer than N days (default 2)")
+    ap.add_argument("--keep-tail", type=int, default=50, help="always keep the last K physical lines (default 50)")
+    ap.add_argument("--archive-days", type=int, default=14, help="prune gz snapshots older than D days (default 14)")
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+
+    if not os.path.exists(MAILBOX):
+        print(f"mailbox-retention: no mailbox at {MAILBOX}; nothing to do")
+        return 0
+
+    lock_path = MAILBOX + ".lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    try:
+        with open(lock_path, "a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            # Recheck under the writer lock. Relay does not take this lock, but
+            # this closes the append-vs-os.replace lost-write race and preserves
+            # the existing quiet-window gate.
+            if relay_active():
+                print("mailbox-retention: a mailbox_relay is active — skipping (truncation would "
+                      "churn the live IPC file). Try again in a quiet window.")
+                return 0
+            return trim_locked(a)
+    except OSError as e:
+        print(f"mailbox-retention: lock/IO failed ({e}); aborting without trimming")
+        return 2
 
 
 if __name__ == "__main__":
