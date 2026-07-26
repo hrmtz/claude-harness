@@ -26,15 +26,23 @@ CHECK_ONLY=0
 [ -d "$SECRETS_DIR" ] || { echo "no secrets dir: $SECRETS_DIR" >&2; exit 64; }
 [ -f "$BUILD_PY" ] || { echo "no builder: $BUILD_PY" >&2; exit 64; }
 
-# Does this file have a nested top-level value?
+# Classify a sops file's top-level structure WITHOUT decrypting it.
 #
-# This check exists to keep us from running `sops exec-env` on such a file.
-# sops cannot export a nested mapping and fails with the DECRYPTED CONTENT
-# inside its error message (gh #156) — so the naive form of this script, which
-# just loops sops exec-env over every file, leaks every complex-type file's
-# secrets on every run. The structure is readable without decrypting anything:
-# sops encrypts values and leaves key names in plaintext.
-is_complex() {
+# This check exists to keep us from running `sops exec-env` on a file it cannot
+# handle. sops cannot export a nested mapping and fails with the DECRYPTED
+# CONTENT inside its error message (gh #156) — so the naive form of this script,
+# which just loops sops exec-env over every file, leaks every complex-type
+# file's secrets on every run. The structure is readable without decrypting
+# anything: sops encrypts values and leaves key names in plaintext.
+#
+# Exit codes are three-valued and MUST be tested with `$?`, not with `if`.
+# Written as `if classify_file "$f"; then skip; fi`, the unreadable case (2) is
+# just "nonzero" and falls through to the sops call — i.e. straight into the
+# path this function exists to prevent.
+#   0 = nested top-level value  (builder cannot cover it; never invoke sops)
+#   1 = flat mapping            (builder can cover it)
+#   2 = unreadable / not a mapping (unsupported; never invoke sops)
+classify_file() {
     python3 - "$1" <<'PY'
 import sys, yaml
 try:
@@ -48,19 +56,25 @@ sys.exit(0 if nested else 1)
 PY
 }
 
-built=0; skipped_complex=0; missing=0; present=0; failed=0
+built=0; skipped_complex=0; missing=0; present=0; failed=0; unreadable=0
 complex_files=()
+unreadable_files=()
 
 for f in "$SECRETS_DIR"/*.enc.yaml; do
     [ -f "$f" ] || continue
     base="$(basename "$f" .yaml)"
     manifest="$MANIFEST_DIR/${base}.scrub.json"
 
-    if is_complex "$f"; then
-        skipped_complex=$((skipped_complex + 1))
-        complex_files+=("$(basename "$f")")
-        continue
-    fi
+    classify_file "$f"
+    case "$?" in
+        0)  skipped_complex=$((skipped_complex + 1))
+            complex_files+=("$(basename "$f")")
+            continue ;;
+        1)  : ;;
+        *)  unreadable=$((unreadable + 1))
+            unreadable_files+=("$(basename "$f")")
+            continue ;;
+    esac
 
     if [ -f "$manifest" ]; then present=$((present + 1)); else missing=$((missing + 1)); fi
     [ "$CHECK_ONLY" = "1" ] && continue
@@ -75,8 +89,14 @@ for f in "$SECRETS_DIR"/*.enc.yaml; do
     fi
 done
 
-echo "sops files: $((present + missing + skipped_complex))  manifest present: $present  missing: $missing  complex-type: $skipped_complex"
+echo "sops files: $((present + missing + skipped_complex + unreadable))  manifest present: $present  missing: $missing  complex-type: $skipped_complex  unreadable: $unreadable"
 [ "$CHECK_ONLY" = "1" ] || echo "built: $built  failed: $failed"
+
+if [ "$unreadable" -gt 0 ]; then
+    echo
+    echo "NO HMAC COVERAGE — unreadable or not a YAML mapping; sops was NOT invoked:" >&2
+    for u in "${unreadable_files[@]}"; do echo "  - $u" >&2; done
+fi
 
 if [ "$skipped_complex" -gt 0 ]; then
     echo
@@ -89,7 +109,7 @@ fi
 
 # Fail when coverage is incomplete. A silent partial build is what let a file
 # sit unprotected for two months without anyone noticing.
-if [ "$failed" -gt 0 ] || [ "$skipped_complex" -gt 0 ] || { [ "$CHECK_ONLY" = "1" ] && [ "$missing" -gt 0 ]; }; then
+if [ "$failed" -gt 0 ] || [ "$skipped_complex" -gt 0 ] || [ "$unreadable" -gt 0 ] || { [ "$CHECK_ONLY" = "1" ] && [ "$missing" -gt 0 ]; }; then
     exit 1
 fi
 exit 0

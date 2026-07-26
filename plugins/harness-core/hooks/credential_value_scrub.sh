@@ -59,7 +59,18 @@ PATTERNS=(
     # uppercase letter separates them: the tokens are base64url and mixed-case,
     # the identifiers are strictly lowercase_with_underscores. Verified against
     # the real driver files (0 matches) before landing.
+    #
+    # TWO entries, not one alternation: '|' is both the split and the sed
+    # delimiter here (see the JWT note above), so "uppercase anywhere" has to be
+    # spelled as two catalog lines. The first requires >=10 body characters
+    # AFTER the uppercase, the second >=10 BEFORE it. Their union covers any
+    # body of 20+ characters containing at least one uppercase; with only the
+    # first, a token whose sole uppercase sits in its last 10 characters was NOT
+    # redacted (measured: 'cmcp_' + 15 lowercase + 'Q' + 9 lowercase leaked).
+    # A body with no uppercase at all is still out of reach by construction —
+    # that is the price of not redacting the all-lowercase driver identifiers.
     'cmcp_[a-zA-Z0-9_-]*[A-Z][a-zA-Z0-9_-]{10,}|cmcp_<REDACTED>'
+    'cmcp_[a-zA-Z0-9_-]{10,}[A-Z][a-zA-Z0-9_-]*|cmcp_<REDACTED>'
 )
 
 # Part 2: キーワードベース catch-all

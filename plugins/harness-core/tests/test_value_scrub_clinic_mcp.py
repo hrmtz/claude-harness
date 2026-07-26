@@ -24,6 +24,14 @@ HOOK = os.path.join(os.path.dirname(__file__), "..", "hooks", "credential_value_
 TOKEN_PLAIN = "cmcp_" + "a" * 6 + "X" + "b" * 20
 TOKEN_WITH_UNDERSCORE = "cmcp_" + "a" * 6 + "Y" + "b" * 8 + "_" + "c" * 12
 
+# The uppercase letter may land anywhere in a base64url body, including its tail.
+# The original single pattern required >=10 body characters AFTER the uppercase,
+# so a token whose sole uppercase sat in its last 10 characters was not redacted
+# at all. These pin the tail: sole uppercase 9 characters from the end, and as
+# the very last character.
+TOKEN_UPPER_NEAR_END = "cmcp_" + "a" * 15 + "Q" + "b" * 9
+TOKEN_UPPER_LAST = "cmcp_" + "a" * 25 + "Q"
+
 # Real identifiers copied from the vendored driver. Must survive untouched.
 IDENTIFIERS = [
     "cmcp_check_config_fw_match",
@@ -67,6 +75,14 @@ check("a token containing '_' in the body is redacted",
 out = run(f"both {TOKEN_PLAIN} and {TOKEN_WITH_UNDERSCORE} appear")
 check("two distinct tokens on one line are both redacted",
       TOKEN_PLAIN not in out and TOKEN_WITH_UNDERSCORE not in out)
+
+out = run(f"token is {TOKEN_UPPER_NEAR_END} here")
+check("a token whose sole uppercase is 9 chars from the end is redacted",
+      TOKEN_UPPER_NEAR_END not in out and "cmcp_<REDACTED>" in out)
+
+out = run(f"token is {TOKEN_UPPER_LAST} here")
+check("a token whose sole uppercase is its last character is redacted",
+      TOKEN_UPPER_LAST not in out and "cmcp_<REDACTED>" in out)
 
 src = "static int " + IDENTIFIERS[0] + "(void) { return " + IDENTIFIERS[1] + "(); }"
 out = run(src)
