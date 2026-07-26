@@ -60,8 +60,10 @@ cp -r claude-harness/plugins/harness-core/hooks/* ~/.claude/hooks/
 This marketplace is one half of a larger system. The other half is the philosophy + memory + persona doc:
 
 - **`docs/CLAUDE_HARNESS_DISTILLED.md`** — full design rationale (3-tier memory, 真田/松岡/仗助 persona stack, SOPS 2-command rule, 8 incident timeline → structural fix)
+- **`docs/credential_eradication.md`** — redact-over-delete incident procedure and value-safe zero-copy verification
 
-Read that first if you want to understand *why* these hooks exist before installing them.
+Read the distilled design first if you want to understand *why* these hooks
+exist before installing them.
 
 ## Status
 

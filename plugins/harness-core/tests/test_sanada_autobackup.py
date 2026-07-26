@@ -6,11 +6,13 @@ import subprocess, json, os, tempfile, shutil, glob, sys
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "hooks", "sanada_autobackup.sh")
 
-def run(cmd, files=("target.txt",), make=True):
+def run(cmd, files=("target.txt",), make=True, content=None):
     home = tempfile.mkdtemp(); work = tempfile.mkdtemp()
     try:
         if make:
-            for f in files: open(os.path.join(work, f), "w").write("DATA-" + f)
+            for f in files:
+                value = content if content is not None else "DATA-" + f
+                open(os.path.join(work, f), "w").write(value)
         env = dict(os.environ, HOME=home)
         subprocess.run(["bash", HOOK], input=json.dumps({"tool_input": {"command": cmd}, "cwd": work}),
                        capture_output=True, text=True, env=env)
@@ -52,6 +54,18 @@ expect("cat target.txt",           False, "cat read")
 expect("rm nonexistent.txt",       False, "nonexistent target", make=False)
 expect("rm *.tmp",                 False, "glob skipped")
 
+# --- issue #155: never persist a second copy of credential-shaped plaintext ---
+synthetic = "ghp_" + ("Z" * 30)
+expect("rm target.txt", False, "credential-shaped rm suppressed", content=synthetic)
+expect("sed -i s/Z/X/ target.txt", False, "credential-shaped redact suppressed", content=synthetic)
+synthetic_name = f"session-{synthetic}.jsonl"
+expect(f"rm {synthetic_name}", False, "credential-shaped filename suppressed",
+       target=synthetic_name, files=(synthetic_name,), content="safe")
+expect("rm target.txt", True, "lowercase CMCP identifier is not a credential",
+       content="cmcp_check_config_fw_match")
+expect("rm target.txt", True, "allowlisted placeholder is not a credential",
+       content="API_TOKEN=example0123456789012345")
+
 # --- dir-dest overwrite + private perms (codex #35 REVISE) ---
 def run_setup(cmd, builder):
     home = tempfile.mkdtemp(); work = tempfile.mkdtemp()
@@ -80,6 +94,16 @@ names, perms = run_setup("cp src dest", build("src", "dest/src"))
 if "src" not in names: ok = False; print("  ✗ FAIL cp-into-dir should back up dest/src")
 names, perms = run_setup("rm secret.env", build("secret.env"))
 if not perms: ok = False; print("  ✗ FAIL backup dir/files must be private (go-rwx)")
+
+def build_synthetic_credential_dir(work):
+    path = os.path.join(work, "leakdir")
+    os.makedirs(path)
+    open(os.path.join(path, "session.jsonl"), "w").write("ghp_" + ("Z" * 30))
+
+names, _ = run_setup("rm -rf leakdir", build_synthetic_credential_dir)
+if names:
+    ok = False
+    print("  ✗ FAIL credential-shaped directory must not be copied")
 
 print("sanada_autobackup: ALL PASS ✓" if ok else "sanada_autobackup: FAILURES ✗")
 sys.exit(0 if ok else 1)
