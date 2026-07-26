@@ -95,5 +95,15 @@ if "src" not in names: ok = False; print("  ✗ FAIL cp-into-dir should back up 
 names, perms = run_setup("rm secret.env", build("secret.env"))
 if not perms: ok = False; print("  ✗ FAIL backup dir/files must be private (go-rwx)")
 
+def build_synthetic_credential_dir(work):
+    path = os.path.join(work, "leakdir")
+    os.makedirs(path)
+    open(os.path.join(path, "session.jsonl"), "w").write("ghp_" + ("Z" * 30))
+
+names, _ = run_setup("rm -rf leakdir", build_synthetic_credential_dir)
+if names:
+    ok = False
+    print("  ✗ FAIL credential-shaped directory must not be copied")
+
 print("sanada_autobackup: ALL PASS ✓" if ok else "sanada_autobackup: FAILURES ✗")
 sys.exit(0 if ok else 1)
