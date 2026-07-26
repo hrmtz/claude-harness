@@ -7,6 +7,15 @@ on:
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
       - "plugins/harness-core/bin/harness-cross-cli"
       - "plugins/harness-core/tests/test_cross_cli_guard.sh"
+      - "plugins/harness-core/hooks/identity_owner.sh"
+      - "plugins/harness-core/hooks/tmux_self_name.sh"
+      - "plugins/harness-core/hooks/codex_hippocampus_session_start.sh"
+      - "plugins/harness-core/bin/harness-hook"
+      - "plugins/harness-core/tests/test_identity_owner.sh"
+      - "plugins/harness-core/tests/test_hook_dispatch_chassis.sh"
+      - "install-codex-hooks.sh"
+      - "install-grok-hooks.sh"
+      - "install-kimi-hooks.sh"
       - "plugins/harness-formation/**"
       - "plugins/harness-kimi/AGENTS.md.template"
       - "plugins/harness-kimi/kimi-wrapper.sh"
@@ -19,6 +28,15 @@ on:
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
       - "plugins/harness-core/bin/harness-cross-cli"
       - "plugins/harness-core/tests/test_cross_cli_guard.sh"
+      - "plugins/harness-core/hooks/identity_owner.sh"
+      - "plugins/harness-core/hooks/tmux_self_name.sh"
+      - "plugins/harness-core/hooks/codex_hippocampus_session_start.sh"
+      - "plugins/harness-core/bin/harness-hook"
+      - "plugins/harness-core/tests/test_identity_owner.sh"
+      - "plugins/harness-core/tests/test_hook_dispatch_chassis.sh"
+      - "install-codex-hooks.sh"
+      - "install-grok-hooks.sh"
+      - "install-kimi-hooks.sh"
       - "plugins/harness-formation/**"
       - "plugins/harness-kimi/AGENTS.md.template"
       - "plugins/harness-kimi/kimi-wrapper.sh"
@@ -43,6 +61,21 @@ jobs:
         run: bash plugins/harness-kimi/tests/test_formation_identity.sh
       - name: Test cross-CLI launch guard
         run: bash plugins/harness-core/tests/test_cross_cli_guard.sh
+      - name: Test identity ownership core
+        run: bash plugins/harness-core/tests/test_identity_owner.sh
+      # The dispatch suite drives real tmux panes on purpose: #177 survived every
+      # unit suite because they call the core directly and skip the wrapper and
+      # dispatcher that were broken. Requiring tmux here is what stops this gate
+      # from degrading into a silent skip, which is the same failure shape.
+      - name: Install tmux for the real-pane suite
+        run: |
+          command -v tmux >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq tmux; }
+          tmux -f /dev/null new-session -d -s ci-bootstrap
+          tmux ls
+      - name: Test hook dispatch chassis (real panes)
+        env:
+          HARNESS_TEST_REQUIRE_TMUX: "1"
+        run: bash plugins/harness-core/tests/test_hook_dispatch_chassis.sh
       - name: Check documented CLI dispatch
         run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py
       - name: Test integration audit
