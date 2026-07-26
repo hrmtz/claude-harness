@@ -80,6 +80,309 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 ')
 
 # ----------------------------------------
+# Refuse `sops exec-env` when its input is not a flat mapping (gh #156).
+#
+# `sops exec-env` cannot export nested mappings/lists. Worse, sops includes the
+# decrypted value in its own type-error text. Inspect only the encrypted YAML
+# structure here, before sops can run; encrypted values remain encrypted while
+# key names and container types are readable. Parser/YAML diagnostics are
+# suppressed because this guard must never turn an error path into an output
+# channel.
+#
+# Exit status:
+#   0  no exec-env invocation, or every inspected file is a flat mapping
+#   10 at least one inspected file contains a nested mapping/list
+#   11 target/path/YAML could not be inspected safely (fail closed)
+classify_sops_exec_env_targets() {
+    [[ "$DEOBF" == *sops* || "$DEOBF" == *exec-env* ]] || return 0
+    # `sops edit` never decrypts into the process environment and needs no
+    # structure classification. Keep that remediation usable if PyYAML is
+    # unavailable. Any command that also contains exec-env takes the slow path.
+    if [[ "$DEOBF" != *exec-env* ]] \
+       && [[ "$DEOBF" =~ (^|[[:space:]])([^[:space:]]*/)?sops[[:space:]]+edit([[:space:]]|$) ]]; then
+        return 0
+    fi
+    [[ "$SCRUBBED" != *$'\n'* ]] || return 11
+    python3 - "$SCRUBBED" 2>/dev/null <<'PY'
+import os
+import re
+import shlex
+import stat
+import sys
+
+cmd = sys.argv[1]
+nested = False
+unsupported = False
+target_count = 0
+MAX_FILE_BYTES = 1024 * 1024
+MAX_TARGETS = 8
+MAX_SHELL_DEPTH = 8
+flag_with_value = {"--user", "--keyservice"}
+flag_without_value = {
+    "--background",
+    "--pristine",
+    "--enable-local-keyservice",
+}
+shells = {"bash", "sh", "dash", "zsh", "ksh"}
+control_tokens = {";", "&&", "||", "|", "&", "(", ")"}
+dynamic_chars = "$`*?[{"
+nonexecuting_contexts = {
+    "echo", "printf", "git", "grep", "rg", "sed", "awk", "ls", "stat"
+}
+
+def tokenize(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+def command_segment_start(tokens, index):
+    cursor = index
+    while cursor > 0 and tokens[cursor - 1] not in control_tokens:
+        cursor -= 1
+    return cursor
+
+def is_command_position(tokens, index):
+    start = command_segment_start(tokens, index)
+    if index == start:
+        return True
+    prefix = tokens[start:index]
+    assignment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+    if all(assignment.match(token) for token in prefix):
+        return True
+    if prefix and os.path.basename(prefix[0]) in {
+        "command", "env", "exec", "nohup", "sudo", "timeout"
+    }:
+        return all(
+            token.startswith("-") or assignment.match(token)
+            for token in prefix[1:]
+        )
+    return False
+
+def is_nonexecuting_context(tokens, index):
+    start = command_segment_start(tokens, index)
+    return start < index and os.path.basename(tokens[start]) in nonexecuting_contexts
+
+def has_active_substitution(command):
+    single = False
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'":
+            single = not single
+            index += 1
+            continue
+        if not single and (
+            char == "`"
+            or command.startswith("$(", index)
+            or command.startswith("<(", index)
+            or command.startswith(">(", index)
+        ):
+            return True
+        index += 1
+    return False
+
+def inspect_command(command, depth=0):
+    global nested, unsupported, target_count
+    if has_active_substitution(command):
+        unsupported = True
+        return
+    try:
+        tokens = tokenize(command)
+    except ValueError:
+        unsupported = True
+        return
+
+    # A quoted shell -c body is one outer token; inspect that body as the
+    # command it actually is, rather than allowing it to hide exec-env.
+    for index, token in enumerate(tokens):
+        if (
+            index >= 2
+            and tokens[index - 1] in {"-c", "-lc", "-ic"}
+            and os.path.basename(tokens[index - 2]) in shells
+        ):
+            if depth >= MAX_SHELL_DEPTH:
+                unsupported = True
+            else:
+                inspect_command(token, depth + 1)
+
+    # eval interprets its argument as shell source. Inspect it exactly like a
+    # shell -c body, regardless of wrapper position.
+    for index, token in enumerate(tokens[:-1]):
+        if os.path.basename(token) == "eval":
+            if depth >= MAX_SHELL_DEPTH:
+                unsupported = True
+            else:
+                inspect_command(tokens[index + 1], depth + 1)
+
+    for index, token in enumerate(tokens):
+        if (
+            os.path.basename(token) != "sops"
+            or (
+                not is_command_position(tokens, index)
+                and is_nonexecuting_context(tokens, index)
+            )
+        ):
+            continue
+        if index + 1 >= len(tokens):
+            unsupported = True
+            continue
+        subcommand = tokens[index + 1]
+        if subcommand == "edit":
+            continue
+        if subcommand != "exec-env":
+            # The two-command policy permits only edit and exec-env. Dynamic
+            # or otherwise unknown subcommands cannot be proven safe.
+            unsupported = True
+            continue
+        # A compound shell command can replace the checked path before sops
+        # opens it. The inner exec-env consumer stays one quoted token and is
+        # therefore unaffected by this outer-control-token check.
+        if any(token in control_tokens for token in tokens):
+            unsupported = True
+            continue
+        target_count += 1
+        if target_count > MAX_TARGETS:
+            unsupported = True
+            continue
+        cursor = index + 2
+        target = None
+        while cursor < len(tokens):
+            candidate = tokens[cursor]
+            if candidate in flag_with_value:
+                cursor += 2
+                continue
+            if candidate in flag_without_value or any(
+                candidate.startswith(flag + "=") for flag in flag_with_value
+            ):
+                cursor += 1
+                continue
+            if candidate == "--":
+                cursor += 1
+                continue
+            if candidate.startswith("-"):
+                unsupported = True
+                break
+            target = candidate
+            break
+
+        # A dynamic/globbed path cannot be inspected before shell expansion.
+        if (
+            target is None
+            or any(char in target for char in dynamic_chars)
+            or not os.path.isabs(target)
+        ):
+            unsupported = True
+            continue
+        try:
+            import yaml
+            from yaml.nodes import MappingNode, ScalarNode
+            from yaml.tokens import AliasToken, AnchorToken
+
+            before = os.lstat(target)
+            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_FILE_BYTES:
+                unsupported = True
+                continue
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(target, flags)
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_size > MAX_FILE_BYTES
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                os.close(descriptor)
+                unsupported = True
+                continue
+            with os.fdopen(descriptor, encoding="utf-8") as handle:
+                source = handle.read()
+            yaml_tokens = 0
+            for yaml_token in yaml.scan(source):
+                yaml_tokens += 1
+                if yaml_tokens > 10000 or isinstance(
+                    yaml_token, (AnchorToken, AliasToken)
+                ):
+                    unsupported = True
+                    break
+            if unsupported:
+                continue
+            document = yaml.compose(source)
+            after = os.stat(target, follow_symlinks=False)
+            if (
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            ):
+                unsupported = True
+                continue
+        except Exception:
+            unsupported = True
+            continue
+        if not isinstance(document, MappingNode):
+            unsupported = True
+            continue
+        for key_node, value_node in document.value:
+            if not isinstance(key_node, ScalarNode):
+                unsupported = True
+                break
+            if key_node.value != "sops" and not isinstance(value_node, ScalarNode):
+                nested = True
+
+        # sops passes its command argument to a shell. Treat that argument as
+        # another bounded shell body so an allowed flat outer target cannot
+        # carry an unclassified nested invocation.
+        if cursor + 1 < len(tokens):
+            inner = tokens[cursor + 1]
+            if depth >= MAX_SHELL_DEPTH:
+                if "sops" in inner or "exec-env" in inner:
+                    unsupported = True
+            else:
+                inspect_command(inner, depth + 1)
+
+    # Dynamic executable construction must not turn exec-env into an orphan
+    # token that escapes the direct `sops` scan above.
+    for index, token in enumerate(tokens):
+        if token == "exec-env" and (
+            index == 0
+            or (
+                os.path.basename(tokens[index - 1]) != "sops"
+                and any(char in tokens[index - 1] for char in dynamic_chars)
+                and is_command_position(tokens, index - 1)
+            )
+        ):
+            unsupported = True
+
+inspect_command(cmd)
+
+if nested:
+    sys.exit(10)
+if unsupported:
+    sys.exit(11)
+sys.exit(0)
+PY
+}
+
+classify_sops_exec_env_targets
+SOPS_TARGET_CLASS=$?
+case "$SOPS_TARGET_CLASS" in
+    0) ;;
+    10)
+        emit_deny "- nested/complex value を含む SOPS file は sops exec-env で処理せず、sops edit で flat mapping に再構成しよう。\n次これで行こう。"
+        ;;
+    *)
+        emit_deny "- sops exec-env の対象 file を安全に検査できない。absolute literal path の flat mapping にするか、sops edit で構造を確認・再構成しよう。\n次これで行こう。"
+        ;;
+esac
+
+# ----------------------------------------
 # Pattern → alternative action catalog.
 # Format: <regex>:::<terse alternative action>[:::<flags>]
 # Reason field is action-only: tells the agent what to do, not what was wrong.

@@ -28,6 +28,10 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 - `sops edit <file>`
 - `sops exec-env <file> '<cmd>'`
 
+`sops exec-env` は scalar だけの flat mapping に限る。nested mapping / list
+を含む complex value は error に復号値が混ざり得るため実行せず、`sops edit`
+で flat mapping に再構成する。
+
 `sops -d` や `sops -d ... | head/cat/grep/tee/less` は書かない。必要な値は `sops exec-env <file> '<cmd>'` で subprocess env に注入する。
 
 ## 3. クレデンシャル pre-flight（Bash 実行前）
