@@ -163,6 +163,13 @@ expect_block "sops exec-env '$flat_sops_file' \"<(printf /usr/bin/true)\"" '#156
 expect_block "sops exec-env flat.enc.yaml /usr/bin/true" '#156 relative target fails closed without authoritative cwd'
 expect_allow 'echo "sops exec-env is the supported form"' '#156 prose does not require YAML inspection'
 expect_allow 'echo sops exec-env is the supported form' '#156 unquoted prose does not look like an invocation'
+expect_allow "echo start
+claude < /tmp/sops-keys.txt" '#156 multiline orchestration with sops-named operand is not an invocation'
+expect_allow 'printf "%s\n" "$(basename /tmp/sops-keys.txt)"' '#156 unrelated substitution with sops-named operand is not an invocation'
+expect_allow "formation report 'documented form:
+sops exec-env <file> <consumer>'" '#156 multiline quoted report body is nonexecuting context'
+expect_allow "sops exec-env '$flat_sops_file' 'true
+true'" '#156 newline inside quoted consumer is not an outer replacement'
 expect_allow 'git add sops' '#156 ordinary sops-named operand'
 expect_allow "sops edit '$flat_sops_file'" '#156 sops edit remains available'
 expect_allow "sops exec-env '$flat_sops_file' 'env | cut -d= -f1 | grep -Fxq API_TOKEN && echo present'" '#156 documented key-only check'
