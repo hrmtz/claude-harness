@@ -115,34 +115,64 @@ REFUSE.
 
 ---
 
-## Phase 2 — hippocampus: the silent wrong answers
+## Phase 2 — hippocampus
 
 Independent of Phase 1; can run in parallel by a different worker.
 
-### 2a. #220 first — `work='gutenberg'` returns nothing for 52 books / 69,675 chunks
+Thirty issues are open, but they resolve into one storyline: **retrieval is
+silently covering less than it appears to, and the instruments that would have
+said so were themselves wrong.** That dictates the order — instrument, then the
+real losses it can now measure, then the landmines, then anything built on top.
 
-Highest user-visible severity in the repo: the search does not error, it returns
-**empty**. Silence reads as "no results exist", which is the worst failure mode a
-retrieval system has.
+### 2a. Reconcile the ledger first (about five minutes)
 
-### 2b. #225 before #209 / #221 — fix the instrument before trusting it
+**#205 is finished but still open.** PR #208 merged 2026-07-26 and the acceptance
+items are present in the tree — `library/web_client.py`, `library/html_extract.py`,
+`library/blog_ingest.py`, `scripts/personal/ingest_claude_blog.py`, migration 041,
+and `claude_blog` in `_LIBRARY_BOOK_SOURCES`. Only the checkboxes were never
+ticked. Verify each, then close, so the backlog stops overstating itself.
 
-`#226` (merged) made the bench assert the plan instead of assuming it, which is
-what exposed that "40/40 recall" cells were measuring a sequential scan. `#225`
-is the next hole in the same instrument: probes never land in a minority
-cluster, so a high recall number can still hide an unreachable one.
+### 2b. The silent losses — #220, #216, #221
 
-Fix the instrument, **then** re-measure #209 (recall at ef=40 drops the correct
-top-1; `_LIBRARY_EF_SEARCH=200` still leaves 2 English technical queries at 0/10;
-ef=600 held the index in every probe) and #221 (RRF dense leg returns 38 of 100
-candidates, so fusion weighs a partial list).
+Three independent defects of the same kind: the query succeeds and quietly
+returns less than exists.
 
-Do not close #209 until the ef=600 finding is either shipped or explicitly
-deferred with a reason. Two separate agents independently corrected their own
-measurements in this area last session — treat any single unverified number here
-with suspicion, including your own.
+- **#220 — start here.** `work='gutenberg'` returns **0 results** across 52 books
+  / 69,675 chunks, while `work=None` returns the right book for the same query.
+  Adding a filter makes the corpus vanish. Smallest fix, largest user-visible
+  severity: silence reads as "nothing exists", the worst failure a retrieval
+  system has.
+- **#216.** `personal.conversations` holds 61,478 rows and only **8,888 carry a
+  `conv_dense` vector** — 85% is unreachable from `search_conversations`, which is
+  on the connector allowlist. No recall setting can reach them; this is coverage,
+  not tuning. `doctor` already prints the ratio as informational, which is how it
+  stayed invisible.
+- **#221.** The media hybrid's RRF dense leg asks for `LIMIT 100` and gets 38, so
+  fusion weighs a truncated ranking against a complete one.
 
-### 2c. #214 / #215 — schema landmines
+### 2c. Fix the instrument before trusting it — #225, then #209
+
+`#226` (merged) made the bench assert the plan rather than assume it, which is
+what revealed that "40/40 recall" cells had been measuring a sequential scan.
+**#225 is the next hole in the same instrument**: probes never land in a minority
+cluster, so a high recall number can still hide an unreachable one. Fix that
+first, or the re-measurement below inherits the flaw.
+
+Then re-measure **#209** (recall at ef=40 drops the correct top-1;
+`_LIBRARY_EF_SEARCH=200` still leaves two English technical queries at 0/10;
+ef=600 held the index in every probe). **Do not close #209** until the ef=600
+finding is either shipped or explicitly deferred with a reason.
+
+**#217** (measure `hnsw.iterative_scan` before adopting it) belongs to this same
+instrument-quality group.
+
+A caution that earned itself last session: two agents independently discovered
+their own measurements were wrong here — one had compared identity by `book_id`,
+the other had read `ef>=700` numbers that were sequential scans. Both corrected
+themselves in writing. Treat any single unverified number in this area with
+suspicion, including your own.
+
+### 2d. #214 / #215 — schema landmines
 
 Two HNSW indexes exist **only in the live database**, not in `migrations/`, and
 `009b_ghost_hnsw` is queued to land unarmed with a different opclass. Neither
@@ -152,6 +182,19 @@ someone is least able to reason about them.
 Canonical database changes need **the operator's own confirmation immediately
 before execution** — not a relayed approval, not one bundled into a planning
 decision. That rail held last session and should keep holding.
+
+### Suggested session split
+
+1. Close #205, fix **#220**, fix the instrument (**#225**). Ends with one silent
+   failure gone and a bench you can believe.
+2. Re-measure and fix **#209 / #221 / #216** with that bench. Close #209 on a
+   decision, not on fatigue.
+3. **#214 / #215**, with the operator present for anything canonical.
+
+The diary-reflections chain (#167 as precondition, Drift A-D in #168-#171, slices
+4-6 in #120/#122/#123, epic #97) is a **separate vertical lane**. It does not
+touch retrieval coverage and does not contend with the work above, so give it to
+a different worker rather than interleaving it.
 
 ---
 
@@ -218,6 +261,13 @@ and `68a9d1c`; verify before working it).
 
 ## Phase 5 — design work that can wait
 
+The hippocampus entries here share a property worth naming: **none of them can
+be decided by working harder on them.** #218 needs a measurement, #222 needs an
+owner's scope call, #223 needs someone to pick among three written remedies.
+Schedule them as decision sessions, not implementation sessions — an
+implementation worker pointed at any of these will produce analysis nobody asked
+for.
+
 - **#222** (hippocampus) — reconcile DEJA_REVIEW with the Slice-0 implementation
   already shipped in claude-harness (`deja_review_slice0.py`, 2,601 lines, plus
   two schemas and tests, landed `87210ca` on 2026-07-24). The doc's §18.1 still
@@ -237,6 +287,9 @@ and `68a9d1c`; verify before working it).
   analysis.
 - **#224** (hippocampus) — `DENSE_RECALL_AUDIT.md` is stale. Do not act on it
   without re-measuring; its branch is pushed so the content is fetchable.
+- **#210** (hippocampus) — `search_personal_memory` has no recency weighting, so a
+  pre-2015 archive competes equally with last week. Related in spirit to #218:
+  both are about what belongs in the candidate set before ranking touches it.
 
 ---
 
