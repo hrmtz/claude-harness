@@ -45,6 +45,32 @@ PATTERNS=(
     'eyJ[A-Za-z0-9_=-]{10,}\.eyJ[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,}|<REDACTED_JWT>'
     # issue #14: Supabase auth-token cookie name (narrow, project-ref scoped).
     'sb-[a-z0-9]{8,}-auth-token|sb-<REDACTED>-auth-token'
+    # issue #99: clinic MCP token. This is the ONLY layer that can catch it —
+    # its sops file is a nested mapping, so the HMAC manifest has no entry for
+    # it (nested values never reach the environment the builder reads), and the
+    # Part 2 keyword rule matches uppercase KEY=VALUE while the file's keys are
+    # lowercase with ':' separators. Both fell through twice before this entry.
+    #
+    # NOT the usual 'cmcp_[A-Za-z0-9_-]{20,}' house style: the same prefix is a
+    # legitimate identifier in the vendored Parade touchscreen drivers this
+    # operator works on (CMCP = a capacitance test feature), e.g.
+    # cmcp_check_config_fw_match — 79 such symbols measured. Redacting those
+    # would corrupt a transcript containing driver source. Requiring an
+    # uppercase letter separates them: the tokens are base64url and mixed-case,
+    # the identifiers are strictly lowercase_with_underscores. Verified against
+    # the real driver files (0 matches) before landing.
+    #
+    # TWO entries, not one alternation: '|' is both the split and the sed
+    # delimiter here (see the JWT note above), so "uppercase anywhere" has to be
+    # spelled as two catalog lines. The first requires >=10 body characters
+    # AFTER the uppercase, the second >=10 BEFORE it. Their union covers any
+    # body of 20+ characters containing at least one uppercase; with only the
+    # first, a token whose sole uppercase sits in its last 10 characters was NOT
+    # redacted (measured: 'cmcp_' + 15 lowercase + 'Q' + 9 lowercase leaked).
+    # A body with no uppercase at all is still out of reach by construction —
+    # that is the price of not redacting the all-lowercase driver identifiers.
+    'cmcp_[a-zA-Z0-9_-]*[A-Z][a-zA-Z0-9_-]{10,}|cmcp_<REDACTED>'
+    'cmcp_[a-zA-Z0-9_-]{10,}[A-Z][a-zA-Z0-9_-]*|cmcp_<REDACTED>'
 )
 
 # Part 2: キーワードベース catch-all
