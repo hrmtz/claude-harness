@@ -32,7 +32,16 @@ source "$SCRIPT_DIR/mailbox_notify.sh"
 AGENT="${1:?agent name required (msg 'to' field value)}"
 PANE="${2:?tmux session/pane target}"
 MAILBOX="${MAILBOX:-$MAILBOX_LOG}"
+RELAY_READY_FILE="${FORMATION_RELAY_READY_FILE:-}"
+POLL_INTERVAL="${FORMATION_RELAY_POLL_INTERVAL:-1}"
 LOG_PREFIX="[formation-relay:$AGENT→$PANE]"
+
+relay_ready_cleanup() {
+  [[ -n "$RELAY_READY_FILE" && -f "$RELAY_READY_FILE" ]] || return 0
+  [[ "$(cat "$RELAY_READY_FILE" 2>/dev/null || true)" == "$$" ]] &&
+    rm -f "$RELAY_READY_FILE"
+}
+trap relay_ready_cleanup EXIT
 
 # Track the mailbox sequence high-water, not a physical line offset. Retention
 # and recovery may replace/truncate the file; seq remains monotonic in
@@ -43,6 +52,12 @@ if [[ ! -f "$MAILBOX" ]]; then
 fi
 LAST_SEQ="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
 echo "$LOG_PREFIX start, agent=$AGENT pane=$PANE mailbox=$MAILBOX last_seq=$LAST_SEQ"
+if [[ -n "$RELAY_READY_FILE" ]]; then
+  mkdir -p "$(dirname "$RELAY_READY_FILE")"
+  ready_tmp="${RELAY_READY_FILE}.$$"
+  printf '%s\n' "$$" > "$ready_tmp"
+  mv "$ready_tmp" "$RELAY_READY_FILE"
+fi
 
 process_new_lines() {
   local current_seq
@@ -78,7 +93,8 @@ process_new_lines() {
 }
 
 # inotify 優先、fallback polling
-if command -v inotifywait >/dev/null 2>&1; then
+if [[ "${FORMATION_RELAY_FORCE_POLL:-0}" != "1" ]] &&
+   command -v inotifywait >/dev/null 2>&1; then
   echo "$LOG_PREFIX mode=inotify"
   while true; do
     # The timeout is a correctness backstop for the tiny startup/re-arm window:
@@ -93,7 +109,7 @@ if command -v inotifywait >/dev/null 2>&1; then
 else
   echo "$LOG_PREFIX mode=polling (inotify-tools not installed, apt install inotify-tools 推奨)"
   while true; do
-    sleep 10
+    sleep "$POLL_INTERVAL"
     while process_new_lines; do :; done
   done
 fi

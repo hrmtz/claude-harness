@@ -132,11 +132,28 @@ printf '%s\n' \
 chmod +x "$RELAY_FAKE_BIN/tmux"
 mailbox_init
 : > "$MAILBOX_LOG"
+RELAY_READY_FILE="$FORMATION_DIR/worker-a.relay_ready"
 TMUX_TEST_LOG="$TMUX_TEST_LOG" FORMATION_MAILBOX="$MAILBOX_LOG" \
+  FORMATION_RELAY_READY_FILE="$RELAY_READY_FILE" \
+  FORMATION_RELAY_FORCE_POLL=1 FORMATION_RELAY_POLL_INTERVAL=0.05 \
   PATH="$RELAY_FAKE_BIN:/usr/bin:/bin" \
   bash "$LIB/mailbox_relay.sh" worker-a %42 >"$TMPDIR_T/live-relay.log" 2>&1 &
 RELAY_PID=$!
-echo "$RELAY_PID" > "$FORMATION_DIR/worker-a.relay_pid"
+for _ in $(seq 1 40); do
+  [[ "$(cat "$RELAY_READY_FILE" 2>/dev/null || true)" == "$RELAY_PID" ]] && break
+  sleep 0.05
+done
+if [[ "$(cat "$RELAY_READY_FILE" 2>/dev/null || true)" == "$RELAY_PID" ]]; then
+  ok "relay publishes readiness only after anchoring its mailbox high-water"
+  echo "$RELAY_PID" > "$FORMATION_DIR/worker-a.relay_pid"
+else
+  bad "relay did not publish readiness before its PID became discoverable"
+fi
+if grep -Fq 'mode=polling' "$TMPDIR_T/live-relay.log"; then
+  ok "relay fallback polling mode is exercised without inotifywait"
+else
+  bad "relay fallback polling fixture did not enter polling mode"
+fi
 tmux() { printf '%s\n' "$*" >> "$TMUX_TEST_LOG"; }
 MSG_OUT="$(cmd_msg worker-a "mailbox first fixture")"
 if [[ "$MSG_OUT" == *"appended seq="* && "$MSG_OUT" == *"signal=pending"* ]]; then
@@ -172,6 +189,11 @@ fi
 pkill -P "$RELAY_PID" 2>/dev/null || true
 kill "$RELAY_PID" 2>/dev/null || true
 wait "$RELAY_PID" 2>/dev/null || true
+if [[ ! -e "$RELAY_READY_FILE" ]]; then
+  ok "relay removes its owned readiness marker on exit"
+else
+  bad "relay left a stale readiness marker after exit"
+fi
 if DEAD_RELAY_OUT="$(cmd_msg worker-a "durable while relay dead" 2>&1)"; then
   DEAD_RELAY_RC=0
 else
