@@ -78,6 +78,38 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   <path/to/briefing.md> [worker_name]
 ```
 
+#### Choosing the CLI (subscription quotas are the constraint)
+
+Claude, Codex and Kimi are separate paid quotas that refill on separate clocks.
+Spending them evenly is not a preference — a session that runs everything on
+Claude exhausts one plan while two others sit idle. Measured on 2026-07-26 after
+a single day of Claude-led work: **claude 30% of the weekly window consumed,
+codex 7%, kimi 7%.**
+
+Default assignment, unless the task argues otherwise:
+
+| Work | CLI | Why |
+|---|---|---|
+| Long-running **implementation** worker | **codex** | The default for hours-long autonomous build/fix work. A codex worker ran 4h21m and landed five issues in one session. |
+| **Coordination, design, judgement**, and the session you are in | claude | Where conversational quality and cross-repo judgement pay for themselves. |
+| **Large-diff / whole-document review**, full-path traces | kimi | 1M context takes a whole doc or a wide diff in one pass. Note its window is ~5h rolling, not weekly — good for bounded review bursts, poor for a multi-hour trunk. |
+| Cheap **independent verdict** | grok | `--no-subagents --max-turns 20` headless. Not quota-tracked; treat as a free second opinion, not a workhorse. |
+
+Cross-family review stays mandatory regardless of who implements: at least one
+reviewer from a different family than the author. That rule is about correctness,
+not quota — a same-family panel shares the author's blind spots.
+
+Check live headroom before a large fan-out, and prefer the provider with room:
+
+```bash
+capacity-oracle headroom      # per-provider used_percent / headroom
+capacity-oracle recommend     # ranked assignment
+```
+
+Note that `capacity-oracle substitute` only diverts once the preferred provider
+drops below its floor (default 0.30) — it is a pressure valve, not a balancer.
+Do not rely on it to spread load; choose by the table above from the start.
+
 - **Claude and Codex default to full permission/sandbox bypass** so an
   autonomous peer has the authority needed to finish its briefing. Safety is
   enforced by the Formation harness: scoped briefing and decision boundaries,
