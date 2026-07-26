@@ -290,10 +290,8 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
         observed[ledger_path] = ledger_digest
     campaigns = ledger["campaigns"]
     used = guard.model_launches(campaigns)
-    ceiling = min(
-        guard.GLOBAL_MAX_MODEL_LAUNCHES,
-        guard.base_ceiling(),
-    )
+    ceiling = guard.GLOBAL_MAX_MODEL_LAUNCHES
+    campaign_ceiling = guard.base_ceiling()
 
     launches = [
         launch
@@ -344,6 +342,7 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     active = guard.active_campaign(ledger)
     active_launches = active["launches"]
     assert isinstance(active_launches, list)
+    active_used = guard.model_launches([active])
     current_protocol_sha = guard.protocol_sha()
     current_phases = {
         str(launch["phase"])
@@ -388,7 +387,15 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
             "cycles": len(completed_cycles),
             "current_phases": current_phases,
             "admissions": {
-                phase: guard.admission_decision(used, ceiling, phase)
+                phase: guard.bounded_admission_decision(
+                    0
+                    if guard.may_rollover(ledger, active, doc, 1, phase)
+                    else active_used,
+                    campaign_ceiling,
+                    used,
+                    ceiling,
+                    phase,
+                )
                 for phase in ("fanout", "xfamily")
             },
         }

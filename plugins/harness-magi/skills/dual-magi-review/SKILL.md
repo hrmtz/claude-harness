@@ -326,9 +326,12 @@ Stop criteria (= user judges OR explicit flag for auto):
    Fable-class reviewer では到達不能** (2026-07-10 実測: 41 round 回しても毎 round 3-7 findings) —
    findings ゼロ待ち・criterion 1 の発火待ちで loop を回し続けない。
 
-Runaway guard (= v0.7.0): round 5 到達で altitude checkpoint (= ship core / slice / descend to
-code の三択を明示提示)、 round 8 = hard stop (= 続行は user sign-off 必須)。 revision 後の
-re-review は **diff-scoped** (= diff + invariant を渡す、 unchanged text の再審は auto-dup 扱い)。
+Runaway guard: one campaign is mechanically bounded to 3 full fan-out/cross-family pairs
+(12 weighted launches). At that boundary, take the altitude checkpoint (= ship core / slice /
+descend to code). Only a real requirement revision may roll into the remaining global allowance,
+which can fund at most one further pair; user sign-off and a fresh state directory cannot extend
+either bound. Revision after re-review is **diff-scoped** (= diff + invariant を渡す、 unchanged text
+の再審は auto-dup 扱い)。
 enumerable detail (= grant list / opclass / column list 等) を prose で列挙する doc は altitude
 違反 — 修正は追記でなく executable gate 化 (= ultramagi § Convergence economics 参照)。
 
@@ -470,6 +473,11 @@ root の再発、同 subsystem の新 HIGH+ root 再発、3 revision の blocker
 停滞、2 logical cycle、または reserved xfamily を含む unaffordable transition
 で bounded terminal decision を返す。`PLATEAU_CANDIDATE` は G1-G9 gate へ渡せる
 という意味だけで、plateau marker や shipping authority ではない。
+The canonical guard's default per-campaign ceiling is 12 weighted model launches: three fan-out
+plus mandatory cross-family pairs without retries. Requirement revision may roll into the fixed
+global allowance of 16, but changing the state directory or asking for acknowledgement cannot reset
+history. `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten 12 for a smaller target and cannot extend
+it.
 原典側にも同等の gate を入れるのが S2/S3 の作業 (= 原典は現在 provenance を一切記録していない)。
 Codex 側 provenance は実在する: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` の
 `session_meta` + `turn_context.model` (= 実測、 380 files)。

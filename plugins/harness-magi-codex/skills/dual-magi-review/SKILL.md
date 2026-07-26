@@ -151,7 +151,7 @@ after G1-G9.
 
 Plateau safety and autonomous-loop safety are separate. Before launching any reviewer, both
 adapters claim from a canonical document-scoped ledger through `scripts/magi_campaign_guard.py`.
-The default autonomous ceiling is 16 weighted model launches: fan-out costs 3, implementation-only
+The default autonomous ceiling is 12 weighted model launches: fan-out costs 3, implementation-only
 incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted review both
 reserve the following cross-family unit. Retries consume
 budget; repeating round 1 or changing state directory cannot reset it. Above it, scripts exit `4` with
@@ -235,7 +235,7 @@ safe; its bounded classifications distinguish missing child status, provider/scr
 failure, live-document drift, parse/schema/convergence/identity rejection, and post-scrub
 corruption. It does not relax the campaign fuse.
 
-Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 16 but cannot extend it.
+Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 12 but cannot extend it.
 There is no acknowledgement or authorization path that extends the fuse.
 `MAGI_FANOUT_TIMEOUT_S` may tighten the fan-out deadline from its default/maximum of 900 seconds.
 

@@ -52,20 +52,21 @@ fixed global fuse is then exhausted, it emits a terminal blocked result without 
 
 ### C1 — bounded autonomous execution
 
-Fan-out and cross-family adapters must share a canonical document-scoped ledger and refuse more
-than 16 model launches by default. Fan-out costs 3 and cross-family costs 1, so without retries
-this permits four pairs:
+Fan-out and cross-family adapters must share a canonical document-scoped ledger. A campaign refuses
+more than 12 model launches by default, while all requirement-revision campaigns share a fixed
+global fuse of 16. Fan-out costs 3 and cross-family costs 1, so without retries the default campaign
+permits three pairs:
 
 ```text
 fan-out 1 -> cross-family 2
 fan-out 3 -> cross-family 4
 fan-out 5 -> cross-family 6
-fan-out 7 -> cross-family 8
 ```
 
-Retries consume launch budget. A caller cannot reset the budget with a fresh state directory or by
-repeating round 1. Exit 4 means campaign-budget exhaustion. It is not an adapter failure and not
-plateau.
+The fourth pair is available only through a real requirement-revision rollover and only while the
+16-launch global fuse has room. Retries consume both budgets. A caller cannot reset either budget
+with a fresh state directory or by repeating round 1. Exit 4 means campaign-budget exhaustion. It is
+not an adapter failure and not plateau.
 
 ### C2 — acknowledgement-free, bounded rollover
 

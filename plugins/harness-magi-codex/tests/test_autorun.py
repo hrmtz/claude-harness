@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import magi_autorun as autorun_module  # noqa: E402
+from magi_campaign_guard import DEFAULT_MAX_MODEL_LAUNCHES  # noqa: E402
 
 
 class AutorunTest(unittest.TestCase):
@@ -306,16 +307,18 @@ class AutorunTest(unittest.TestCase):
         self.assertEqual(output["decision"], "block")
         self.assertIn("completed_artifact_sha", self.registry())
 
-    def test_used_thirteen_fanout_candidate_blocks_for_reserve(self) -> None:
+    def test_three_remaining_fanout_candidate_blocks_for_reserve(self) -> None:
         active = [
             self.launch(1, "fanout", "success"),
             self.launch(2, "xfamily", "failed"),
             self.launch(2, "xfamily", "success"),
             self.launch(3, "fanout", "success"),
             self.launch(4, "xfamily", "success"),
-            self.launch(5, "fanout", "success"),
-            self.launch(6, "xfamily", "success"),
         ]
+        self.assertEqual(
+            sum(int(launch["model_launches"]) for launch in active),
+            DEFAULT_MAX_MODEL_LAUNCHES - 3,
+        )
         self.seed_ledger([active])
         self.arm()
         output = json.loads(self.hook().stdout)
@@ -323,21 +326,49 @@ class AutorunTest(unittest.TestCase):
         self.assertEqual(self.registry()["status"], "blocked")
         self.assertIn("reserved for mandatory xfamily", self.registry()["reason"])
 
-    def test_used_thirteen_xfamily_candidate_is_not_double_reserved(self) -> None:
+    def test_three_remaining_xfamily_candidate_is_not_double_reserved(self) -> None:
+        prior = [
+            self.launch(1, "fanout", "success"),
+        ]
         active = [
             self.launch(1, "fanout", "success"),
-            self.launch(2, "xfamily", "failed"),
-            self.launch(2, "xfamily", "success"),
-            self.launch(3, "fanout", "success"),
-            self.launch(4, "xfamily", "failed"),
-            self.launch(4, "xfamily", "success"),
-            self.launch(5, "fanout", "success"),
         ]
-        self.seed_ledger([active])
+        campaigns = [prior, prior, active]
+        self.assertEqual(
+            sum(
+                int(launch["model_launches"])
+                for campaign in campaigns
+                for launch in campaign
+            ),
+            DEFAULT_MAX_MODEL_LAUNCHES - 3,
+        )
+        self.seed_ledger(campaigns)
         self.arm()
         output = json.loads(self.hook().stdout)
         self.assertEqual(output["decision"], "block")
-        self.assertEqual(self.registry()["status"], "active")
+        registry = self.registry()
+        self.assertEqual(registry["status"], "active", registry["reason"])
+
+    def test_changed_requirement_can_roll_over_after_default_campaign(self) -> None:
+        active = [
+            self.launch(1, "fanout", "success"),
+            self.launch(2, "xfamily", "success"),
+            self.launch(3, "fanout", "success"),
+            self.launch(4, "xfamily", "success"),
+            self.launch(5, "fanout", "success"),
+            self.launch(6, "xfamily", "success"),
+        ]
+        self.assertEqual(
+            sum(int(launch["model_launches"]) for launch in active),
+            DEFAULT_MAX_MODEL_LAUNCHES,
+        )
+        self.seed_ledger([active])
+        self.doc.write_text("# revised requirement\n")
+        self.arm()
+        output = json.loads(self.hook().stdout)
+        self.assertEqual(output["decision"], "block")
+        registry = self.registry()
+        self.assertEqual(registry["status"], "active", registry["reason"])
 
     def test_retry_exhaustion_blocks_on_first_hook(self) -> None:
         active = [
