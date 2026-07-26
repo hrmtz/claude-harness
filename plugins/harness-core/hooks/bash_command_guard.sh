@@ -102,7 +102,6 @@ classify_sops_exec_env_targets() {
        && [[ "$DEOBF" =~ (^|[[:space:]])([^[:space:]]*/)?sops[[:space:]]+edit([[:space:]]|$) ]]; then
         return 0
     fi
-    [[ "$SCRUBBED" != *$'\n'* ]] || return 11
     python3 - "$SCRUBBED" 2>/dev/null <<'PY'
 import os
 import re
@@ -191,11 +190,30 @@ def has_active_substitution(command):
         index += 1
     return False
 
+def has_unquoted_newline(command):
+    single = False
+    double = False
+    escaped = False
+    for char in command:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and not single:
+            escaped = True
+            continue
+        if char == "'" and not double:
+            single = not single
+            continue
+        if char == '"' and not single:
+            double = not double
+            continue
+        if char == "\n" and not single and not double:
+            return True
+    return False
+
 def inspect_command(command, depth=0):
     global nested, unsupported, target_count
-    if has_active_substitution(command):
-        unsupported = True
-        return
+    active_substitution = has_active_substitution(command)
     try:
         tokens = tokenize(command)
     except ValueError:
@@ -242,6 +260,22 @@ def inspect_command(command, depth=0):
         if subcommand != "exec-env":
             # The two-command policy permits only edit and exec-env. Dynamic
             # or otherwise unknown subcommands cannot be proven safe.
+            unsupported = True
+            continue
+        # Substitution makes an actual invocation's executable, target, or
+        # consumer mutable after inspection. Do not apply that verdict merely
+        # because unrelated orchestration or prose contains the substring
+        # "sops" somewhere else in the command.
+        if active_substitution:
+            unsupported = True
+            continue
+        # An outer newline can replace the file between classification and
+        # execution, just like ";" / "&&". A newline inside the quoted consumer
+        # is data for sops' inner shell and is safe at this classification layer.
+        # Judge this only after finding an executable invocation: prose, prompt
+        # filenames, and multi-line orchestration that merely contain "sops"
+        # must not make every Bash call uninspectable.
+        if has_unquoted_newline(command):
             unsupported = True
             continue
         # A compound shell command can replace the checked path before sops
