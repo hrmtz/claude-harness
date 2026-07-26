@@ -74,171 +74,71 @@ if [ -f "$TEMPLATE" ] && ! has_local_agents && is_workspace; then
     fi
 fi
 
-# Random formation codename in the style used by harness-formation.
-generate_formation_id() {
-    local adjectives=(
-        amber cinder crimson dusk ember iron midnight moss muted onyx
-        rust silent slate steady storm swift woven
-    )
-    local nouns=(
-        crane falcon fox heron lantern otter raven rook tanuki wren
-    )
-    local idx1 idx2
-    idx1=$(($(od -An -N2 -i /dev/urandom | tr -d ' ') % ${#adjectives[@]}))
-    idx2=$(($(od -An -N2 -i /dev/urandom | tr -d ' ') % ${#nouns[@]}))
-    echo "${adjectives[$idx1]}-${nouns[$idx2]}"
-}
-
-formation_id_in_use() {
-    local id="$1"
-    tmux list-panes -a -F '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null \
-        | grep -qx "$id"
-}
-
-generate_unique_formation_id() {
-    local id
-    local attempt
-    for attempt in $(seq 1 100); do
-        id="$(generate_formation_id)"
-        if ! formation_id_in_use "$id"; then
-            echo "$id"
-            return 0
-        fi
-    done
-    # Fallback: timestamped hash if the random pool is exhausted.
-    echo "kimi-$(date +%s%N | sha256sum | cut -c1-8)"
-}
-
-# Sentinel file for persistent standalone display naming across compact/resume.
-# Formation workers do not consult this pane-keyed state: their spawn-scoped
-# FORMATION_SELF is authoritative, so a recycled pane id cannot inherit an old
-# worker's display identity.
-self_name_sentinel() {
-    local pane="${1:-${TMUX_PANE:-}}"
-    local key="${pane//[^a-zA-Z0-9]/_}"
-    echo "$HOME/.local/state/tmux_self_name/${key}"
-}
-
-# Store the display name so compact/resume reuses it.
-save_display_name() {
-    local name="$1"
-    local sentinel
-    sentinel="$(self_name_sentinel)"
-    mkdir -p "$(dirname "$sentinel")"
-    echo "$name" > "$sentinel"
-}
+# Codename generation, collision checking and the compact/resume sentinel used
+# to live here, duplicated in three other adapters with three sets of subtle
+# differences. They are now the ownership core's job (#95).
 
 # Auto-assign a formation identity and tmux display name when running inside tmux.
 # The formation id is the stable mailbox address; the display name is what the
 # user sees in the pane/window title, mirroring Claude-harness behavior.
+#
+# The ownership rules — nested launches, stale TMUX_PANE, sequential reuse,
+# collision-free codenames — are not decided here. They live in the shared
+# identity ownership core and are identical for claude, codex, kimi and grok
+# (#95). This wrapper's only unique knowledge is which argv shapes are one-shot,
+# because that is the part only a wrapper can know.
 setup_formation_identity() {
-    if [ -z "${TMUX_PANE:-}" ]; then
-        return 0
+    [ -n "${TMUX_PANE:-}" ] || return 0
+
+    # shellcheck source=../harness-core/hooks/identity_owner.sh
+    . "$HERE/identity_owner.sh" 2>/dev/null || return 0
+
+    # An explicit display-name override is honoured for standalone launches by
+    # deriving the routing id from it, so display and routing cannot diverge.
+    local requested="${HARNESS_KIMI_FORMATION_ID:-}"
+    if [ -z "$requested" ] && [ -z "${FORMATION_SELF:-}" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then
+        requested="${HARNESS_KIMI_DISPLAY_NAME#kimi-}"
     fi
 
-    # Formation id (stable mailbox identity).
-    local formation_locked formation_id formation_owner current_window
-    formation_locked="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_identity_locked}' 2>/dev/null || true)"
-    formation_id="$(tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}' 2>/dev/null || true)"
-    formation_owner="${formation_locked:-$formation_id}"
-    current_window="$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)"
-    # A stale/inherited TMUX_PANE must not let this process rename a sibling
-    # worker. Formation sets both values before launching the CLI.
-    if [ -n "${FORMATION_SELF:-}" ] \
-        && [ "$formation_owner" != "$FORMATION_SELF" ]; then
-        return 0
-    fi
-    has_foreign_chassis_ancestor() {
-        local pid="${PPID:-}" comm next
-        while [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ]; do
-            comm="$(ps -o comm= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
-            case "$comm" in
-                claude|codex|grok) return 0 ;;
-            esac
-            next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
-            [ "$next" = "$pid" ] && break
-            pid="$next"
-        done
-        return 1
-    }
-
-    # A standalone Kimi launched as a child inside another chassis inherits its
-    # parent's TMUX_PANE. Permit sequential reuse after that process exits.
-    has_foreign_chassis_ancestor && return 0
-
-    if [ -n "${FORMATION_SELF:-}" ]; then
-        if [ -z "$formation_locked" ]; then
-            formation_locked="$FORMATION_SELF"
-            tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_locked" >/dev/null 2>&1 || true
-        fi
-        if [ "$formation_id" != "$formation_locked" ]; then
-            formation_id="$formation_locked"
-            tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
-        fi
-    elif [ -n "$formation_locked" ]; then
-        # A standalone resumed pane keeps the first assigned identity and repairs
-        # the compatibility alias if another process changed it.
-        formation_id="$formation_locked"
-        tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
-    elif [ -n "$formation_id" ]; then
-        formation_locked="$formation_id"
-        tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_locked" >/dev/null 2>&1 || true
-    fi
-    if [ -z "$formation_id" ]; then
-        formation_id="${HARNESS_KIMI_FORMATION_ID:-}"
-        if [ -z "$formation_id" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then
-            formation_id="${HARNESS_KIMI_DISPLAY_NAME#kimi-}"
-            if formation_id_in_use "$formation_id"; then
-                formation_id="$(generate_unique_formation_id)"
-            fi
-        fi
-        if [ -z "$formation_id" ]; then
-            formation_id="$(generate_unique_formation_id)"
-        fi
-        tmux set-option -p -t "$TMUX_PANE" @formation_id "$formation_id" >/dev/null 2>&1 || true
-        tmux set-option -p -t "$TMUX_PANE" @formation_identity_locked "$formation_id" >/dev/null 2>&1 || true
-    fi
-
-    # The locked identity is the source of truth; @formation_id is retained as
-    # a compatibility routing alias and repaired from the lock on resume.
-    local display_name
-    display_name="kimi-${formation_id}"
+    # An override that already carries no chassis prefix is a name the user chose
+    # for the window ("review-agent"); prefixing it would rename their pane out
+    # from under them. Routing still uses the bare id either way.
+    local display=""
     if [ -z "${FORMATION_SELF:-}" ] && [ -n "${HARNESS_KIMI_DISPLAY_NAME:-}" ]; then
-        display_name="$HARNESS_KIMI_DISPLAY_NAME"
-    fi
-    if [ -z "${FORMATION_SELF:-}" ]; then
-        save_display_name "$display_name"
+        display="$HARNESS_KIMI_DISPLAY_NAME"
     fi
 
-    # A split worker shares its window with the lead; only a dedicated
-    # single-pane worker window may be renamed without changing the lead.
-    local window_panes
-    window_panes="$(tmux display-message -p -t "$TMUX_PANE" '#{window_panes}' 2>/dev/null || true)"
-    if [ "$window_panes" = "1" ]; then
-        tmux rename-window -t "$TMUX_PANE" "$display_name" >/dev/null 2>&1 || true
-    fi
-    tmux select-pane -t "$TMUX_PANE" -T "$display_name" >/dev/null 2>&1 || true
+    harness_identity_claim \
+        --pane "$TMUX_PANE" \
+        --chassis kimi \
+        --mode "$KIMI_IDENTITY_MODE" \
+        ${requested:+--routing-id "$requested"} \
+        ${display:+--display-name "$display"} || return 0
 }
 
-KIMI_IDENTITY_INTERACTIVE=1
+# Mode is the one identity input a wrapper is uniquely qualified to supply: it
+# is the only layer that sees argv. A pipe instead of a TTY, or any of the
+# one-shot subcommands below, means this process has nothing to name — it will
+# be gone in a moment, and the codename it left behind would answer to nobody.
+# `kimi --help` stealing a Claude pane's window name is the report that opened
+# #95, and this is the check that closes it.
+KIMI_IDENTITY_MODE=interactive
 if [ ! -t 1 ] && [ "${HARNESS_KIMI_FORCE_INTERACTIVE_IDENTITY:-0}" != "1" ]; then
-    KIMI_IDENTITY_INTERACTIVE=0
+    KIMI_IDENTITY_MODE=one-shot
 fi
 for arg in "$@"; do
     case "$arg" in
         -h|--help|-V|--version|-p|--prompt|\
         export|provider|acp|web|server|login|doctor|vis|migrate|upgrade|update)
-            KIMI_IDENTITY_INTERACTIVE=0
+            KIMI_IDENTITY_MODE=one-shot
             ;;
     esac
 done
 
-if [ "$KIMI_IDENTITY_INTERACTIVE" = "1" ] \
-   && [ "${HARNESS_TMUX_SELF_NAME_DISABLE:-0}" != "1" ] \
-   && [ "${KIMI_TMUX_NAME_DISABLE:-0}" != "1" ] \
-   && [ "${HIPPOCAMPUS_TMUX_NAME_DISABLE:-0}" != "1" ]; then
-    setup_formation_identity
-fi
+# The kill switches are the core's business — it honours all six names for every
+# chassis, so GROK_TMUX_NAME_DISABLE now stops kimi too and vice versa. Calling
+# unconditionally keeps that in one place instead of re-listing a subset here.
+setup_formation_identity
 
 # NOTE: the BASH_ENV / PATH-shim Bash guard (issue #52) was removed — Kimi Code
 # CLI >= 0.28 has a native PreToolUse hook API, and install-kimi-hooks.sh wires
