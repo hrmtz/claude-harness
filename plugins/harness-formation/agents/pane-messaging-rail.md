@@ -18,8 +18,15 @@ The mailbox-first contract is:
 1. Prefer `formation msg <worker-id> <message>`. It appends an immutable
    mailbox row; the relay sets a badge/signal with **zero keystrokes** sent to
    the recipient prompt. `mailbox-send <pane> <body>` has the same safe
-   default. The mailbox row is the delivery guarantee; a signal is not a
-   receipt. Recipients run `formation inbox` at turn boundaries.
+   default. Worker `formation report/done/ask` and parent `ack/resolve` use the
+   same relay-or-direct signaling policy after their durable append. The
+   mailbox row is the delivery guarantee; a signal is not a receipt.
+   Recipients run `formation inbox` at turn boundaries.
+   Lifecycle senders return exit `4` only when the row/state is already durable
+   but a known pane could not be signaled. Do not automatically retry
+   `report`/`done` on that code; the retry would append a duplicate row. An
+   absent or unverified route is pull-only exit `0` and says
+   `signal=unavailable`.
 2. Never paste a body into a normal pane to wake it. An idle agent is not proof
    that its prompt is empty, and paste alone can merge with a human draft.
 3. Prompt injection is exceptional: only an explicitly exclusive worker may

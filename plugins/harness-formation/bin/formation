@@ -3,8 +3,9 @@
 #
 # A "worker" is a separate tmux pane running its own AI CLI (claude, codex, or kimi),
 # given a briefing file and an addressable id. Worker reports flow back via an
-# append-only jsonl mailbox. The parent pane (lead) polls `formation inbox`
-# when idle. Claude workers can additionally use Claude Code remote control;
+# append-only jsonl mailbox and a zero-keystroke pane signal when the spawn-time
+# parent route is verifiable. The parent also polls `formation inbox` when idle.
+# Claude workers can additionally use Claude Code remote control;
 # Codex workers remain reachable through tmux/mailbox (see remote-check).
 #
 # Intended for tasks that justify minutes-to-hours of wall time where Task
@@ -45,9 +46,12 @@ touch "$REGISTRY"
 
 self_id() {
   # Semantic identity must not depend on mutable window names or the
-  # standalone mailbox sender override. Without a locked Formation identity,
-  # the stable pane id is the only safe fallback for ASK authorization/cursors.
-  mailbox_resolve_sender "" "shell-$$" 0 0
+  # standalone mailbox sender override. Resolve the caller's actual pane by
+  # process ancestry so a stale inherited TMUX_PANE cannot split spawn routing
+  # from inbox/ACK authorization or badge clearing (#59).
+  local pane
+  pane="$(mailbox_resolve_caller_pane || true)"
+  TMUX_PANE="$pane" mailbox_resolve_sender "" "shell-$$" 0 0
 }
 
 registry_add() {
@@ -131,7 +135,8 @@ update_own_status() {
   local text="$1" row pane
   row="$(registry_get "$(self_id)")" || true
   [[ -n "$row" ]] || return 0
-  pane="$(echo "$row" | jq -r '.pane_id')"
+  pane="$(echo "$row" | jq -r '.pane_id // empty')"
+  [[ "$pane" =~ ^%[0-9]+$ ]] || return 0
   tmux set-option -p -t "$pane" @formation_status "${text:0:48}" 2>/dev/null || true
 }
 
@@ -388,8 +393,25 @@ cmd_spawn() {
     echo "worker already exists: $name" >&2; exit 2
   fi
 
-  local parent_id guard_path
-  parent_id="$(self_id)"
+  local parent_id parent_pane parent_pane_candidate guard_path
+  parent_pane_candidate="${TMUX_PANE:-}"
+  parent_pane="$(mailbox_resolve_caller_pane || true)"
+  if [[ -n "$parent_pane" ]]; then
+    # Bind semantic identity to the ancestry-proven pane, not to a stale
+    # inherited TMUX_PANE value.
+    parent_id="$(TMUX_PANE="$parent_pane" self_id)"
+    if [[ -n "$parent_pane_candidate" && "$parent_pane_candidate" != "$parent_pane" ]]; then
+      echo "formation: warning: ignored stale TMUX_PANE=$parent_pane_candidate; resolved caller pane=$parent_pane by process ancestry." >&2
+    fi
+  else
+    parent_pane=""
+    [[ -n "${FORMATION_SELF:-}" ]] || {
+      echo "formation: refusing spawn without an ancestry-proven parent pane or explicit FORMATION_SELF; replies would be unaddressable." >&2
+      return 2
+    }
+    parent_id="$FORMATION_SELF"
+    echo "formation: warning: no ancestry-proven parent pane; parent=$parent_id will use pull-only delivery." >&2
+  fi
   guard_path="$(resolve_cross_cli_guard)"
   # Generate a spawn-scoped UUID so mailbox entries from this worker are
   # distinguishable from a different session that happened to pick the same codename.
@@ -398,10 +420,12 @@ cmd_spawn() {
   if [[ "$placement" == "new-window" ]]; then
     pane_id="$(tmux new-window -d -P -F '#{pane_id}' -n "$(formation_window_name "$cli" "$name")" \
                 -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
+                -e "FORMATION_PARENT_PANE=$parent_pane" \
                 -e "FORMATION_SESSION_ID=$spawn_id")"
   else
     pane_id="$(tmux split-window -d -P -F '#{pane_id}' \
                 -e "FORMATION_SELF=$name" -e "FORMATION_PARENT=$parent_id" \
+                -e "FORMATION_PARENT_PANE=$parent_pane" \
                 -e "FORMATION_SESSION_ID=$spawn_id")"
   fi
 
@@ -433,9 +457,9 @@ cmd_spawn() {
 
   # Seed prompt shared by both CLIs.
   local seed
-  seed="Formation bootstrap. Your Formation identity is '$name' (routing id and self-reference; introduce yourself as '$name'). Parent pane id is '$parent_id'.
+  seed="Formation bootstrap. Your Formation identity is '$name' (routing id and self-reference; introduce yourself as '$name'). Parent routing id is '$parent_id'.
 Briefing: $briefing
-Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt before starting work. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies."
+Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt before starting work. If it exits 4, the row is already durable; do not resend it automatically. Memory MCP is shared with parent. Credentials go through SOPS only; the mailbox/msg paths hard-refuse credential-shaped bodies."
 
   if [[ "$cli" == "codex" ]]; then
     # Codex: pass seed as initial prompt argument.
@@ -601,16 +625,16 @@ cmd_msg() {
 }
 
 clear_mailbox_badge_through() {
-  local read_through="$1" self="$2" pane_alias="${3:-}"
-  [[ -n "${TMUX_PANE:-}" ]] || return 0
+  local read_through="$1" self="$2" pane_alias="${3:-}" pane_target="${4:-}"
+  [[ "$pane_target" =~ ^%[0-9]+$ ]] || return 0
   local lock_path
-  lock_path="$(mailbox_notify_lock_path "$TMUX_PANE")"
+  lock_path="$(mailbox_notify_lock_path "$pane_target")"
   (
     flock -x 201
     local pending
-    pending="$(tmux show-options -p -v -t "$TMUX_PANE" @formation_mail_pending 2>/dev/null || true)"
+    pending="$(tmux show-options -p -v -t "$pane_target" @formation_mail_pending 2>/dev/null || true)"
     if [[ "$pending" =~ ^[0-9]+$ && "$pending" -le "$read_through" ]]; then
-      tmux set-option -p -u -t "$TMUX_PANE" @formation_mail_pending 2>/dev/null \
+      tmux set-option -p -u -t "$pane_target" @formation_mail_pending 2>/dev/null \
         || echo "WARN: inbox read through seq=$read_through but mail badge could not be cleared" >&2
       # Row append happens before signaling. Under the same pane lock used by
       # every signaler, reconcile any row that arrived before/during clear;
@@ -622,7 +646,7 @@ clear_mailbox_badge_through() {
                    and ((.seq? | type) == "number") and .seq > $after)
           | .seq] | max // 0' "$MAILBOX_LOG" 2>/dev/null || echo 0)"
       if [[ "$newer" =~ ^[0-9]+$ && "$newer" -gt "$read_through" ]]; then
-        tmux set-option -p -t "$TMUX_PANE" @formation_mail_pending "$newer" 2>/dev/null \
+        tmux set-option -p -t "$pane_target" @formation_mail_pending "$newer" 2>/dev/null \
           || echo "WARN: newer unread mail seq=$newer exists but badge could not be restored" >&2
       fi
     fi
@@ -632,19 +656,24 @@ clear_mailbox_badge_through() {
 ensure_request_mailbox_message() {
   local from="$1" to="$2" marker="$3" body="$4"
   request_init
+  mailbox_init
   local notify_lock="$FORMATION_REQUEST_DIR/transport.lock"
   (
     flock -x 203
-    if jq -Rre --arg from "$from" --arg to "$to" --arg marker "$marker" '
+    local existing seq
+    existing="$(jq -Rrc --arg from "$from" --arg to "$to" --arg marker "$marker" '
         fromjson?
         | select(.from == $from and .to == $to
-                 and ((.body // "") | startswith($marker)))
-      ' "$MAILBOX_LOG" >/dev/null 2>&1; then
-      echo false
+                 and ((.body // "") | startswith($marker))
+                 and ((.seq? | type) == "number"))
+      ' "$MAILBOX_LOG" 2>/dev/null | tail -n1)"
+    if [[ -n "$existing" ]]; then
+      seq="$(printf '%s\n' "$existing" | jq -r '.seq')"
+      printf 'false %s\n' "$seq"
       return 0
     fi
-    mailbox_send "$from" "$to" "$body"
-    echo true
+    seq="$(mailbox_append "$from" "$to" "$body")"
+    printf 'true %s\n' "$seq"
   ) 203>"$notify_lock"
 }
 
@@ -655,7 +684,7 @@ cmd_status() {
   while IFS= read -r row; do
     local id pane cli task spawned age last ask ask_id ask_ts ask_age ask_text ask_count ask_parent
     id="$(echo "$row" | jq -r '.id')"
-    pane="$(echo "$row" | jq -r '.pane_id')"
+    pane="$(echo "$row" | jq -r '.pane_id // empty')"
     cli="$(echo "$row" | jq -r '.cli // "claude"')"
     task="$(echo "$row" | jq -r '.task // "-"')"
     spawned="$(echo "$row" | jq -r '.spawned // empty')"
@@ -698,10 +727,10 @@ cmd_status() {
     last="$(jq -r --arg id "$id" 'select(.from == $id) | .body' "$MAILBOX_LOG" 2>/dev/null \
             | tail -n1 | tr -d '\000-\037\177' || true)"
     last="${last:0:60}"
-    if [[ -z "$last" ]]; then
+    if [[ -z "$last" && "$pane" =~ ^%[0-9]+$ ]]; then
       last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1 || true)"
-      last="${last:-(pane closed)}"
     fi
+    last="${last:-(pane closed)}"
     printf '%-16s %-6s %-7s %-28s %-5s %s\n' "$id" "$pane" "[$cli]" "$task" "$age" "$last"
   done < "$REGISTRY"
 }
@@ -711,8 +740,9 @@ cmd_inbox() {
   if [[ "${1:-}" == "--history" ]]; then history=1; shift; fi
   [[ $# -eq 0 ]] || { echo "usage: formation inbox [--history]" >&2; return 2; }
   local self; self="$(self_id)"
-  local pane_alias=""
-  [[ -n "${TMUX_PANE:-}" ]] && pane_alias="pane-${TMUX_PANE#%}"
+  local pane_id pane_alias=""
+  pane_id="$(mailbox_resolve_caller_pane || true)"
+  [[ -n "$pane_id" ]] && pane_alias="pane-${pane_id#%}"
   local unread read_through unresolved
   unresolved="$(request_unresolved "" "$self" || true)"
   if [[ "$history" == "1" ]]; then
@@ -738,7 +768,7 @@ cmd_inbox() {
     local cursor=0
     [[ -f "$MAILBOX_CURSOR_DIR/$self.txt" ]] && cursor="$(cat "$MAILBOX_CURSOR_DIR/$self.txt" 2>/dev/null || echo 0)"
     [[ "$cursor" =~ ^[0-9]+$ ]] || cursor=0
-    [[ "$history" == "1" ]] || clear_mailbox_badge_through "$cursor" "$self" "$pane_alias"
+    [[ "$history" == "1" ]] || clear_mailbox_badge_through "$cursor" "$self" "$pane_alias" "$pane_id"
     [[ -n "$unresolved" ]] || echo "(empty)"
     return
   fi
@@ -774,7 +804,7 @@ cmd_inbox() {
   '
   if [[ "$history" != "1" ]]; then
     mailbox_mark_read "$self" "$read_through" "$pane_alias"
-    clear_mailbox_badge_through "$read_through" "$self" "$pane_alias"
+    clear_mailbox_badge_through "$read_through" "$self" "$pane_alias" "$pane_id"
   fi
 }
 
@@ -794,7 +824,7 @@ cmd_reap() {
   elif [[ -n "$unresolved" ]]; then
     echo "warn: force-reaping $worker_id with unresolved ASK state preserved in the request log" >&2
   fi
-  local pane_id; pane_id="$(echo "$row" | jq -r '.pane_id')"
+  local pane_id; pane_id="$(echo "$row" | jq -r '.pane_id // empty')"
 
   # Stop relay daemon first; otherwise it keeps inotifywait open on a
   # pane that is about to die.
@@ -815,7 +845,9 @@ cmd_reap() {
   fi
   rm -f "$relay_ready_file"
 
-  tmux kill-pane -t "$pane_id" 2>/dev/null || true
+  if [[ "$pane_id" =~ ^%[0-9]+$ ]]; then
+    tmux kill-pane -t "$pane_id" 2>/dev/null || true
+  fi
   registry_remove "$worker_id"
   rm -f "$MAILBOX_CURSOR_DIR/$worker_id.txt"
   echo "reaped $worker_id"
@@ -825,8 +857,12 @@ cmd_report() {
   [[ $# -ge 1 ]] || { echo "usage: formation report <text>" >&2; exit 2; }
   local from; from="$(self_id)"
   local to="${FORMATION_PARENT:-lead}"
-  mailbox_send "$from" "$to" "$*"
+  local seq signal_rc=0
+  seq="$(mailbox_append "$from" "$to" "$*")"
+  mailbox_signal_durable_row "$to" "${FORMATION_PARENT_PANE:-}" "$seq" "$from" \
+    "$FORMATION_DIR" >&2 || signal_rc=$?
   update_own_status "$*"
+  return "$signal_rc"
 }
 
 cmd_done() {
@@ -834,8 +870,12 @@ cmd_done() {
   local from; from="$(self_id)"
   local to="${FORMATION_PARENT:-lead}"
   local msg="[DONE] $*"
-  mailbox_send "$from" "$to" "$msg"
+  local seq signal_rc=0
+  seq="$(mailbox_append "$from" "$to" "$msg")"
+  mailbox_signal_durable_row "$to" "${FORMATION_PARENT_PANE:-}" "$seq" "$from" \
+    "$FORMATION_DIR" >&2 || signal_rc=$?
   update_own_status "✅ $*"
+  return "$signal_rc"
 }
 
 cmd_ask() {
@@ -856,16 +896,20 @@ cmd_ask() {
     refuse_credential ask "$from" "request refused"
     return 3
   fi
-  local created request_id msg
+  local created request_id msg notify_result notified seq signal_rc=0
   created="$(request_create "$from" "$to" "$question" "$next_state")"
   request_id="$(printf '%s\n' "$created" | jq -r '.request_id')"
   msg="[ASK request_id=$request_id] $question"
   # If a prior attempt created state but crashed before transport append, heal
   # that gap. Otherwise exact retries do not spam duplicate mailbox rows.
-  ensure_request_mailbox_message "$from" "$to" \
-    "[ASK request_id=$request_id]" "$msg" >/dev/null
+  notify_result="$(ensure_request_mailbox_message "$from" "$to" \
+    "[ASK request_id=$request_id]" "$msg")"
+  read -r notified seq <<<"$notify_result"
+  mailbox_signal_durable_row "$to" "${FORMATION_PARENT_PANE:-}" "$seq" "$from" \
+    "$FORMATION_DIR" >&2 || signal_rc=$?
   update_own_status "⏳ WAITING_PARENT $request_id"
   echo "$request_id"
+  return "$signal_rc"
 }
 
 cmd_request_transition() {
@@ -880,7 +924,8 @@ cmd_request_transition() {
     return 2
   fi
   local summary="${*:-acknowledged}" actor current parent worker result
-  local persisted_action persisted_summary state marker body notified row pane
+  local persisted_action persisted_summary state marker body notify_result
+  local notified notify_seq row pane signal_rc=0
   if is_credential_like "$summary"; then
     refuse_credential "$action" "$(self_id)" "request=$request_id summary refused"
     return 3
@@ -900,15 +945,22 @@ cmd_request_transition() {
   state="$(printf '%s\n' "$result" | jq -r '.state')"
   marker="[$(printf '%s' "$persisted_action" | tr '[:lower:]' '[:upper:]') request_id=$request_id]"
   body="$marker $persisted_summary"
-  notified="$(ensure_request_mailbox_message "$actor" "$worker" "$marker" "$body")"
+  notify_result="$(ensure_request_mailbox_message "$actor" "$worker" "$marker" "$body")"
+  read -r notified notify_seq <<<"$notify_result"
   row="$(registry_get "$worker" || true)"
+  pane=""
   if [[ -n "$row" ]]; then
-    pane="$(printf '%s\n' "$row" | jq -r '.pane_id')"
-    tmux set-option -p -t "$pane" @formation_status "$state" 2>/dev/null || true
+    pane="$(printf '%s\n' "$row" | jq -r '.pane_id // empty')"
+    if [[ "$pane" =~ ^%[0-9]+$ ]]; then
+      tmux set-option -p -t "$pane" @formation_status "$state" 2>/dev/null || true
+    fi
   fi
+  mailbox_signal_durable_row "$worker" "$pane" "$notify_seq" "$actor" \
+    "$FORMATION_DIR" >&2 || signal_rc=$?
   printf '%s\n' "$result" | jq -r \
     --arg notified "$notified" \
     '"request=\(.request_id) event=\(.event) state=\(.state) notified=\($notified)"'
+  return "$signal_rc"
 }
 
 cmd_ack() {

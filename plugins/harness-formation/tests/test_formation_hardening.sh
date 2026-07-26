@@ -297,7 +297,7 @@ echo "== inbox envelope control-char strip (#37) =="
 mailbox_init
 ESC=$'\033'; BEL=$'\007'; CR=$'\r'
 EVIL_BODY="line1${ESC}[2J${ESC}[31mRED${BEL}${CR}overwrite	tab 日本語"
-# Write directly (bypass mailbox_send redaction; we only test rendering here).
+# Write directly (bypass mailbox_append redaction; we only test rendering here).
 jq -cn --arg from "evil" --arg to "tester" --arg body "$EVIL_BODY" \
   '{seq:1, ts:"2026-06-27T00:00:00Z", from:$from, to:$to, body:$body, session_id:null}' \
   >> "$MAILBOX_LOG"
@@ -311,12 +311,13 @@ if printf '%s' "$RENDER" | LC_ALL=C grep -q "$CR"; then bad "CR leaked into rend
 # Reading clears only a badge covered by the rendered snapshot. A newer badge
 # must survive, representing a message that arrived while inbox was rendering.
 echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
-TMUX_PANE="%fixture"
+TMUX_PANE="%777"
 TMUX_TEST_LOG="$TMPDIR_T/tmux-badge.log"
 TMUX_PENDING_SEQ=1
 TMUX_RACE_ON_CLEAR=0
 tmux() {
   case "${1:-}" in
+    list-panes) printf '%%777|%s\n' "$$" ;;
     show-options) printf '%s\n' "$TMUX_PENDING_SEQ" ;;
     set-option)
       printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
@@ -329,7 +330,7 @@ tmux() {
 }
 : > "$TMUX_TEST_LOG"
 cmd_inbox >/dev/null
-if grep -Fq 'set-option -p -u -t %fixture @formation_mail_pending' "$TMUX_TEST_LOG"; then
+if grep -Fq 'set-option -p -u -t %777 @formation_mail_pending' "$TMUX_TEST_LOG"; then
   ok "inbox clears a badge covered by the rendered snapshot"
 else
   bad "inbox left its rendered badge permanently set"
@@ -342,7 +343,7 @@ TMUX_PENDING_SEQ=1
 TMUX_RACE_ON_CLEAR=1
 : > "$TMUX_TEST_LOG"
 cmd_inbox >/dev/null
-if grep -Fq 'set-option -p -t %fixture @formation_mail_pending 2' "$TMUX_TEST_LOG"; then
+if grep -Fq 'set-option -p -t %777 @formation_mail_pending 2' "$TMUX_TEST_LOG"; then
   ok "inbox restores a newer badge that raced with clear"
 else
   bad "inbox lost a newer badge during clear race"
@@ -366,7 +367,7 @@ fi
 # with a codename must still pull its current pane alias into the same cursor.
 : > "$MAILBOX_LOG"
 echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
-jq -cn '{seq:7, ts:"2026-07-26T00:00:00Z", from:"legacy-sender", to:"pane-fixture", body:"pane alias body", session_id:null}' \
+jq -cn '{seq:7, ts:"2026-07-26T00:00:00Z", from:"legacy-sender", to:"pane-777", body:"pane alias body", session_id:null}' \
   >> "$MAILBOX_LOG"
 TMUX_PENDING_SEQ=7
 ALIAS_RENDER="$(cmd_inbox)"

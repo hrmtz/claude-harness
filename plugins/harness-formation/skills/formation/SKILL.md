@@ -167,7 +167,8 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   `formation report "<1-line status>"`
 - When a decision exceeds its boundary:
   `formation ask "<question>"` — creates a durable opaque request id, marks
-  the worker `WAITING_PARENT`, and writes the ASK to the lead's mailbox.
+  the worker `WAITING_PARENT`, writes the ASK to the lead's mailbox, and
+  non-destructively signals the parent pane recorded at spawn.
   Use `--next-state READY_TO_MERGE` (or another uppercase state) when a
   resolution should transition somewhere other than `RUNNING`. The lead must
   close it with `formation ack <request-id> [summary]` or
@@ -182,7 +183,17 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
 - On completion:
-  `formation done "<summary>"` — mailbox.
+  `formation done "<summary>"` — durable mailbox append plus the same
+  zero-keystroke parent signal. `formation report` uses this route too.
+  Spawn resolves the parent pane from process ancestry, not by trusting a
+  possibly inherited `TMUX_PANE`; without a proven pane or an explicit
+  `FORMATION_SELF`, it refuses to create an unaddressable worker.
+  If `report` / `done` / `ask` / `ack` / `resolve` exits `4`, its row or
+  semantic transition is already durable but a known pane could not be
+  signaled. Do not automatically resend `report` or `done` (that would append
+  duplicates); the recipient will still pull the row with `formation inbox`.
+  A missing or unverified pane route degrades to pull-only exit `0` with
+  `signal=unavailable`.
 
 ### 5. Remote intervention path
 

@@ -64,10 +64,6 @@ mailbox_append() {
   ) 200>"$MAILBOX_LOCK"
 }
 
-mailbox_send() {
-  mailbox_append "$@" >/dev/null
-}
-
 mailbox_read() {
   local self="$1"
   local pane_alias="${2:-}"

@@ -93,7 +93,19 @@ ASKs are durable semantic state, stored separately from mailbox transport.
 `formation ask` returns a request id and makes the worker `WAITING_PARENT`;
 the parent closes it explicitly with `formation ack` or `formation resolve`.
 `formation status` keeps unresolved requests visible after later reports, and
-`formation reap` refuses them unless `--force` is explicit.
+`formation reap` refuses them unless `--force` is explicit. Spawn also passes
+the parent's pane route separately from its semantic identity: worker
+`report`/`done`/`ask` and parent `ack`/`resolve` all append first, then use the
+same zero-keystroke relay-or-direct signal policy. A dead relay therefore does
+not silently remove the badge fallback, and the body never enters a prompt.
+The parent pane is discovered by process ancestry rather than trusting
+`TMUX_PANE`; stale/inherited sibling ids are ignored. Spawn fails closed when
+it can prove neither a real parent pane nor an explicit `FORMATION_SELF`,
+because replies would otherwise be unaddressable.
+Lifecycle commands return exit `4` when the row/state is durable but a known
+pane could not be signaled. Do not automatically retry `report` or `done` on
+that code—the retry would append a duplicate row. A missing or unverified pane
+route is pull-only and remains exit `0`, with `signal=unavailable` on stderr.
 
 ## Migration from legacy standalone formation
 
