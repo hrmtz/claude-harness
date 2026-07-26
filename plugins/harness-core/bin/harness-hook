@@ -47,8 +47,16 @@ script="$plugin_root/$relative_script"
   exit 127
 }
 
-export PLUGIN_ROOT="$plugin_root"
+# CLAUDE_PLUGIN_ROOT is what hooks.json commands interpolate, so this dispatcher
+# owns it. PLUGIN_ROOT is different: two codex-only adapters read it as "am I
+# running as a native Codex plugin?", and this dispatcher runs on every chassis.
+# Inventing it made every Claude session look like a Codex plugin host, which
+# routed Claude's SessionStart into the codex identity adapter and left Claude
+# panes unnamed (#177). Pass it through when a real plugin host set it; never
+# fabricate it.
+[ -n "${PLUGIN_ROOT:-}" ] && export PLUGIN_ROOT
 export CLAUDE_PLUGIN_ROOT="$plugin_root"
+export HARNESS_PLUGIN_ROOT="$plugin_root"
 
 case "$script" in
   *.sh) exec bash "$script" "$@" ;;

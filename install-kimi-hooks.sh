@@ -128,7 +128,8 @@ for item in overlay["hooks"]:
         matcher = None
     timeout = max(1, min(600, int(timeout)))  # Kimi clamps to 1–600
     runner = "python3" if path_token.endswith(".py") else "bash"
-    cmd = f"{runner} {plugins_dir}/{path}"
+    # Same rail as the codex and grok installers: state the chassis (#177).
+    cmd = f"HARNESS_CHASSIS=kimi {runner} {plugins_dir}/{path}"
     entries.append((event, matcher, cmd, timeout))
 
 # Assemble the marker block.

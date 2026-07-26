@@ -120,7 +120,9 @@ for (event, matcher), entries in groups.items():
     if matcher:
         block["matcher"] = matcher
     block["hooks"] = [
-        {"type": "command", "command": cmd, "timeout": timeout}
+        # Same rail as the codex installer: the host states its chassis rather
+        # than leaving hooks to infer it from PLUGIN_ROOT (#177).
+        {"type": "command", "command": f"HARNESS_CHASSIS=grok {cmd}", "timeout": timeout}
         for cmd, timeout in entries
     ]
     events.setdefault(event, []).append(block)
