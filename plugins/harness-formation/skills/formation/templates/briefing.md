@@ -15,7 +15,12 @@
   why this task exists, constraints the lead already considered}}
 
 ## Inputs
-- Working directory: {{inherited from lead pane unless overridden}}
+- Working directory: {{absolute path — state it, do not leave it inherited}}
+  > Say where the work happens and have the worker `cd` there in its first
+  > command. Inheriting the lead's cwd has grounded reviewers in the wrong
+  > checkout twice (#57, #139): the run looked healthy while the target repo's
+  > source and tests were absent from the workspace. If the task uses a
+  > worktree, name the worktree path and the branch here.
 - Key files: {{paths}}
 - External resources: {{URLs, API endpoints}}
 - Credentials (SOPS-only, never inline):

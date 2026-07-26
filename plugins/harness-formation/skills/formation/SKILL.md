@@ -90,10 +90,53 @@ Default assignment, unless the task argues otherwise:
 
 | Work | CLI | Why |
 |---|---|---|
-| Long-running **implementation** worker | **codex** | The default for hours-long autonomous build/fix work. A codex worker ran 4h21m and landed five issues in one session. |
-| **Coordination, design, judgement**, and the session you are in | claude | Where conversational quality and cross-repo judgement pay for themselves. |
+| Long-running **implementation** worker, and the orchestrator of an implementation campaign | **codex** | See below — this is the load-bearing assignment. |
+| **Coordination across repos, design, and questioning a premise** | claude | See below. |
 | **Large-diff / whole-document review**, full-path traces | kimi | 1M context takes a whole doc or a wide diff in one pass. Note its window is ~5h rolling, not weekly — good for bounded review bursts, poor for a multi-hour trunk. |
 | Cheap **independent verdict** | grok | `--no-subagents --max-turns 20` headless. Not quota-tracked; treat as a free second opinion, not a workhorse. |
+
+#### What the record shows about Claude vs Codex
+
+Two measured periods, not impressions.
+
+**2026-07-23 to 07-25** ran almost entirely on Codex — eight codex workers, two
+kimi, zero claude (archived registry). They were handed bounded issues to finish
+end to end (#107, #116, #121, #127, plus #50/#57 in a sweep) and **all six closed
+the same day**. The commits were not small: Deja Review Slice 0 landed 6,294
+lines across 5 files, the fan-out failure-classification fix 688 lines across 11.
+The target was usually magi's own internals — convergence gates, fan-out, schema
+preflight — i.e. intricate existing machinery, not greenfield. One of those
+workers, `applier-magi`, was spawned explicitly as *the orchestrator of the full
+ultramagi loop*. On 2026-07-26 a codex orchestrator ran 4h21m, spawned and reaped
+nine workers, routed review briefs to claude/kimi/grok reviewers, and handed off
+five merged PRs.
+
+So: **Codex finishes bounded work, sustains long autonomous runs, operates
+comfortably inside intricate existing code, and can hold the orchestrator seat.**
+Give it a defined entry and exit and it will get there.
+
+Its recorded blind spot is **the context it is itself running in.** #57 and #139
+are the same defect twice: `magi_fanout_codex.sh` launched reviewers with the
+harness checkout as their working directory, so the target repository's source
+and tests were absent from the reviewer's workspace — the review looked healthy
+and was grounded in the wrong tree. It surfaced only because a reviewer reported
+`schema_grounding_verdict=PARTIAL`. **Therefore: pin the execution context
+explicitly in every codex briefing** — worktree path, target repository, and an
+instruction to `cd` there first. Do not leave it to be inherited.
+
+Claude's complementary strength is the other half of that: **noticing that a
+premise is wrong.** #177 — the dispatcher inferring its chassis from an
+environment variable rather than being told — was found by reading a worker's
+report and asking why the shape was like that at all; #139 likewise came from
+reading a reviewer's verdict rather than from the run itself. Conversely, when a
+Claude-authored design was reviewed, it was the **Codex** reviewer that caught its
+runtime behaviour (a shell assignment prefix scopes to one simple command, so a
+chassis stamp never reached the compound commands it was meant for) after it had
+already passed same-family review, an independent coordinator check, and CI.
+
+The short form: **Codex is stronger on what the code will actually do; Claude is
+stronger on whether it should be shaped that way at all.** Route accordingly, and
+keep both on anything that matters.
 
 Cross-family review stays mandatory regardless of who implements: at least one
 reviewer from a different family than the author. That rule is about correctness,
