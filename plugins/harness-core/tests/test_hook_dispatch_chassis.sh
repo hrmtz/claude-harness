@@ -142,15 +142,67 @@ case "$OUT" in
     *)    bad "and still no-ops with neither signal present" "$OUT" ;;
 esac
 
-# ── the installers state the chassis rather than leaving it inferred ─────────
-for pair in "install-codex-hooks.sh:codex" "install-grok-hooks.sh:grok" "install-kimi-hooks.sh:kimi"; do
-    f="${pair%%:*}"; c="${pair##*:}"
-    if grep -q "HARNESS_CHASSIS=$c" "$ROOT/$f"; then
-        ok "$f stamps HARNESS_CHASSIS=$c on the commands it writes"
+# ── the stamp has to survive the command it is attached to ──────────────────
+# Grepping an installer for the literal stamp is what the first version of this
+# suite did, and it passed while the value was dynamically absent at the
+# adapter: `HARNESS_CHASSIS=codex <cmd>` is an assignment prefix, scoped to the
+# first simple command, and every generated command is compound. So execute a
+# stamped command and ask what the *last* thing in the chain saw.
+for chassis in codex grok kimi; do
+    STAMPED=$(python3 -c "
+import sys; sys.path.insert(0, '$ROOT/scripts/lib')
+import chassis_stamp
+print(chassis_stamp.stamp('test -x /bin/true && grep -q nomatch /dev/null || printf \"\"; printf %s \"\${HARNESS_CHASSIS:-UNSET}\"', '$chassis'))
+")
+    SEEN=$(sh -lc "$STAMPED" 2>/dev/null)
+    check "a compound $chassis command still carries the chassis to its last command" "$chassis" "$SEEN"
+done
+
+# The real generated shape, taken from the SSOT rather than invented here.
+REAL_CMD=$(python3 -c "
+import json, sys
+h = json.load(open('$ROOT/plugins/harness-core/hooks/hooks.json'))
+for blocks in h['hooks'].values():
+    for blk in blocks:
+        for hook in blk.get('hooks', []):
+            c = hook['command']
+            if '||' in c or ';' in c:
+                print(c); raise SystemExit
+")
+if [ -n "$REAL_CMD" ]; then
+    STAMPED=$(python3 -c "
+import sys; sys.path.insert(0, '$ROOT/scripts/lib')
+import chassis_stamp
+print(chassis_stamp.stamp('printf %s \"\${HARNESS_CHASSIS:-UNSET}\" >&2; true', 'codex'))
+")
+    SEEN=$(sh -lc "$STAMPED" 2>&1 >/dev/null)
+    check "a real compound command from hooks.json keeps the chassis" "codex" "$SEEN"
+else
+    bad "found a compound command in hooks.json to test against" "none matched"
+fi
+
+# The installers must go through the shared helper, not re-invent a prefix.
+for f in install-codex-hooks.sh install-grok-hooks.sh install-kimi-hooks.sh; do
+    if grep -q "chassis_stamp.stamp(" "$ROOT/$f"; then
+        ok "$f stamps through the shared helper"
     else
-        bad "$f stamps HARNESS_CHASSIS=$c on the commands it writes" "no stamp found"
+        bad "$f stamps through the shared helper" "rolled its own prefix again"
+    fi
+    if grep -qE 'HARNESS_CHASSIS=[a-z]+ \{?[a-z]' "$ROOT/$f"; then
+        bad "$f avoids a bare assignment prefix" "found one — it scopes to the first simple command only"
+    else
+        ok "$f avoids a bare assignment prefix"
     fi
 done
+
+# ── the direct fallback must still find the codex adapter ───────────────────
+# Config-layer hooks get no plugin-root injection, so this path runs with both
+# root variables empty.
+P=$(new_pane direct-fallback)
+run_chain "$P" "HARNESS_IDENTITY_SENTINEL_DIR=$HARNESS_IDENTITY_SENTINEL_DIR HARNESS_CHASSIS=codex" \
+    env -u PLUGIN_ROOT -u CLAUDE_PLUGIN_ROOT bash "$WRAPPER" || bad "direct fallback timed out" ""
+S=$(pane_state "$P")
+check "an explicit codex chassis reaches the adapter with no plugin root set" "codex" "${S#*|}"
 
 echo
 echo "─────────────────────────────────────────"

@@ -220,6 +220,7 @@ for spec in specs:
     groups.setdefault((event, matcher), []).append((hook, timeout, command))
 sys.path.insert(0, f"{harness_dir}/scripts/lib")
 from cross_cli_externals import resolve  # noqa: E402
+import chassis_stamp  # noqa: E402
 for ext in resolve(overlay_path, "codex", harness_dir):
     groups.setdefault((ext["event"], None), []).append(
         (None, ext["timeout"], ext["command"]))
@@ -240,11 +241,11 @@ for (event, matcher), entries in groups.items():
             plugin_root = f"{plugins_dir}/{plugin}"
             command = entry[2].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
             timeout = entry[1]
-        # Every command this installer emits runs under Codex, and the hooks it
-        # points at have to know that. Inferring the chassis from PLUGIN_ROOT
-        # made every Claude session look like a Codex plugin host (#177), so the
-        # host states it instead of leaving it to be guessed.
-        command = f"HARNESS_CHASSIS=codex {command}"
+        # The host states its chassis rather than leaving it inferred from
+        # PLUGIN_ROOT (#177). Stamping goes through the shared helper because an
+        # assignment prefix only reaches the first simple command and every
+        # command here is compound — that scoping bug shipped once already.
+        command = chassis_stamp.stamp(command, "codex")
         print(f"\n[[hooks.{event}.hooks]]")
         print('type = "command"')
         print(f"command = {json.dumps(command)}")

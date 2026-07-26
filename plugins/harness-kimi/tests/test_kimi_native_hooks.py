@@ -177,6 +177,12 @@ class TestInstaller(unittest.TestCase):
         repo = self.tmp / "repo"
         repo.mkdir()
         shutil.copy2(INSTALLER, repo / "install-kimi-hooks.sh")
+        # The generator imports the shared chassis stamp helper (#177), so a
+        # synthetic repo has to carry it: the installer's dependencies are part
+        # of the contract this fixture stands in for.
+        lib = repo / "scripts" / "lib"
+        lib.mkdir(parents=True)
+        shutil.copy2(REPO / "scripts" / "lib" / "chassis_stamp.py", lib / "chassis_stamp.py")
         plugins = repo / "plugins"
         plugins.mkdir(parents=True)
         shutil.copy2(

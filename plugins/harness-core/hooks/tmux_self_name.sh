@@ -20,7 +20,18 @@ SESSION_ID=$(echo "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || tr
 # PLUGIN_ROOT remains an accepted signal for a genuine plugin host that has not
 # been taught the explicit one; harness-hook no longer fabricates it.
 HARNESS_CHASSIS="${HARNESS_CHASSIS:-}"
-CODEX_ADAPTER="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}/hooks/codex_tmux_self_name.sh"
+# Config-layer hooks get no plugin-root injection, so on the direct fallback
+# path (harness-hook absent or failing its id check) both root variables are
+# empty and the adapter path degraded to "/hooks/codex_tmux_self_name.sh" — an
+# explicit codex chassis then produced no codex identity at all. This file sits
+# beside the adapter in every layout, so resolve from here when no host said.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ADAPTER_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -n "$ADAPTER_ROOT" ] && [ -x "$ADAPTER_ROOT/hooks/codex_tmux_self_name.sh" ]; then
+    CODEX_ADAPTER="$ADAPTER_ROOT/hooks/codex_tmux_self_name.sh"
+else
+    CODEX_ADAPTER="$HERE/codex_tmux_self_name.sh"
+fi
 if { [ "$HARNESS_CHASSIS" = "codex" ] || { [ -z "$HARNESS_CHASSIS" ] && [ -n "${PLUGIN_ROOT:-}" ]; }; } \
    && [ -x "$CODEX_ADAPTER" ]; then
     printf '%s' "$HOOK_INPUT" | bash "$CODEX_ADAPTER"
