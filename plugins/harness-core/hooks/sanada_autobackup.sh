@@ -23,6 +23,7 @@
 
 umask 077
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/credential_patterns.sh"
 
 # Cross-CLI: parse_tool_command reads Claude/Codex `.tool_input.command` AND Grok
 # `.toolInput.command` — else the backup insurance silently no-ops under Grok.
@@ -81,6 +82,15 @@ _backup() {   # $1 = path to snapshot if it exists, named (no glob), size/time-b
     case "$p" in *[\*\?\[\]\{\}\$\~\`]*) return 0 ;; esac        # skip glob/expansion
     case "$p" in *..*) return 0 ;; esac                          # skip `..` (codex #35-2: cp --parents ../x escapes BK_DIR)
     [ -e "$p" ] || return 0
+    # Issue #155: deletion/overwrite cannot eradicate a leaked value if this
+    # hook recreates the plaintext in its persistent backup. Scan with the same
+    # catalog as the transcript scrubber and fail closed on scan errors. Log the
+    # path only; matched values never leave credential_path_has_shape's pipe.
+    safe_p=$(credential_redact_text "$p")
+    if [ "$safe_p" != "$p" ] || credential_path_has_shape "$p"; then
+        hook_log "sanada_autobackup" "credential-shaped target: backup suppressed: $safe_p"
+        return 0
+    fi
     _ensure_dir || return 0
     _cap_reached && { hook_log "sanada_autobackup" "cap: >=$MAX_FILES files, skip $p"; return 0; }
     local rem cap; rem=$(_remaining)
