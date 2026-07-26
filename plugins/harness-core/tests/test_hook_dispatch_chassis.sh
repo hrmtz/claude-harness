@@ -195,6 +195,18 @@ for f in install-codex-hooks.sh install-grok-hooks.sh install-kimi-hooks.sh; do
     fi
 done
 
+# ── the drift checker has to understand the stamp ───────────────────────────
+# Stamping changes every generated command, so a checker comparing live config
+# against the overlay reads a whole managed block as missing-and-extra once an
+# installer is re-run. A gate that is always red gets ignored, and then the
+# drift it was watching for arrives unobserved — the #177 lesson one level over.
+UNSTAMPED=$(printf 'export HARNESS_CHASSIS=codex; bash /x/y.sh\nHARNESS_CHASSIS=grok bash /a/b.sh\nbash /plain.sh\n' \
+    | python3 "$ROOT/scripts/lib/chassis_stamp.py" --unstamp | tr '\n' '|')
+check "unstamp reverses both the current and the previous stamp forms" \
+    "bash /x/y.sh|bash /a/b.sh|bash /plain.sh|" "$UNSTAMPED"
+UNSTAMP_SITES=$(grep -c -- '--unstamp' "$ROOT/scripts/check_cross_cli_hooks.sh")
+check "the drift checker normalises all three CLI sections" "3" "$UNSTAMP_SITES"
+
 # ── the direct fallback must still find the codex adapter ───────────────────
 # Config-layer hooks get no plugin-root injection, so this path runs with both
 # root variables empty.
