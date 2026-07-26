@@ -107,6 +107,7 @@ for hook in overlay["hooks"]:
         (f"{runner} {plugins_dir}/{hook}", timeout))
 sys.path.insert(0, f"{harness_dir}/scripts/lib")
 from cross_cli_externals import resolve  # noqa: E402
+import chassis_stamp  # noqa: E402
 for ext in resolve(overlay_path, "grok", harness_dir):
     event = ext["event"]
     matcher = None if event in LIFECYCLE else ext["matcher"]
@@ -120,9 +121,9 @@ for (event, matcher), entries in groups.items():
     if matcher:
         block["matcher"] = matcher
     block["hooks"] = [
-        # Same rail as the codex installer: the host states its chassis rather
-        # than leaving hooks to infer it from PLUGIN_ROOT (#177).
-        {"type": "command", "command": f"HARNESS_CHASSIS=grok {cmd}", "timeout": timeout}
+        # Same rail as the codex installer, through the same helper so the
+        # assignment-prefix scoping bug cannot be reintroduced per-installer.
+        {"type": "command", "command": chassis_stamp.stamp(cmd, "grok"), "timeout": timeout}
         for cmd, timeout in entries
     ]
     events.setdefault(event, []).append(block)
