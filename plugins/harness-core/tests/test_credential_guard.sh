@@ -76,6 +76,7 @@ expect_allow() { if guard_blocks "$1"; then bad "should ALLOW: $2 -> [$1]"; else
 flat_sops_file="$TEST_ROOT/flat.enc.yaml"
 nested_sops_file="$TEST_ROOT/nested.enc.yaml"
 list_sops_file="$TEST_ROOT/list.enc.yaml"
+alias_sops_file="$TEST_ROOT/alias.enc.yaml"
 printf '%s\n' \
     'API_TOKEN: ENC[AES256_GCM,data:synthetic-flat,type:str]' \
     'sops:' \
@@ -91,6 +92,11 @@ printf '%s\n' \
     'sops:' \
     '  version: 3.9.4' > "$list_sops_file"
 ln -s "$flat_sops_file" "$TEST_ROOT/symlink.enc.yaml"
+printf '%s\n' \
+    'API_TOKEN: &synthetic ENC[AES256_GCM,data:synthetic-anchor,type:str]' \
+    'API_TOKEN_COPY: *synthetic' \
+    'sops:' \
+    '  version: 3.9.4' > "$alias_sops_file"
 
 # --- #6: DSN-with-creds-in-argv ---
 expect_block 'psql postgresql://prs:s3cr3tpw@mars:5434/db -tAc "select 1"' '#6 password DSN in psql argv'
@@ -110,6 +116,11 @@ expect_block 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#108 read ACK
 # --- #156: sops exec-env complex-type errors can print decrypted values ---
 expect_allow "sops exec-env '$flat_sops_file' '/usr/bin/true'" '#156 flat SOPS mapping'
 expect_allow "sops exec-env --pristine '$flat_sops_file' '/usr/bin/true'" '#156 flat mapping with exec-env option'
+expect_allow "sops exec-env --background '$flat_sops_file' '/usr/bin/true'" '#156 --background flag'
+expect_allow "sops exec-env --user nobody '$flat_sops_file' '/usr/bin/true'" '#156 --user value flag'
+expect_allow "sops exec-env --user=nobody '$flat_sops_file' '/usr/bin/true'" '#156 --user=value flag'
+expect_allow "sops exec-env --enable-local-keyservice '$flat_sops_file' '/usr/bin/true'" '#156 keyservice boolean flag'
+expect_allow "sops exec-env --keyservice tcp://localhost:5000 '$flat_sops_file' '/usr/bin/true'" '#156 keyservice value flag'
 expect_block "sops exec-env '$nested_sops_file' '/usr/bin/true'" '#156 nested SOPS mapping'
 expect_block "sops exec-env '$list_sops_file' '/usr/bin/true'" '#156 top-level list value'
 expect_block "sops exec-env '$TEST_ROOT/missing.enc.yaml' '/usr/bin/true'" '#156 unreadable target fails closed'
@@ -122,13 +133,22 @@ done
 expect_block "$wrapped_nested" '#156 four shell wrappers cannot hide nested target'
 expect_block "sops ex\"ec-env\" '$nested_sops_file' /usr/bin/true" '#156 quote-spliced subcommand'
 expect_block "sops \$'exec-env' '$nested_sops_file' /usr/bin/true" '#156 ANSI-C quoted subcommand'
+expect_block "bash -c 'sops ex\"ec-env\" \"$nested_sops_file\" /usr/bin/true'" '#156 quote splice inside shell body'
+expect_block "bash -c \"sops \$'exec-env' '$nested_sops_file' /usr/bin/true\"" '#156 ANSI-C subcommand inside shell body'
+expect_block "sops exec-env '$flat_sops_file' 'sops exec-env \"$nested_sops_file\" /usr/bin/true'" '#156 inner exec-env nested target'
 expect_block "cp '$nested_sops_file' '$flat_sops_file'; sops exec-env '$flat_sops_file' /usr/bin/true" '#156 compound replacement denied'
 expect_block "sops exec-env '$TEST_ROOT/symlink.enc.yaml' /usr/bin/true" '#156 absent/symlink target fails closed'
 large_sops_file="$TEST_ROOT/large.enc.yaml"
 truncate -s 1048577 "$large_sops_file"
 expect_block "sops exec-env '$large_sops_file' /usr/bin/true" '#156 target above 1 MiB ceiling'
+expect_block "sops exec-env '$alias_sops_file' /usr/bin/true" '#156 anchors/aliases rejected before load'
 expect_block '"$SOPS" exec-env "$SOPS_FILE" /usr/bin/true' '#156 dynamic executable/subcommand fails closed'
 expect_allow 'echo "sops exec-env is the supported form"' '#156 prose does not require YAML inspection'
+expect_allow 'echo sops exec-env is the supported form' '#156 unquoted prose does not look like an invocation'
+expect_allow 'git add sops' '#156 ordinary sops-named operand'
+expect_allow "sops edit '$flat_sops_file'" '#156 sops edit remains available'
+expect_allow "sops exec-env '$flat_sops_file' 'env | cut -d= -f1 | grep -Fxq API_TOKEN && echo present'" '#156 documented key-only check'
+expect_allow "sops exec-env '$flat_sops_file' '[ -n \"\$API_TOKEN\" ] && echo present'" '#156 documented boolean check'
 
 bash_guard_failure_fails_closed() {
     local payload="$1" command_name="${2:-}" tmp_home fake_bin out rc

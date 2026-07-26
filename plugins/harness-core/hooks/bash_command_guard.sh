@@ -95,13 +95,22 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 #   11 target/path/YAML could not be inspected safely (fail closed)
 classify_sops_exec_env_targets() {
     [[ "$DEOBF" == *sops* || "$DEOBF" == *exec-env* ]] || return 0
-    python3 - "$CMD" 2>/dev/null <<'PY'
+    # `sops edit` never decrypts into the process environment and needs no
+    # structure classification. Keep that remediation usable if PyYAML is
+    # unavailable. Any command that also contains exec-env takes the slow path.
+    if [[ "$DEOBF" != *exec-env* ]] \
+       && [[ "$DEOBF" =~ (^|[[:space:]])([^[:space:]]*/)?sops[[:space:]]+edit([[:space:]]|$) ]]; then
+        return 0
+    fi
+    python3 - "$SCRUBBED" 2>/dev/null <<'PY'
 import os
+import re
 import shlex
 import stat
 import sys
 
 import yaml
+from yaml.tokens import AliasToken, AnchorToken
 
 cmd = sys.argv[1]
 nested = False
@@ -126,6 +135,29 @@ def tokenize(command):
     lexer.commenters = ""
     return list(lexer)
 
+def command_segment_start(tokens, index):
+    cursor = index
+    while cursor > 0 and tokens[cursor - 1] not in control_tokens:
+        cursor -= 1
+    return cursor
+
+def is_command_position(tokens, index):
+    start = command_segment_start(tokens, index)
+    if index == start:
+        return True
+    prefix = tokens[start:index]
+    assignment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+    if all(assignment.match(token) for token in prefix):
+        return True
+    if prefix and os.path.basename(prefix[0]) in {
+        "command", "env", "exec", "nohup", "sudo", "timeout"
+    }:
+        return all(
+            token.startswith("-") or assignment.match(token)
+            for token in prefix[1:]
+        )
+    return False
+
 def inspect_command(command, depth=0):
     global nested, unsupported, target_count
     try:
@@ -141,7 +173,7 @@ def inspect_command(command, depth=0):
             index >= 2
             and tokens[index - 1] in {"-c", "-lc", "-ic"}
             and os.path.basename(tokens[index - 2]) in shells
-            and "exec-env" in token
+            and is_command_position(tokens, index - 2)
         ):
             if depth >= MAX_SHELL_DEPTH:
                 unsupported = True
@@ -149,7 +181,7 @@ def inspect_command(command, depth=0):
                 inspect_command(token, depth + 1)
 
     for index, token in enumerate(tokens):
-        if os.path.basename(token) != "sops":
+        if os.path.basename(token) != "sops" or not is_command_position(tokens, index):
             continue
         if index + 1 >= len(tokens):
             unsupported = True
@@ -217,7 +249,18 @@ def inspect_command(command, depth=0):
                 unsupported = True
                 continue
             with os.fdopen(descriptor, encoding="utf-8") as handle:
-                document = yaml.safe_load(handle)
+                source = handle.read()
+            yaml_tokens = 0
+            for yaml_token in yaml.scan(source):
+                yaml_tokens += 1
+                if yaml_tokens > 10000 or isinstance(
+                    yaml_token, (AnchorToken, AliasToken)
+                ):
+                    unsupported = True
+                    break
+            if unsupported:
+                continue
+            document = yaml.safe_load(source)
             after = os.stat(target, follow_symlinks=False)
             if (
                 (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
@@ -237,11 +280,27 @@ def inspect_command(command, depth=0):
         ):
             nested = True
 
+        # sops passes its command argument to a shell. Treat that argument as
+        # another bounded shell body so an allowed flat outer target cannot
+        # carry an unclassified nested invocation.
+        if cursor + 1 < len(tokens):
+            inner = tokens[cursor + 1]
+            if depth >= MAX_SHELL_DEPTH:
+                if "sops" in inner or "exec-env" in inner:
+                    unsupported = True
+            else:
+                inspect_command(inner, depth + 1)
+
     # Dynamic executable construction must not turn exec-env into an orphan
     # token that escapes the direct `sops` scan above.
     for index, token in enumerate(tokens):
         if token == "exec-env" and (
-            index == 0 or os.path.basename(tokens[index - 1]) != "sops"
+            index == 0
+            or (
+                os.path.basename(tokens[index - 1]) != "sops"
+                and any(char in tokens[index - 1] for char in dynamic_chars)
+                and is_command_position(tokens, index - 1)
+            )
         ):
             unsupported = True
 

@@ -132,8 +132,8 @@ sops exec-env <file> '<cmd>'      # 使用時 (subprocess の env に注入、st
 | やりたい事 | ❌ 違反 | ✅ 正解 |
 |---|---|---|
 | ファイル構造見たい | `sops -d file \| head` | `sops exec-env file 'env \| cut -d= -f1 \| sort'` |
-| 特定 key 存在確認 | `sops -d file \| grep KEY` | `sops exec-env file 'env \| grep -c KEY'` (件数のみ) |
-| 値 verify (bool 判定) | `echo $KEY` | `sops exec-env file 'python3 -c "import os; print(bool(os.environ.get(\"KEY\")))"'` |
+| 特定 key 存在確認 | `sops -d file \| grep KEY` | `sops exec-env file 'env \| cut -d= -f1 \| grep -Fxq KEY && echo present'` |
+| 値 verify (bool 判定) | `echo $KEY` | `sops exec-env file '[ -n "$KEY" ] && echo present'` |
 | 複数 key 編集 | `sops -d > tmp && vim tmp && sops -e tmp` | `sops edit file` |
 | 環境変数注入 | `export $(sops -d file \| xargs)` | `sops exec-env file 'your_script.sh'` |
 
@@ -145,7 +145,8 @@ credential file path が command に現れた瞬間に **必ず trigger**:
 □ command に `sops -d` はあるか？               → あれば NG、書き直し
 □ 出力が shell stdout に流れる outer pipe
   (`| head/cat/grep/tee/less/wc`) はあるか？    → あれば NG、書き直し
-  (注: sops exec-env の inner pipe は OK)
+  (注: sops exec-env の inner pipe も key 名だけを流す `env | cut -d= -f1`
+  から始める。value を流す pipe や inline interpreter は NG)
 □ 形は `sops edit <file>` か
   `sops exec-env <file> '<inner>'` のどちらか？ → 他なら NG
 ```
