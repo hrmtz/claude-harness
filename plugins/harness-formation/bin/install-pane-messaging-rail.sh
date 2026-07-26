@@ -13,7 +13,9 @@
 # file, after the marker validation passes.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f so a symlinked copy of this installer still finds ../agents/.
+# Same idiom as bin/formation; see scripts/check_symlink_safe_entrypoints.sh.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 RAIL="$HERE/../agents/pane-messaging-rail.md"
 TARGET="${1:-$HOME/AGENTS.md}"
 START="<!-- harness-formation:pane-messaging-rail:start -->"
