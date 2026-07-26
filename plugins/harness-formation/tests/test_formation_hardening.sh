@@ -24,16 +24,24 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
 TMPDIR_T="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_T"' EXIT
 
-echo "== formation home fallback =="
+echo "== formation home resolution =="
+# The ~/.njslyr7 auto-detect was removed on 2026-07-26: it let `mailbox-send`
+# and `formation report` resolve to different stores, splitting one formation's
+# traffic across two mailboxes. ~/.formation is now unconditional.
 LEGACY_HOME="$TMPDIR_T/home_legacy"
 mkdir -p "$LEGACY_HOME/.njslyr7/mailbox"
 got_home="$(HOME="$LEGACY_HOME" bash -c 'unset FORMATION_HOME NJSLYR_HOME; source "$1" >/dev/null; printf "%s" "$FORMATION_HOME"' _ "$BIN")"
-if [[ "$got_home" == "$LEGACY_HOME/.njslyr7" ]]; then ok "legacy runtime auto-detected"; else bad "legacy runtime fallback got [$got_home]"; fi
+if [[ "$got_home" == "$LEGACY_HOME/.formation" ]]; then ok "legacy dir no longer hijacks resolution"; else bad "legacy dir still wins: got [$got_home]"; fi
 
 NEW_HOME="$TMPDIR_T/home_new"
 mkdir -p "$NEW_HOME"
 got_home="$(HOME="$NEW_HOME" bash -c 'unset FORMATION_HOME NJSLYR_HOME; source "$1" >/dev/null; printf "%s" "$FORMATION_HOME"' _ "$BIN")"
 if [[ "$got_home" == "$NEW_HOME/.formation" ]]; then ok "new installs default to ~/.formation"; else bad "new install default got [$got_home]"; fi
+
+# All entrypoints must agree, or traffic splits again.
+for entry in "$HERE/../bin/mailbox-send" "$HERE/../lib/mailbox.sh" "$HERE/../lib/mailbox_relay.sh"; do
+    if grep -q 'njslyr7' "$entry"; then bad "$(basename "$entry") still references njslyr7"; else ok "$(basename "$entry") free of legacy path"; fi
+done
 
 export FORMATION_HOME="$TMPDIR_T/formation"
 

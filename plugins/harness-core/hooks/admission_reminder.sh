@@ -31,7 +31,7 @@ declare -A REMINDERS=(
 早期発見できた、立て直せる。'
 
     ['(沈黙|silent|broadcast.*忘|連絡.*ない.*\d+h)']='Mailbox tail + 4-item broadcast (進捗 / 想定外 / 依存 / handoff).
-tail -3 ~/.njslyr7/mailbox/log.jsonl で起点確認、自分の最終発信から 2h 超なら post.
+tail -3 ~/.formation/mailbox/log.jsonl で起点確認、自分の最終発信から 2h 超なら post.
 声出した方が場が動く。'
 
     ['(todo|あとで|メモ|忘れ.*ない|忘れる|思い出.*書)']='gh issue create で外出し、頭から下ろす。

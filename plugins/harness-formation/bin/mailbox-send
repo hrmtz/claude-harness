@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mailbox-send — atomic njslyr7 mailbox append + recipient pane nudge.
+# mailbox-send — atomic formation mailbox append + recipient pane nudge.
 #
 # Why this exists: appending a JSONL line to the mailbox alone does NOT notify
 # the recipient pane (it only sees the message if it happens to poll). The nudge
@@ -23,7 +23,12 @@
 # Exit: 0 ok / 2 usage / 3 credential-shaped body refused / 4 pane not found
 set -euo pipefail
 
-MAILBOX="${NJSLYR7_MAILBOX:-$HOME/.njslyr7/mailbox/log.jsonl}"
+# Must agree with bin/formation, lib/mailbox.sh and lib/mailbox_relay.sh.
+# Hard-coding a different default here is what split one formation's traffic
+# across two mailboxes on 2026-07-25/26: `formation report` resolved to
+# ~/.formation while this script wrote to the legacy runtime dir, so neither
+# view showed all ten workers. Change all four together or not at all.
+MAILBOX="${FORMATION_MAILBOX:-$HOME/.formation/mailbox/log.jsonl}"
 LOCK="${MAILBOX}.lock"
 
 usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }

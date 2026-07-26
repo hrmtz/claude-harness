@@ -36,11 +36,7 @@ import subprocess
 import sys
 
 HOME = os.path.expanduser("~")
-FORMATION_HOME = os.environ.get("FORMATION_HOME") or os.environ.get("NJSLYR_HOME")
-if not FORMATION_HOME:
-    new_home = f"{HOME}/.formation"
-    legacy_home = f"{HOME}/.njslyr7"
-    FORMATION_HOME = legacy_home if (not os.path.exists(new_home) and os.path.exists(legacy_home)) else new_home
+FORMATION_HOME = os.environ.get("FORMATION_HOME") or f"{HOME}/.formation"
 MAILBOX = os.environ.get("FORMATION_MAILBOX", f"{FORMATION_HOME}/mailbox/log.jsonl")
 
 

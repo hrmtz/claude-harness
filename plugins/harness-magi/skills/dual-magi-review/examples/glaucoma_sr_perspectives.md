@@ -98,6 +98,6 @@ Do not hallucinate citations or data. If uncertain, mark ❓.
   --domain-preset ~/.claude/skills/dual-magi-review/examples/glaucoma_sr_perspectives.md \
   --external codex-mailbox \
   --codex-pane 0:8 \
-  --mailbox-path ~/.njslyr7/mailbox/glaucoma-sr.jsonl \
+  --mailbox-path ~/.formation/mailbox/glaucoma-sr.jsonl \
   --apply-local
 ```

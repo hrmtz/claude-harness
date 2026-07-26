@@ -139,11 +139,10 @@ def load_jsonl(path):
                     rows.append(value)
     return rows
 def formation_home():
-    configured = os.environ.get("FORMATION_HOME") or os.environ.get("NJSLYR_HOME")
+    configured = os.environ.get("FORMATION_HOME")
     if configured:
         return pathlib.Path(configured)
-    modern, legacy = pathlib.Path.home() / ".formation", pathlib.Path.home() / ".njslyr7"
-    return legacy if not modern.exists() and legacy.exists() else modern
+    return pathlib.Path.home() / ".formation"
 def read_formation(repo):
     data = {"workers": [], "errors": []}
     home = formation_home()

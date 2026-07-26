@@ -474,12 +474,12 @@ root の再発、同 subsystem の新 HIGH+ root 再発、3 revision の blocker
 Codex 側 provenance は実在する: `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` の
 `session_meta` + `turn_context.model` (= 実測、 380 files)。
 
-### `codex-mailbox` (= njslyr7 mailbox-based、 v0.3.0: per-project channel + spawn options)
+### `codex-mailbox` (= formation mailbox-based、 v0.3.0: per-project channel + spawn options)
 
 #### options
 
 - `--codex-pane <tmux-target>`: target pane (= e.g., `0:2`). default `auto-detect` (= search active codex pane)
-- `--mailbox-path <path>`: mailbox jsonl path. default `~/.njslyr7/mailbox/<project-slug>.jsonl`
+- `--mailbox-path <path>`: mailbox jsonl path. default `~/.formation/mailbox/<project-slug>.jsonl`
 - `--spawn-via <method>`: `manual` (= require pre-existing pane) / `formation` (= auto-spawn via formation skill) / `none` (= fail if not running). default `manual`
 - `--codex-briefing <text>`: briefing if spawning, e.g., "Magi reviewer for <project>". default skill-generated
 
@@ -493,10 +493,10 @@ tmux new-window -n codex-hippocampus
 codex  # = 新 process、 hippocampus session 専用
 
 # 同 session 内で mailbox 別 channel 用意
-touch ~/.njslyr7/mailbox/hippocampus.jsonl
+touch ~/.formation/mailbox/hippocampus.jsonl
 
 # Codex CLI に briefing inject
-# (= Codex 起動後 prompt で 「you are reviewer for hippocampus、 listen to ~/.njslyr7/mailbox/hippocampus.jsonl」)
+# (= Codex 起動後 prompt で 「you are reviewer for hippocampus、 listen to ~/.formation/mailbox/hippocampus.jsonl」)
 ```
 
 以降 hippocampus session で:
@@ -505,7 +505,7 @@ touch ~/.njslyr7/mailbox/hippocampus.jsonl
 /dual-magi-review ~/projects/hippocampus-mcp/docs/foo.md \
   --external codex-mailbox \
   --codex-pane 0:3 \
-  --mailbox-path ~/.njslyr7/mailbox/hippocampus.jsonl
+  --mailbox-path ~/.formation/mailbox/hippocampus.jsonl
 ```
 
 = **seq stream / context / state 完全分離**、 PRS-LLM session ↔ hippocampus session 干渉ゼロ。

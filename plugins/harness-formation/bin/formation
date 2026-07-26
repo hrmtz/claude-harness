@@ -27,16 +27,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" && "${1:-}" == "integration-audit" ]]; then
   exec "$SCRIPT_DIR/formation-integration-audit" "$@"
 fi
 
-if [[ -z "${FORMATION_HOME:-}" ]]; then
-  if [[ -n "${NJSLYR_HOME:-}" ]]; then
-    FORMATION_HOME="$NJSLYR_HOME"
-  elif [[ ! -e "$HOME/.formation" && -e "$HOME/.njslyr7" ]]; then
-    FORMATION_HOME="$HOME/.njslyr7"
-  else
-    FORMATION_HOME="$HOME/.formation"
-  fi
-fi
-NJSLYR_HOME="$FORMATION_HOME"  # legacy alias for sourced helper compatibility.
+FORMATION_HOME="${FORMATION_HOME:-$HOME/.formation}"
 FORMATION_DIR="$FORMATION_HOME/formation"
 REGISTRY="$FORMATION_DIR/registry.jsonl"
 

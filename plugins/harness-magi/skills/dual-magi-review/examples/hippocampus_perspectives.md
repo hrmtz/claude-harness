@@ -98,14 +98,14 @@ session context 濁り回避のため、 hippocampus 専用 Codex pane + 専用 
 # hippocampus 初回 bootstrap (= 1 度 manual、 再起動まで持続)
 tmux new-window -n codex-hippocampus
 codex  # = 専用 process
-touch ~/.njslyr7/mailbox/hippocampus.jsonl
+touch ~/.formation/mailbox/hippocampus.jsonl
 
 # 以降 invocation
 /dual-magi-review ~/projects/hippocampus-mcp/docs/foo.md \
   --domain-preset ~/.claude/skills/dual-magi-review/examples/hippocampus_perspectives.md \
   --external codex-mailbox \
   --codex-pane 0:<hippocampus-window> \
-  --mailbox-path ~/.njslyr7/mailbox/hippocampus.jsonl
+  --mailbox-path ~/.formation/mailbox/hippocampus.jsonl
 ```
 
 **γ. formation 経由 都度起動 (= short-lived)**:

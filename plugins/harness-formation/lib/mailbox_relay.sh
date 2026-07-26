@@ -28,16 +28,7 @@ source "$SCRIPT_DIR/wake.sh"
 
 AGENT="${1:?agent name required (msg 'to' field value)}"
 PANE="${2:?tmux session/pane target}"
-if [[ -z "${FORMATION_HOME:-}" ]]; then
-  if [[ -n "${NJSLYR_HOME:-}" ]]; then
-    FORMATION_HOME="$NJSLYR_HOME"
-  elif [[ ! -e "$HOME/.formation" && -e "$HOME/.njslyr7" ]]; then
-    FORMATION_HOME="$HOME/.njslyr7"
-  else
-    FORMATION_HOME="$HOME/.formation"
-  fi
-fi
-NJSLYR_HOME="$FORMATION_HOME"  # legacy alias for callers that still inspect it.
+FORMATION_HOME="${FORMATION_HOME:-$HOME/.formation}"
 MAILBOX="${MAILBOX:-$FORMATION_HOME/mailbox/log.jsonl}"
 LOG_PREFIX="[formation-relay:$AGENT→$PANE]"
 
