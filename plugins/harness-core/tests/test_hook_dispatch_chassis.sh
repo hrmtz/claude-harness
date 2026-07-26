@@ -25,8 +25,19 @@ ok()  { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL %s\n     %s\n' "$1" "${2:-}"; }
 check() { [ "$2" = "$3" ] && ok "$1" || bad "$1" "expected '$2', got '$3'"; }
 
+# A suite that skips is indistinguishable from a suite that passes, and this one
+# exists precisely because a gate that never runs looks green. CI sets
+# HARNESS_TEST_REQUIRE_TMUX=1 so an environment without tmux is a failure there,
+# while a developer without a server still gets a skip rather than a wall.
 if ! command -v tmux >/dev/null 2>&1 || ! tmux display-message -p '#{pid}' >/dev/null 2>&1; then
+    if [ "${HARNESS_TEST_REQUIRE_TMUX:-0}" = "1" ]; then
+        echo "test_hook_dispatch_chassis: tmux is required here and is unavailable." >&2
+        echo "  This suite drives real panes; skipping it would hide the very class of" >&2
+        echo "  defect it was written for (#177). Install tmux and start a server." >&2
+        exit 1
+    fi
     echo "test_hook_dispatch_chassis: no tmux server; skipping (this suite is about real panes)"
+    echo "  set HARNESS_TEST_REQUIRE_TMUX=1 to make that a failure instead"
     exit 0
 fi
 
