@@ -118,6 +118,32 @@ run_chain "$P" "HARNESS_IDENTITY_SENTINEL_DIR=$HARNESS_IDENTITY_SENTINEL_DIR HAR
 S=$(pane_state "$P")
 check "an explicit claude chassis wins over a stray PLUGIN_ROOT" "claude" "${S#*|}"
 
+# ── Grok's Claude-compat path has runtime signal but no installer stamp ──────
+# Grok injects these variables for every hook process, including entries loaded
+# from ~/.claude/settings.json. The compat hook may run before the native grok
+# identity hook, so it must claim grok directly instead of defaulting to claude.
+P=$(new_pane grok-compat)
+run_chain "$P" "HARNESS_IDENTITY_SENTINEL_DIR=$HARNESS_IDENTITY_SENTINEL_DIR GROK_HOOK_EVENT=session_start GROK_SESSION_ID=compat-test" \
+    "$DISPATCH" harness-core hooks/tmux_self_name.sh || bad "grok compat chain timed out" ""
+S=$(pane_state "$P")
+check "an unstamped Grok compat hook lands on the grok adapter" "grok" "${S#*|}"
+case "${S%%|*}" in
+    grok-*) ok "and the compat pane is named grok-<codename>" ;;
+    *)      bad "and the compat pane is named grok-<codename>" "window_name=${S%%|*}" ;;
+esac
+
+P=$(new_pane claude-over-grok-env)
+run_chain "$P" "HARNESS_IDENTITY_SENTINEL_DIR=$HARNESS_IDENTITY_SENTINEL_DIR HARNESS_CHASSIS=claude GROK_HOOK_EVENT=session_start GROK_SESSION_ID=compat-test" \
+    "$DISPATCH" harness-core hooks/tmux_self_name.sh || bad "explicit claude with grok env timed out" ""
+S=$(pane_state "$P")
+check "an explicit chassis stamp outranks Grok runtime inference" "claude" "${S#*|}"
+
+P=$(new_pane unknown-explicit)
+run_chain "$P" "HARNESS_IDENTITY_SENTINEL_DIR=$HARNESS_IDENTITY_SENTINEL_DIR HARNESS_CHASSIS=unknown" \
+    "$DISPATCH" harness-core hooks/tmux_self_name.sh || bad "unknown chassis chain timed out" ""
+S=$(pane_state "$P")
+check "an unsupported explicit chassis does not fabricate a claude identity" "" "${S#*|}"
+
 # ── back-compat for a genuine plugin host ────────────────────────────────────
 # A native Codex plugin install that predates HARNESS_CHASSIS still has to reach
 # the codex adapter, so PLUGIN_ROOT remains a signal — just no longer a
@@ -183,7 +209,15 @@ fi
 
 # The installers must go through the shared helper, not re-invent a prefix.
 for f in install-codex-hooks.sh install-grok-hooks.sh install-kimi-hooks.sh; do
-    if grep -q "chassis_stamp.stamp(" "$ROOT/$f"; then
+    if [ "$f" = "install-codex-hooks.sh" ]; then
+        if grep -q "render_codex_hooks.py" "$ROOT/$f" \
+           && grep -q "chassis_stamp.stamp(" "$ROOT/scripts/lib/render_codex_hooks.py"; then
+            ok "$f stamps through the shared renderer/helper"
+        else
+            bad "$f stamps through the shared renderer/helper" \
+                "installer no longer delegates to the stamped renderer"
+        fi
+    elif grep -q "chassis_stamp.stamp(" "$ROOT/$f"; then
         ok "$f stamps through the shared helper"
     else
         bad "$f stamps through the shared helper" "rolled its own prefix again"
