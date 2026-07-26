@@ -45,6 +45,21 @@ PATTERNS=(
     'eyJ[A-Za-z0-9_=-]{10,}\.eyJ[A-Za-z0-9_=-]{10,}\.[A-Za-z0-9_=-]{10,}|<REDACTED_JWT>'
     # issue #14: Supabase auth-token cookie name (narrow, project-ref scoped).
     'sb-[a-z0-9]{8,}-auth-token|sb-<REDACTED>-auth-token'
+    # issue #99: clinic MCP token. This is the ONLY layer that can catch it —
+    # its sops file is a nested mapping, so the HMAC manifest has no entry for
+    # it (nested values never reach the environment the builder reads), and the
+    # Part 2 keyword rule matches uppercase KEY=VALUE while the file's keys are
+    # lowercase with ':' separators. Both fell through twice before this entry.
+    #
+    # NOT the usual 'cmcp_[A-Za-z0-9_-]{20,}' house style: the same prefix is a
+    # legitimate identifier in the vendored Parade touchscreen drivers this
+    # operator works on (CMCP = a capacitance test feature), e.g.
+    # cmcp_check_config_fw_match — 79 such symbols measured. Redacting those
+    # would corrupt a transcript containing driver source. Requiring an
+    # uppercase letter separates them: the tokens are base64url and mixed-case,
+    # the identifiers are strictly lowercase_with_underscores. Verified against
+    # the real driver files (0 matches) before landing.
+    'cmcp_[a-zA-Z0-9_-]*[A-Z][a-zA-Z0-9_-]{10,}|cmcp_<REDACTED>'
 )
 
 # Part 2: キーワードベース catch-all
