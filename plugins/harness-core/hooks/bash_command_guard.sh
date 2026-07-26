@@ -110,10 +110,6 @@ import shlex
 import stat
 import sys
 
-import yaml
-from yaml.nodes import MappingNode, ScalarNode
-from yaml.tokens import AliasToken, AnchorToken
-
 cmd = sys.argv[1]
 nested = False
 unsupported = False
@@ -167,8 +163,39 @@ def is_nonexecuting_context(tokens, index):
     start = command_segment_start(tokens, index)
     return start < index and os.path.basename(tokens[start]) in nonexecuting_contexts
 
+def has_active_substitution(command):
+    single = False
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and not single:
+            escaped = True
+            index += 1
+            continue
+        if char == "'":
+            single = not single
+            index += 1
+            continue
+        if not single and (
+            char == "`"
+            or command.startswith("$(", index)
+            or command.startswith("<(", index)
+            or command.startswith(">(", index)
+        ):
+            return True
+        index += 1
+    return False
+
 def inspect_command(command, depth=0):
     global nested, unsupported, target_count
+    if has_active_substitution(command):
+        unsupported = True
+        return
     try:
         tokens = tokenize(command)
     except ValueError:
@@ -252,10 +279,15 @@ def inspect_command(command, depth=0):
         if (
             target is None
             or any(char in target for char in dynamic_chars)
+            or not os.path.isabs(target)
         ):
             unsupported = True
             continue
         try:
+            import yaml
+            from yaml.nodes import MappingNode, ScalarNode
+            from yaml.tokens import AliasToken, AnchorToken
+
             before = os.lstat(target)
             if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_FILE_BYTES:
                 unsupported = True
@@ -346,7 +378,7 @@ case "$SOPS_TARGET_CLASS" in
         emit_deny "- nested/complex value を含む SOPS file は sops exec-env で処理せず、sops edit で flat mapping に再構成しよう。\n次これで行こう。"
         ;;
     *)
-        emit_deny "- sops exec-env の対象 file を安全に検査できない。literal path の flat mapping にするか、sops edit で構造を確認・再構成しよう。\n次これで行こう。"
+        emit_deny "- sops exec-env の対象 file を安全に検査できない。absolute literal path の flat mapping にするか、sops edit で構造を確認・再構成しよう。\n次これで行こう。"
         ;;
 esac
 
