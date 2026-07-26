@@ -3,7 +3,7 @@
 #
 # Agents routinely leak tokens into peer messages and those jsonl entries live
 # forever as observable plain text. `is_credential_like` is called by
-# mailbox_send to hard-refuse bodies that match common secret shapes. Agents
+# mailbox writers to hard-refuse bodies that match common secret shapes. Agents
 # MUST reference SOPS-encrypted files instead, e.g.
 #   sops exec-env config/secrets.enc.yaml 'use "$openai_key"'
 # and never paste the decrypted value into a mailbox message.

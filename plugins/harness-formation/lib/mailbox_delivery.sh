@@ -1,11 +1,12 @@
 #!/bin/bash
 # mailbox_delivery.sh - recipient resolution and mailbox delivery policy.
 #
-# This is the policy layer shared by `formation msg` and `mailbox-send`.
-# Durability remains in mailbox.sh, pane signaling primitives remain in
-# mailbox_notify.sh, and the exceptional keystroke contract remains in wake.sh.
-# Keeping policy here prevents the two public send entrypoints from drifting on
-# canonical addressing, relay ownership, or the exclusive-input gate.
+# This is the policy layer shared by every public mailbox-producing command:
+# `formation msg/report/done/ask/ack/resolve` and `mailbox-send`. Durability
+# remains in mailbox.sh, pane signaling primitives remain in mailbox_notify.sh,
+# and the exceptional keystroke contract remains in wake.sh. Keeping policy
+# here prevents send entrypoints from drifting on canonical addressing, relay
+# ownership, or the exclusive-input gate.
 
 MAILBOX_DELIVERY_LIB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=/dev/null
@@ -109,6 +110,37 @@ mailbox_resolve_recipient() {
   [[ -n "$MAILBOX_RECIPIENT_LABEL" && -n "$MAILBOX_RECIPIENT_PANE" ]]
 }
 
+# Resolve the caller's actual pane by matching pane root pids against this
+# process's ancestry. A resolving $TMUX_PANE is not sufficient: wrappers and
+# tmux run-shell can inherit a live sibling pane id (#59). This check is
+# read-only and uses no process-name inference.
+mailbox_resolve_caller_pane() {
+  local pid="$$" next guard=0 line pane pane_pid rank best_rank=999 best_pane=""
+  declare -A ancestor_rank=()
+
+  while [[ "$guard" -lt 64 && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]]; do
+    ancestor_rank["$pid"]="$guard"
+    next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
+    [[ -n "$next" && "$next" != "$pid" ]] || break
+    pid="$next"
+    guard=$((guard + 1))
+  done
+
+  while IFS= read -r line; do
+    IFS='|' read -r pane pane_pid <<<"$line"
+    [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ ]] || continue
+    [[ -n "${ancestor_rank[$pane_pid]+x}" ]] || continue
+    rank="${ancestor_rank[$pane_pid]}"
+    if [[ "$rank" -lt "$best_rank" ]]; then
+      best_rank="$rank"
+      best_pane="$pane"
+    fi
+  done < <(tmux list-panes -a -F '#{pane_id}|#{pane_pid}' 2>/dev/null || true)
+
+  [[ -n "$best_pane" ]] || return 1
+  printf '%s\n' "$best_pane"
+}
+
 # Signal a durable row. A healthy relay remains the single signal owner;
 # otherwise the sender performs the same zero-keystroke pane signal directly.
 #
@@ -129,6 +161,24 @@ mailbox_signal_or_defer() {
     return 4
   fi
   echo "signaled pane=$pane directly because relay is unavailable (zero keystrokes into prompt)"
+}
+
+# Signal an already-durable row when its pane route is known. Parent-directed
+# worker reports carry the parent pane separately from the semantic parent id;
+# ASK/ACK retries can reuse the original row's seq without appending spam.
+#
+# An absent route is not a transport failure: the immutable mailbox row remains
+# available to the mandatory pull rail. A known route that cannot be signaled
+# preserves mailbox_signal_or_defer's honest exit 4 contract.
+#
+# Args: <recipient-label> <pane-or-empty> <seq> <from> <formation-state-dir>
+mailbox_signal_durable_row() {
+  local recipient="$1" pane="$2" seq="$3" from="$4" formation_dir="$5"
+  if [[ ! "$pane" =~ ^%[0-9]+$ ]]; then
+    echo "signal=unavailable recipient=$recipient route=absent-or-invalid (row remains durable; pull required)"
+    return 0
+  fi
+  mailbox_signal_or_defer "$recipient" "$pane" "$seq" "$from" "$formation_dir"
 }
 
 # Attempt the exceptional short prompt nudge after a row is durable+signaled.

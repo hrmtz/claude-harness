@@ -101,6 +101,19 @@ formation done "PR #42 出した、tests green"
 `formation ask` は `WAITING_PARENT` を durable に保持する。後続の report
 では消えず、parent は `formation ack <request-id> [summary]` または
 `formation resolve <request-id> <summary>` を実行する。
+spawn は semantic parent identity と parent pane route を分離して worker
+へ渡す。`report` / `done` / `ask` と、返送する `ack` / `resolve` はすべて
+append を先に確定し、同じ zero-keystroke の relay-or-direct signal policy
+を通る。relay が死んでいても badge の direct fallback が働き、本文を
+prompt へ注入しない。
+parent pane は `TMUX_PANE` を信用せず process ancestry から解決する。
+stale/inherited な sibling id は無視し、実 parent pane も明示
+`FORMATION_SELF` も証明できなければ、返信不能 worker を作らないよう spawn
+を fail-closed にする。
+既知 pane の signal に失敗した場合、row/state は durable のまま exit `4`
+を返す。この code で `report` / `done` を自動 retry すると重複 row を作る
+ため再送しない。pane route が欠落または検証不能なら pull-only の exit `0`
+とし、stderr に `signal=unavailable` を出す。
 
 ### スマホ介入
 

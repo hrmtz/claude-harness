@@ -130,6 +130,43 @@ for mutable_window in claude-lead-alpha bash; do
   [[ "$resolved_sender" == "pane-42" ]]
 done
 
+# A live-looking TMUX_PANE is accepted as a parent route only when this process
+# actually descends from that pane's root pid (#59). No process-name inference.
+bash -c '
+  tmux() { printf "%%42|%s\n" "$$"; }
+  source "$1"
+  [[ "$(mailbox_resolve_caller_pane)" == "%42" ]]
+' _ "$HERE/../lib/mailbox_delivery.sh"
+if bash -c '
+  tmux() { printf "%%42|1\n"; }
+  source "$1"
+  mailbox_resolve_caller_pane
+' _ "$HERE/../lib/mailbox_delivery.sh"; then
+  echo "FAIL: inherited sibling TMUX_PANE passed the ancestry proof" >&2
+  exit 1
+fi
+
+# Spawn refuses before creating a worker when neither a real parent pane nor a
+# stable explicit Formation identity can receive replies.
+printf '# review fixture\n' >"$FIXTURE/spawn-briefing.md"
+: >"$TMUX_LOG"
+if TMUX_PANE=%42 FORMATION_SELF="" TMUX_LOG="$TMUX_LOG" \
+    FORMATION_HOME="$FORMATION_HOME_FIXTURE" FORMATION_MAILBOX="$MAILBOX" \
+    PATH="$FAKE_BIN:/usr/bin:/bin" \
+    bash "$HERE/../bin/formation" spawn --cli codex \
+      "$FIXTURE/spawn-briefing.md" unaddressable-worker \
+      >"$FIXTURE/spawn-unaddressable.out" 2>&1; then
+  spawn_unaddressable_rc=0
+else
+  spawn_unaddressable_rc=$?
+fi
+[[ "$spawn_unaddressable_rc" -eq 2 ]]
+grep -Fq 'replies would be unaddressable' "$FIXTURE/spawn-unaddressable.out"
+if grep -Fq 'tmux new-window' "$TMUX_LOG"; then
+  echo "FAIL: unaddressable spawn created a worker pane" >&2
+  exit 1
+fi
+
 # Caller-provided submit timing remains authoritative over the standalone
 # mailbox-send defaults after policy unification.
 timing_log="$(FORMATION_SUBMIT_SETTLE_S=7 FORMATION_SUBMIT_RETRY_S=8 \
@@ -170,20 +207,43 @@ if grep -Fq 'fixture-not-a-real-secret' \
   exit 1
 fi
 
-# Both public send paths must delegate policy to the same library rather than
-# re-growing local relay/injection implementations. Formation legitimately
-# uses relay/wake primitives elsewhere for spawn and reap, so scope that check
-# to cmd_msg.
+# Every public mailbox-producing command must delegate signaling policy to the
+# same library rather than re-growing local relay/injection implementations.
+# Formation legitimately uses wake primitives for spawn and reap, so scope the
+# direct-primitive check to the mailbox command block.
 grep -Fq 'mailbox_delivery.sh' "$HERE/../bin/mailbox-send"
 grep -Fq 'mailbox_delivery.sh' "$HERE/../bin/formation"
 if grep -Eq '^[[:space:]]*(mailbox_relay_alive|mailbox_signal_pane|tmux_send_submit)' \
     "$HERE/../bin/mailbox-send" ||
-   sed -n '/^cmd_msg()/,/^clear_mailbox_badge_through()/p' \
-    "$HERE/../bin/formation" |
-    grep -Eq '^[[:space:]]*(mailbox_relay_alive|mailbox_signal_pane|tmux_send_submit)'; then
+   {
+     sed -n '/^cmd_msg()/,/^clear_mailbox_badge_through()/p' \
+       "$HERE/../bin/formation"
+     sed -n '/^cmd_report()/,/^cmd_resolve()/p' \
+       "$HERE/../bin/formation"
+   } | grep -Eq '^[[:space:]]*(mailbox_relay_alive|mailbox_signal_pane|tmux_send_submit)'; then
   echo "FAIL: a public send path bypasses mailbox_delivery.sh" >&2
   exit 1
 fi
+for lifecycle_fn in cmd_report cmd_done cmd_ask cmd_request_transition; do
+  sed -n "/^${lifecycle_fn}()/,/^}/p" "$HERE/../bin/formation" |
+    grep -Fq 'mailbox_signal_durable_row ' || {
+      echo "FAIL: $lifecycle_fn bypasses durable-row signaling policy" >&2
+      exit 1
+    }
+done
+[[ "$(grep -Fc -- '-e "FORMATION_PARENT_PANE=$parent_pane"' "$HERE/../bin/formation")" -eq 2 ]] || {
+  echo "FAIL: spawn does not preserve parent pane routing for both placements" >&2
+  exit 1
+}
+
+# A malformed/legacy route is pull-only; never pass a literal "null" target to
+# tmux or claim a successful direct signal.
+: >"$TMUX_LOG"
+invalid_route_out="$(TMUX_LOG="$TMUX_LOG" PATH="$FAKE_BIN:/usr/bin:/bin" \
+  bash -c 'source "$1"; mailbox_signal_durable_row worker-null null 9 sender "$2"' \
+    _ "$HERE/../lib/mailbox_delivery.sh" "$FORMATION_HOME_FIXTURE/formation")"
+grep -Fq 'route=absent-or-invalid' <<<"$invalid_route_out"
+[[ ! -s "$TMUX_LOG" ]]
 
 # Signal ownership is serialized per pane and can never move the badge
 # backwards when an older sender arrives after a newer one.

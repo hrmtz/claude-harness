@@ -5,7 +5,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FIXTURE="$(mktemp -d)"
-cleanup() { rm -rf "$FIXTURE"; }
+RELAY_PID=""
+cleanup() {
+  [[ -n "$RELAY_PID" ]] && kill "$RELAY_PID" 2>/dev/null || true
+  rm -rf "$FIXTURE"
+}
 trap cleanup EXIT
 
 export FORMATION_HOME="$FIXTURE/formation-home"
@@ -15,6 +19,17 @@ export FORMATION_REQUEST_LOG="$FORMATION_REQUEST_DIR/events.jsonl"
 export FORMATION_SELF=worker-a
 export FORMATION_PARENT=parent-a
 unset TMUX_PANE
+
+TMUX_LOG="$FIXTURE/tmux.log"
+: >"$TMUX_LOG"
+tmux() {
+  printf 'tmux %s\n' "$*" >>"$TMUX_LOG"
+  case "${1:-}" in
+    show-options) return 0 ;;
+    set-option) [[ "${TMUX_FAIL_SET_OPTION:-0}" != "1" ]] ;;
+    display-message|capture-pane|kill-pane) return 0 ;;
+  esac
+}
 
 # shellcheck source=/dev/null
 source "$HERE/../bin/formation"
@@ -47,13 +62,64 @@ wait "$LOCK_HOLDER_PID"
   exit 1
 }
 
-request_id="$(cmd_ask 'Choose rollout A or B')"
+request_id="$(FORMATION_PARENT_PANE=%100 cmd_ask 'Choose rollout A or B')"
 [[ "$request_id" == req-* ]]
 [[ "$(request_unresolved worker-a parent-a | jq -r '.request_id')" == "$request_id" ]]
 [[ "$(jq -Rsc '[splits("\n") | fromjson? | select(.body | startswith("[ASK "))] | length' "$MAILBOX_LOG")" -eq 1 ]]
+grep -Fq 'tmux set-option -p -t %100 @formation_mail_pending' "$TMUX_LOG"
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+  echo "FAIL: worker ASK signal touched the parent prompt" >&2
+  exit 1
+fi
+
+# Ordinary report/done use the same parent route and never touch its prompt.
+: >"$TMUX_LOG"
+FORMATION_PARENT_PANE=%100 cmd_report 'parent signal report'
+FORMATION_PARENT_PANE=%100 cmd_done 'parent signal done'
+[[ "$(grep -Fc 'tmux set-option -p -t %100 @formation_mail_pending' "$TMUX_LOG")" -eq 2 ]]
+jq -Rsc '
+  ([splits("\n") | fromjson? | select(.body == "parent signal report")] | length) == 1
+  and
+  ([splits("\n") | fromjson? | select(.body == "[DONE] parent signal done")] | length) == 1
+' "$MAILBOX_LOG" | grep -qx true
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+  echo "FAIL: worker report/done signal touched the parent prompt" >&2
+  exit 1
+fi
+
+# A live argv-verified parent relay remains the single signal owner for
+# lifecycle rows; the sender must defer instead of writing a duplicate badge.
+mkdir -p "$FORMATION_DIR"
+printf '%s\n' '#!/usr/bin/env bash' 'while :; do sleep 1; done' \
+  >"$FIXTURE/mailbox_relay.sh"
+chmod +x "$FIXTURE/mailbox_relay.sh"
+bash "$FIXTURE/mailbox_relay.sh" parent-a %100 &
+RELAY_PID=$!
+printf '%s\n' "$RELAY_PID" >"$FORMATION_DIR/parent-a.relay_pid"
+: >"$TMUX_LOG"
+FORMATION_PARENT_PANE=%100 cmd_report 'relay owns lifecycle signal' \
+  2>"$FIXTURE/relay-owned-report.err"
+grep -Fq 'signal=pending relay_pid=' "$FIXTURE/relay-owned-report.err"
+if grep -Fq '@formation_mail_pending' "$TMUX_LOG"; then
+  echo "FAIL: lifecycle sender duplicated a live relay's badge write" >&2
+  exit 1
+fi
+kill "$RELAY_PID" 2>/dev/null || true
+wait "$RELAY_PID" 2>/dev/null || true
+RELAY_PID=""
+rm -f "$FORMATION_DIR/parent-a.relay_pid"
+
+# Pre-upgrade workers without FORMATION_PARENT_PANE remain pull-only and
+# successful; the row is durable and no badge success is claimed.
+FORMATION_PARENT_PANE="" cmd_report 'legacy pull-only report' \
+  2>"$FIXTURE/pull-only-report.err"
+grep -Fq 'signal=unavailable' "$FIXTURE/pull-only-report.err"
+jq -Rsc \
+  '[splits("\n") | fromjson? | select(.body == "legacy pull-only report")] | length == 1' \
+  "$MAILBOX_LOG" | grep -qx true
 
 # Exact unresolved retries are idempotent in both semantic state and transport.
-retry_id="$(cmd_ask 'Choose rollout A or B')"
+retry_id="$(FORMATION_PARENT_PANE=%100 cmd_ask 'Choose rollout A or B')"
 [[ "$retry_id" == "$request_id" ]]
 [[ "$(wc -l < "$FORMATION_REQUEST_LOG")" -eq 1 ]]
 [[ "$(jq -Rsc '[splits("\n") | fromjson? | select(.body | startswith("[ASK "))] | length' "$MAILBOX_LOG")" -eq 1 ]]
@@ -121,6 +187,11 @@ FORMATION_PARENT=parent-a
 FORMATION_SELF=parent-a
 ack_out="$(cmd_ack "$request_id" 'review started')"
 grep -Fq "request=$request_id event=ack state=RUNNING notified=true" <<<"$ack_out"
+grep -Fq 'tmux set-option -p -t %999 @formation_mail_pending' "$TMUX_LOG"
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+  echo "FAIL: ACK signal touched the worker prompt" >&2
+  exit 1
+fi
 request_current_one "$request_id" | jq -e \
   '.closed == true and .state == "RUNNING" and .event == "ack"' >/dev/null
 ack_rows="$(jq -Rsc --arg id "[ACK request_id=$request_id]" \
@@ -131,6 +202,74 @@ ack_rows="$(jq -Rsc --arg id "[ACK request_id=$request_id]" \
 cmd_ack "$request_id" 'review started' | grep -Fq 'notified=false'
 [[ "$(jq -Rsc --arg id "[ACK request_id=$request_id]" \
   '[splits("\n") | fromjson? | select((.body // "") | startswith($id))] | length' "$MAILBOX_LOG")" -eq 1 ]]
+
+# Every lifecycle caller preserves the durable row/state and returns the shared
+# honest exit 4 when a known pane cannot be badged.
+set +e
+TMUX_FAIL_SET_OPTION=1 FORMATION_PARENT_PANE=%100 \
+  cmd_report 'report survives signal failure' \
+  >"$FIXTURE/report-signal-fail.out" 2>&1
+report_signal_rc=$?
+TMUX_FAIL_SET_OPTION=1 FORMATION_PARENT_PANE=%100 \
+  cmd_done 'done survives signal failure' \
+  >"$FIXTURE/done-signal-fail.out" 2>&1
+done_signal_rc=$?
+FORMATION_SELF=worker-a TMUX_FAIL_SET_OPTION=1 FORMATION_PARENT_PANE=%100 \
+  cmd_ask 'ASK survives signal failure' \
+  >"$FIXTURE/ask-signal-fail.out" 2>"$FIXTURE/ask-signal-fail.err"
+ask_signal_rc=$?
+set -e
+[[ "$report_signal_rc" -eq 4 && "$done_signal_rc" -eq 4 && "$ask_signal_rc" -eq 4 ]]
+grep -Fq 'WARN (exit 4)' "$FIXTURE/report-signal-fail.out"
+grep -Fq 'WARN (exit 4)' "$FIXTURE/done-signal-fail.out"
+grep -Fq 'WARN (exit 4)' "$FIXTURE/ask-signal-fail.err"
+failed_ask_id="$(cat "$FIXTURE/ask-signal-fail.out")"
+[[ "$failed_ask_id" == req-* ]]
+request_current_one "$failed_ask_id" | jq -e '.state == "WAITING_PARENT"' >/dev/null
+jq -Rsc '
+  ([splits("\n") | fromjson? | select(.body == "report survives signal failure")] | length) == 1
+  and
+  ([splits("\n") | fromjson? | select(.body == "[DONE] done survives signal failure")] | length) == 1
+' "$MAILBOX_LOG" | grep -qx true
+
+FORMATION_SELF=worker-a
+ack_signal_create="$(request_create worker-a parent-a 'ACK survives signal failure' RUNNING)"
+ack_signal_id="$(jq -r '.request_id' <<<"$ack_signal_create")"
+ensure_request_mailbox_message worker-a parent-a \
+  "[ASK request_id=$ack_signal_id]" "[ASK request_id=$ack_signal_id] ACK survives signal failure" >/dev/null
+set +e
+FORMATION_SELF=parent-a TMUX_FAIL_SET_OPTION=1 \
+  cmd_ack "$ack_signal_id" durable \
+  >"$FIXTURE/ack-signal-fail.out" 2>"$FIXTURE/ack-signal-fail.err"
+ack_signal_rc=$?
+set -e
+[[ "$ack_signal_rc" -eq 4 ]]
+grep -Fq 'notified=true' "$FIXTURE/ack-signal-fail.out"
+grep -Fq 'WARN (exit 4)' "$FIXTURE/ack-signal-fail.err"
+request_current_one "$ack_signal_id" | jq -e '.closed == true and .state == "RUNNING"' >/dev/null
+FORMATION_SELF=parent-a
+
+# No verified route is an explicit pull-only success, not a false tmux signal.
+no_route_out="$(mailbox_signal_durable_row parent-a "" 1 worker-a "$FORMATION_DIR")"
+grep -Fq 'route=absent-or-invalid' <<<"$no_route_out"
+
+# A malformed legacy registry row without pane_id must not become tmux target
+# "null" or a false successful badge.
+jq -cn '{id:"worker-null", session_name:"legacy"}' >>"$REGISTRY"
+null_route_create="$(request_create worker-null parent-a 'Missing pane route' RUNNING)"
+null_route_id="$(jq -r '.request_id' <<<"$null_route_create")"
+ensure_request_mailbox_message worker-null parent-a \
+  "[ASK request_id=$null_route_id]" "[ASK request_id=$null_route_id] Missing pane route" >/dev/null
+: >"$TMUX_LOG"
+FORMATION_SELF=parent-a cmd_ack "$null_route_id" durable \
+  >"$FIXTURE/null-route-ack.out" 2>"$FIXTURE/null-route-ack.err"
+grep -Fq 'notified=true' "$FIXTURE/null-route-ack.out"
+grep -Fq 'route=absent-or-invalid' "$FIXTURE/null-route-ack.err"
+if grep -Eq '@formation_status|@formation_mail_pending|-t null ' "$TMUX_LOG"; then
+  echo "FAIL: missing pane_id mutated a tmux pane through an empty/null target" >&2
+  exit 1
+fi
+registry_remove worker-null
 
 # Concurrent ACK retries append one transition event and one notification.
 FORMATION_SELF=worker-a
@@ -239,5 +378,54 @@ cursor_before="$(cat "$MAILBOX_CURSOR_DIR/parent-a.txt")"
 history="$(cmd_inbox --history)"
 grep -Fq '== MAILBOX HISTORY (last 50 addressed rows) ==' <<<"$history"
 [[ "$(cat "$MAILBOX_CURSOR_DIR/parent-a.txt")" == "$cursor_before" ]]
+
+# A stale inherited TMUX_PANE must not split spawn's parent identity from the
+# lead's later inbox/ACK identity or clear a sibling's badge (#59).
+(
+  export FORMATION_HOME="$FIXTURE/stale-pane-home"
+  export FORMATION_MAILBOX="$FORMATION_HOME/mailbox/log.jsonl"
+  export FORMATION_REQUEST_DIR="$FORMATION_HOME/requests"
+  export FORMATION_REQUEST_LOG="$FORMATION_REQUEST_DIR/events.jsonl"
+  export TMUX_PANE=%171
+  unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE
+  STALE_TMUX_LOG="$FIXTURE/stale-pane-tmux.log"
+  : >"$STALE_TMUX_LOG"
+  tmux() {
+    printf 'tmux %s\n' "$*" >>"$STALE_TMUX_LOG"
+    case "${1:-}" in
+      list-panes) printf '%%209|%s\n' "$$" ;;
+      display-message)
+        if [[ " $* " == *" -p "* && " $* " == *formation_identity_locked* ]]; then
+          if [[ " $* " == *" -t %171 "* ]]; then printf 'stale-worker\n'; else printf '\n'; fi
+        elif [[ " $* " == *" -p "* ]]; then
+          printf '0\n'
+        fi
+        ;;
+      show-options) printf '1\n' ;;
+      set-option|capture-pane|kill-pane) return 0 ;;
+    esac
+  }
+
+  actual_parent="$(self_id)"
+  [[ "$actual_parent" == "pane-209" ]]
+  registry_add stale-child %300 formation-stale-child \
+    "$FIXTURE/brief.md" stale-sid codex stale-task stale-goal 0
+  export FORMATION_SELF=stale-child FORMATION_PARENT="$actual_parent"
+  export FORMATION_PARENT_PANE=%209
+  stale_request_id="$(cmd_ask 'Stale pane routing decision')"
+  [[ "$stale_request_id" == req-* ]]
+
+  unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE
+  stale_inbox="$(cmd_inbox)"
+  grep -Fq "$stale_request_id" <<<"$stale_inbox"
+  cmd_ack "$stale_request_id" accepted >/dev/null
+  request_current_one "$stale_request_id" |
+    jq -e '.closed == true and .state == "RUNNING"' >/dev/null
+  grep -Fq 'tmux set-option -p -u -t %209 @formation_mail_pending' "$STALE_TMUX_LOG"
+  if grep -Fq 'tmux set-option -p -u -t %171 @formation_mail_pending' "$STALE_TMUX_LOG"; then
+    echo "FAIL: stale sibling pane badge was cleared by lead inbox" >&2
+    exit 1
+  fi
+)
 
 echo "test_requests: PASS"
