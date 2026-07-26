@@ -77,6 +77,7 @@ flat_sops_file="$TEST_ROOT/flat.enc.yaml"
 nested_sops_file="$TEST_ROOT/nested.enc.yaml"
 list_sops_file="$TEST_ROOT/list.enc.yaml"
 alias_sops_file="$TEST_ROOT/alias.enc.yaml"
+set_sops_file="$TEST_ROOT/set.enc.yaml"
 printf '%s\n' \
     'API_TOKEN: ENC[AES256_GCM,data:synthetic-flat,type:str]' \
     'sops:' \
@@ -97,6 +98,11 @@ printf '%s\n' \
     'API_TOKEN_COPY: *synthetic' \
     'sops:' \
     '  version: 3.9.4' > "$alias_sops_file"
+printf '%s\n' \
+    'API_SET: !!set' \
+    '  synthetic: null' \
+    'sops:' \
+    '  version: 3.9.4' > "$set_sops_file"
 
 # --- #6: DSN-with-creds-in-argv ---
 expect_block 'psql postgresql://prs:s3cr3tpw@mars:5434/db -tAc "select 1"' '#6 password DSN in psql argv'
@@ -142,7 +148,15 @@ large_sops_file="$TEST_ROOT/large.enc.yaml"
 truncate -s 1048577 "$large_sops_file"
 expect_block "sops exec-env '$large_sops_file' /usr/bin/true" '#156 target above 1 MiB ceiling'
 expect_block "sops exec-env '$alias_sops_file' /usr/bin/true" '#156 anchors/aliases rejected before load'
+expect_block "sops exec-env '$set_sops_file' /usr/bin/true" '#156 non-scalar YAML set rejected'
 expect_block '"$SOPS" exec-env "$SOPS_FILE" /usr/bin/true' '#156 dynamic executable/subcommand fails closed'
+expect_block "cp '$nested_sops_file' '$flat_sops_file'
+sops exec-env '$flat_sops_file' /usr/bin/true" '#156 newline replacement denied'
+expect_block "timeout 5 sops exec-env '$nested_sops_file' /usr/bin/true" '#156 timeout wrapper'
+expect_block "env -u FOO sops exec-env '$nested_sops_file' /usr/bin/true" '#156 env value-bearing wrapper'
+expect_block "sudo -u nobody sops exec-env '$nested_sops_file' /usr/bin/true" '#156 sudo value-bearing wrapper'
+expect_block "eval \"sops exec-env '$nested_sops_file' /usr/bin/true\"" '#156 eval body'
+expect_block "printf x | xargs sh -c \"sops exec-env '$nested_sops_file' /usr/bin/true\"" '#156 xargs shell body'
 expect_allow 'echo "sops exec-env is the supported form"' '#156 prose does not require YAML inspection'
 expect_allow 'echo sops exec-env is the supported form' '#156 unquoted prose does not look like an invocation'
 expect_allow 'git add sops' '#156 ordinary sops-named operand'

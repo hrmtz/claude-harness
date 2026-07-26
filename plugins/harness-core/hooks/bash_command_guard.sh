@@ -102,6 +102,7 @@ classify_sops_exec_env_targets() {
        && [[ "$DEOBF" =~ (^|[[:space:]])([^[:space:]]*/)?sops[[:space:]]+edit([[:space:]]|$) ]]; then
         return 0
     fi
+    [[ "$SCRUBBED" != *$'\n'* ]] || return 11
     python3 - "$SCRUBBED" 2>/dev/null <<'PY'
 import os
 import re
@@ -110,6 +111,7 @@ import stat
 import sys
 
 import yaml
+from yaml.nodes import MappingNode, ScalarNode
 from yaml.tokens import AliasToken, AnchorToken
 
 cmd = sys.argv[1]
@@ -128,6 +130,9 @@ flag_without_value = {
 shells = {"bash", "sh", "dash", "zsh", "ksh"}
 control_tokens = {";", "&&", "||", "|", "&", "(", ")"}
 dynamic_chars = "$`*?[{"
+nonexecuting_contexts = {
+    "echo", "printf", "git", "grep", "rg", "sed", "awk", "ls", "stat"
+}
 
 def tokenize(command):
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
@@ -158,6 +163,10 @@ def is_command_position(tokens, index):
         )
     return False
 
+def is_nonexecuting_context(tokens, index):
+    start = command_segment_start(tokens, index)
+    return start < index and os.path.basename(tokens[start]) in nonexecuting_contexts
+
 def inspect_command(command, depth=0):
     global nested, unsupported, target_count
     try:
@@ -173,15 +182,29 @@ def inspect_command(command, depth=0):
             index >= 2
             and tokens[index - 1] in {"-c", "-lc", "-ic"}
             and os.path.basename(tokens[index - 2]) in shells
-            and is_command_position(tokens, index - 2)
         ):
             if depth >= MAX_SHELL_DEPTH:
                 unsupported = True
             else:
                 inspect_command(token, depth + 1)
 
+    # eval interprets its argument as shell source. Inspect it exactly like a
+    # shell -c body, regardless of wrapper position.
+    for index, token in enumerate(tokens[:-1]):
+        if os.path.basename(token) == "eval":
+            if depth >= MAX_SHELL_DEPTH:
+                unsupported = True
+            else:
+                inspect_command(tokens[index + 1], depth + 1)
+
     for index, token in enumerate(tokens):
-        if os.path.basename(token) != "sops" or not is_command_position(tokens, index):
+        if (
+            os.path.basename(token) != "sops"
+            or (
+                not is_command_position(tokens, index)
+                and is_nonexecuting_context(tokens, index)
+            )
+        ):
             continue
         if index + 1 >= len(tokens):
             unsupported = True
@@ -260,7 +283,7 @@ def inspect_command(command, depth=0):
                     break
             if unsupported:
                 continue
-            document = yaml.safe_load(source)
+            document = yaml.compose(source)
             after = os.stat(target, follow_symlinks=False)
             if (
                 (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
@@ -271,14 +294,15 @@ def inspect_command(command, depth=0):
         except Exception:
             unsupported = True
             continue
-        if not isinstance(document, dict):
+        if not isinstance(document, MappingNode):
             unsupported = True
             continue
-        if any(
-            key != "sops" and isinstance(value, (dict, list))
-            for key, value in document.items()
-        ):
-            nested = True
+        for key_node, value_node in document.value:
+            if not isinstance(key_node, ScalarNode):
+                unsupported = True
+                break
+            if key_node.value != "sops" and not isinstance(value_node, ScalarNode):
+                nested = True
 
         # sops passes its command argument to a shell. Treat that argument as
         # another bounded shell body so an allowed flat outer target cannot
