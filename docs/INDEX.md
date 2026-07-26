@@ -1,5 +1,14 @@
 # Documentation Index
 
+## Start here if you are picking up work
+
+| Doc | Topic |
+|---|---|
+| [`handouts/2026-07-27-next-session.md`](handouts/2026-07-27-next-session.md) | Ordering and rationale for the open work across claude-harness and hippocampus-mcp after v1.13.2, plus the traps that produced it. Read before starting anything hook-, formation-, or retrieval-related. |
+
+Handouts are written at the close of a session and are accurate as of that
+moment. Re-measure anything they claim about live machine state.
+
 ## Plugin docs
 
 | Doc | Topic |
