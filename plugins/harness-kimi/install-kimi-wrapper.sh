@@ -15,9 +15,16 @@ TEMPLATE_DST="${HOME}/.local/bin/AGENTS.md.template"
 REAL_KIMI="$HOME/.kimi-code/bin/kimi"
 CROSS_CLI_SRC="$HERE/../harness-core/bin/harness-cross-cli"
 CROSS_CLI_DST="${HOME}/.local/bin/harness-cross-cli"
+IDENTITY_SRC="$HERE/identity_owner.sh"
+IDENTITY_DST="${HOME}/.local/bin/identity_owner.sh"
 
 if [ ! -f "$WRAPPER_SRC" ]; then
     echo "error: wrapper not found: $WRAPPER_SRC" >&2
+    exit 1
+fi
+
+if [ ! -f "$IDENTITY_SRC" ]; then
+    echo "error: identity core not found: $IDENTITY_SRC" >&2
     exit 1
 fi
 
@@ -43,6 +50,12 @@ fi
 cp "$WRAPPER_SRC" "$WRAPPER_DST"
 chmod +x "$WRAPPER_DST"
 cp "$TEMPLATE_SRC" "$TEMPLATE_DST"
+# The wrapper sources the identity ownership core as "$HERE/identity_owner.sh"
+# and nothing else. In the checkout that path is a symlink into harness-core; in
+# an install it is this copy. One rule, both layouts — the alternative is a
+# per-entrypoint fallback chain, which is how this repo previously ended up with
+# two live mailbox roots that each looked correct.
+cp "$(readlink -f "$IDENTITY_SRC")" "$IDENTITY_DST"
 if [ -x "$CROSS_CLI_SRC" ]; then
     if [ -e "$CROSS_CLI_DST" ] || [ -L "$CROSS_CLI_DST" ]; then
         if [ "$(readlink -f "$CROSS_CLI_DST" 2>/dev/null || true)" != \
@@ -59,6 +72,7 @@ fi
 
 echo "installed wrapper: $WRAPPER_DST"
 echo "installed template: $TEMPLATE_DST"
+echo "installed identity core: $IDENTITY_DST"
 echo ""
 echo "Make sure ~/.local/bin is before ~/.kimi-code/bin in your PATH."
 echo "Typical shell rc addition:"

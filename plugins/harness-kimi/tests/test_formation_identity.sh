@@ -37,6 +37,14 @@ case "$1" in
       '#{window_name}') printf '%s\n' "${TEST_WINDOW_NAME:-shell}" ;;
       '#{pane_title}') printf '%s\n' "${TEST_PANE_TITLE:-shell}" ;;
       '#{window_id}') printf '%s\n' '@1' ;;
+      # The ownership core (#95) resolves the target pane and then proves the
+      # claimant descends from it before touching anything. A fake tmux that
+      # answers neither makes every claim refuse with `not-in-pane`, which reads
+      # as "the adapter did nothing" rather than "the fixture is incomplete".
+      '#{pane_id}') printf '%s\n' "${TMUX_PANE:-%77}" ;;
+      '#{pane_pid}') printf '%s\n' "${TEST_PANE_PID:-}" ;;
+      '#{@harness_chassis}') printf '%s\n' "${TEST_HARNESS_CHASSIS:-}" ;;
+      '#{@harness_owner_key}') printf '%s\n' "${TEST_HARNESS_OWNER_KEY:-}" ;;
     esac
     ;;
   rename-window|select-pane|set-option)
@@ -66,11 +74,23 @@ exit 0
 SH
 chmod +x "$TEST_ROOT/bin/kimi-real"
 
+# This test script stands in for the pane's own process: adapters run as its
+# children (directly or through a command substitution), so making it the
+# reported pane pid gives the ownership core a real ancestry to walk and a live
+# owner to record.
+export TEST_PANE_PID=$$
+
 cat > "$TEST_ROOT/bin/ps" <<'SH'
 #!/usr/bin/env bash
+queried="${@: -1}"
 case "$*" in
   *" comm="*) printf '%s\n' "${TEST_ANCESTOR_COMM:-bash}" ;;
-  *" ppid="*) printf '1\n' ;;
+  *" ppid="*)
+    # Everything reparents to the pane process, and the pane process to init,
+    # so an adapter launched inside $( ) still reaches TEST_PANE_PID.
+    if [ "$queried" = "${TEST_PANE_PID:-}" ]; then printf '1\n'
+    else printf '%s\n' "${TEST_PANE_PID:-1}"; fi
+    ;;
 esac
 SH
 chmod +x "$TEST_ROOT/bin/ps"

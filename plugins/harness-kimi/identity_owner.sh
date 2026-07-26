@@ -1,0 +1,1 @@
+../harness-core/hooks/identity_owner.sh
