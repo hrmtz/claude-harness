@@ -282,6 +282,8 @@ class ConvergenceGateTest(unittest.TestCase):
             "scripts/magi_plateau_gate.sh",
             "scripts/magi_review_packet.py",
             "scripts/magi_scrub.py",
+            # gh #151: reviewer cwd grounding for the fan-out and cross-family arms.
+            "scripts/magi_target_root.sh",
             "scripts/magi_validate_findings.py",
             "scripts/magi_verify_round.py",
             "scripts/magi_xfamily.sh",
