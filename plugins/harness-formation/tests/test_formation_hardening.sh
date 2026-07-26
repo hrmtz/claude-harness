@@ -39,7 +39,8 @@ got_home="$(HOME="$NEW_HOME" bash -c 'unset FORMATION_HOME NJSLYR_HOME; source "
 if [[ "$got_home" == "$NEW_HOME/.formation" ]]; then ok "new installs default to ~/.formation"; else bad "new install default got [$got_home]"; fi
 
 # All entrypoints must agree, or traffic splits again.
-for entry in "$HERE/../bin/mailbox-send" "$HERE/../lib/mailbox.sh" "$HERE/../lib/mailbox_relay.sh"; do
+for entry in "$HERE/../bin/mailbox-send" "$HERE/../lib/mailbox.sh" \
+             "$HERE/../lib/mailbox_delivery.sh" "$HERE/../lib/mailbox_relay.sh"; do
     if grep -q 'njslyr7' "$entry"; then bad "$(basename "$entry") still references njslyr7"; else ok "$(basename "$entry") free of legacy path"; fi
 done
 
@@ -166,6 +167,17 @@ if jq -e 'select(.from == "tester" and .to == "worker-a" and .body == "mailbox f
 else
   bad "formation msg did not append the expected mailbox row"
 fi
+if PANE_ALIAS_OUT="$(cmd_msg %42 "must not broaden msg addressing" 2>&1)"; then
+  PANE_ALIAS_RC=0
+else
+  PANE_ALIAS_RC=$?
+fi
+if [[ "$PANE_ALIAS_RC" -eq 2 && "$PANE_ALIAS_OUT" == *"no such worker"* ]] &&
+   ! grep -Fq 'must not broaden msg addressing' "$MAILBOX_LOG"; then
+  ok "formation msg remains worker-id-only despite shared pane resolver"
+else
+  bad "formation msg silently broadened to pane-id addressing [$PANE_ALIAS_RC: $PANE_ALIAS_OUT]"
+fi
 for _ in $(seq 1 40); do
   grep -Fq 'set-option -p -t %42 @formation_mail_pending' "$TMUX_TEST_LOG" && break
   sleep 0.05
@@ -224,6 +236,31 @@ if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_TEST_LOG"; then
   bad "refused formation msg injection touched the worker prompt"
 else
   ok "refused formation msg injection is non-destructive"
+fi
+
+registry_add "worker-exclusive" "%45" "formation-worker-exclusive" \
+  "$TMPDIR_T/brief.md" sid codex task goal 1
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+  case "${1:-}" in
+    show-options)
+      [[ " $* " == *" @formation_exclusive_input "* ]] && printf '1\n'
+      ;;
+    set-option|display-message) return 0 ;;
+    load-buffer) cat >/dev/null; return 1 ;;
+  esac
+}
+if EXCLUSIVE_FAIL_OUT="$(cmd_msg --inject worker-exclusive "nudge failure fixture" 2>&1)"; then
+  EXCLUSIVE_FAIL_RC=0
+else
+  EXCLUSIVE_FAIL_RC=$?
+fi
+if [[ "$EXCLUSIVE_FAIL_RC" -eq 4 &&
+      "$EXCLUSIVE_FAIL_OUT" == *"prompt nudge was not pasted"* &&
+      "$EXCLUSIVE_FAIL_OUT" != *"inject=attempted"* ]]; then
+  ok "formation msg propagates shared nudge failure honestly"
+else
+  bad "formation msg hid shared nudge failure [$EXCLUSIVE_FAIL_RC: $EXCLUSIVE_FAIL_OUT]"
 fi
 
 # A recycled PID must never be accepted as a relay or killed by reap.

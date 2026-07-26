@@ -4,9 +4,10 @@ Canonical source for the cross-CLI instruction rail (gh #105 / #166). This text 
 embedded in the always-loaded instruction surfaces (Kimi `AGENTS.md.template`,
 and — via `bin/install-pane-messaging-rail.sh` — the Codex global
 `~/AGENTS.md`). Durable delivery lives in `lib/mailbox.sh`; non-destructive
-signaling lives in `lib/mailbox_notify.sh`; the exceptional prompt-submit
-contract lives in `lib/wake.sh` (`tmux_send_submit`). Keep this rail in sync
-with `skills/formation/SKILL.md`.
+delivery policy and recipient resolution live in `lib/mailbox_delivery.sh`;
+signaling primitives live in `lib/mailbox_notify.sh`; the exceptional
+prompt-submit contract lives in `lib/wake.sh` (`tmux_send_submit`). Keep this
+rail in sync with `skills/formation/SKILL.md`.
 
 ---
 

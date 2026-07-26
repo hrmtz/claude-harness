@@ -12,8 +12,8 @@
 _exit_copy_mode() {
   local pane_id="$1"
   if [[ "$(tmux display-message -p -t "$pane_id" '#{pane_in_mode}' 2>/dev/null)" == "1" ]]; then
-    tmux send-keys -X -t "$pane_id" cancel 2>/dev/null
-    sleep 0.1
+    tmux send-keys -X -t "$pane_id" cancel 2>/dev/null || return
+    sleep 0.1 || return
   fi
 }
 
@@ -23,37 +23,10 @@ _exit_copy_mode() {
 # after a second delay. Keep this separate from shell-command launch Enter.
 _submit_enter_twice() {
   local pane_id="$1"
-  sleep "${FORMATION_SUBMIT_SETTLE_S:-0.4}"
-  tmux send-keys -t "$pane_id" Enter
-  sleep "${FORMATION_SUBMIT_RETRY_S:-0.5}"
-  tmux send-keys -t "$pane_id" Enter
-}
-
-wake_pane() {
-  local pane_id="$1"
-  local note="${2:-inbox}"
-  if ! tmux has-session 2>/dev/null; then
-    echo "wake: no tmux server" >&2
-    return 1
-  fi
-  if ! tmux list-panes -a -F '#{pane_id}' | grep -qx "$pane_id"; then
-    echo "wake: pane not found: $pane_id" >&2
-    return 1
-  fi
-  _exit_copy_mode "$pane_id"
-  tmux send-keys -l -t "$pane_id" "$note"
-  _submit_enter_twice "$pane_id"
-}
-
-wake_paste() {
-  local pane_id="$1" file="$2"
-  local buf="njslyr-$$-$(date +%s%N)"
-  _exit_copy_mode "$pane_id"
-  tmux load-buffer -b "$buf" "$file"
-  # -p: bracketed paste so a multi-line note lands atomically (no embedded
-  # newline submits the turn early). See tmux_send_submit for the rationale.
-  tmux paste-buffer -t "$pane_id" -b "$buf" -p -d
-  _submit_enter_twice "$pane_id"
+  sleep "${FORMATION_SUBMIT_SETTLE_S:-0.4}" || return
+  tmux send-keys -t "$pane_id" Enter || return
+  sleep "${FORMATION_SUBMIT_RETRY_S:-0.5}" || return
+  tmux send-keys -t "$pane_id" Enter || return
 }
 
 # Send text to a pane and force-submit, robustly.
@@ -72,12 +45,23 @@ wake_paste() {
 #      Pasted prefixes do NOT trigger those modes — only typed ones do.
 # The trailing guarded Enter is belt-and-suspenders for the rare swallow;
 # harmless on an already-submitted (empty) prompt and for Codex.
+# Return codes let callers distinguish retry-safe failures before paste from a
+# pasted-but-unconfirmed submit, where retrying could merge a second nudge into
+# the recipient draft.
+TMUX_SUBMIT_NOT_PASTED=10
+TMUX_SUBMIT_PASTED_UNCONFIRMED=11
+
 tmux_send_submit() {
   local pane_id="$1" text="$2"
   local buf="njslyr-$$-$(date +%s%N)"
   # Leave copy-mode first, or the submit Enter below is eaten by it.
-  _exit_copy_mode "$pane_id"
-  printf '%s' "$text" | tmux load-buffer -b "$buf" -
-  tmux paste-buffer -t "$pane_id" -b "$buf" -p -d
-  _submit_enter_twice "$pane_id"
+  _exit_copy_mode "$pane_id" || return "$TMUX_SUBMIT_NOT_PASTED"
+  printf '%s' "$text" | tmux load-buffer -b "$buf" - ||
+    return "$TMUX_SUBMIT_NOT_PASTED"
+  if ! tmux paste-buffer -t "$pane_id" -b "$buf" -p -d; then
+    tmux delete-buffer -b "$buf" 2>/dev/null || true
+    return "$TMUX_SUBMIT_NOT_PASTED"
+  fi
+  _submit_enter_twice "$pane_id" ||
+    return "$TMUX_SUBMIT_PASTED_UNCONFIRMED"
 }

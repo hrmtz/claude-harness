@@ -14,15 +14,16 @@
 
 ## 中身
 
-- `bin/formation` ── サブコマンド 7 つの 1 本 CLI:
-  `spawn | msg | status | inbox | reap | report | done | ask`
+- `bin/formation` ── worker lifecycle / mailbox / durable request を束ねる CLI:
+  `spawn | msg | status | inbox | reap | report | done | ask | ack | resolve | remote-check`
 - `lib/mailbox.sh` ── jsonl append-only の pane 間メッセージバス。recipient 毎カーソル、flock で書き込みガード
-- `lib/wake.sh` ── `tmux send-keys` と `paste-buffer` のヘルパー
-- `lib/redact.sh` ── credential パターン検知 (送信全パスで hard-refuse)
+- `lib/mailbox_delivery.sh` ── `formation msg` / `mailbox-send` 共通の宛先・送信者解決、relay 委譲、exclusive inject policy
+- `lib/mailbox_notify.sh` / `lib/mailbox_relay.sh` ── prompt に触れない signal primitive と worker 毎の relay daemon
+- `lib/requests.sh` ── transport と分離した durable ASK / ACK / resolve state
+- `lib/wake.sh` ── exceptional inject 専用の単一 `tmux_send_submit` primitive
+- `lib/redact.sh` ── credential パターン検知と metadata-only refusal audit (送信全パスで hard-refuse)
 - `skills/formation/SKILL.md` ── agent skill (claude + codex)。発火条件と実行フロー
 - `skills/formation/templates/briefing.md` ── lead と worker の契約書テンプレ
-
-全部で約 300 行。
 
 ## いつ使うか
 

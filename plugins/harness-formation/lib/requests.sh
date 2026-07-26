@@ -13,10 +13,13 @@ FORMATION_REQUEST_LOCK="${FORMATION_REQUEST_LOG}.lock"
 
 request_init() {
   mkdir -p "$FORMATION_REQUEST_DIR"
-  touch "$FORMATION_REQUEST_LOG"
+  touch "$FORMATION_REQUEST_LOG" "$FORMATION_REQUEST_LOCK"
 }
 
-request_current_all() {
+# Reduce the append-only event log to one validated current snapshot per
+# request. All readers and transitions go through this single schema gate so a
+# future field change cannot make ASK creation and ACK authorization disagree.
+_request_snapshot_unlocked() {
   request_init
   jq -Rrcs '
     def valid_request_event:
@@ -31,8 +34,19 @@ request_current_all() {
     reduce (splits("\n") | fromjson? | select(valid_request_event)) as $event
       ({}; .[$event.request_id] = $event)
     | [.[]] | sort_by(.created_at // .ts // "")
-    | .[]
   ' "$FORMATION_REQUEST_LOG"
+}
+
+request_snapshot() {
+  request_init
+  (
+    flock -s 204
+    _request_snapshot_unlocked
+  ) 204<"$FORMATION_REQUEST_LOCK"
+}
+
+request_current_all() {
+  request_snapshot | jq -c '.[]'
 }
 
 request_current_one() {
@@ -57,26 +71,15 @@ request_create() {
     local existing request_id ts event
     # An exact, still-unresolved retry is idempotent. Once the prior request is
     # closed, the same wording may legitimately create a new request.
-    existing="$(jq -Rrcs --arg worker "$worker_id" --arg parent "$parent_id" \
+    existing="$(_request_snapshot_unlocked | jq -c \
+      --arg worker "$worker_id" --arg parent "$parent_id" \
       --arg question "$question" --arg next "$next_state" '
-        def valid_request_event:
-          ((.request_id? | type) == "string")
-          and ((.event? | type) == "string")
-          and ((.state? | type) == "string")
-          and ((.closed? | type) == "boolean")
-          and ((.worker_id? | type) == "string")
-          and ((.parent_id? | type) == "string")
-          and ((.question? | type) == "string")
-          and ((.next_state? | type) == "string");
-        reduce (splits("\n") | fromjson? | select(valid_request_event)) as $event
-          ({}; .[$event.request_id] = $event)
-        | [.[]]
-        | map(select(.worker_id == $worker and .parent_id == $parent
-                     and .question == $question
-                     and .next_state == $next
-                     and .closed != true and .state == "WAITING_PARENT"))
-        | last // empty
-      ' "$FORMATION_REQUEST_LOG")"
+      map(select(.worker_id == $worker and .parent_id == $parent
+                 and .question == $question
+                 and .next_state == $next
+                 and .closed != true and .state == "WAITING_PARENT"))
+      | last // empty
+    ')"
     if [[ -n "$existing" ]]; then
       printf '%s\n' "$existing" | jq -c '{request_id,created:false}'
       return 0
@@ -102,21 +105,9 @@ request_transition() {
   (
     flock -x 202
     local current ts state event
-    current="$(jq -Rrcs --arg id "$request_id" '
-      def valid_request_event:
-        ((.request_id? | type) == "string")
-        and ((.event? | type) == "string")
-        and ((.state? | type) == "string")
-        and ((.closed? | type) == "boolean")
-        and ((.worker_id? | type) == "string")
-        and ((.parent_id? | type) == "string")
-        and ((.question? | type) == "string")
-        and ((.next_state? | type) == "string");
-      reduce (splits("\n") | fromjson?
-              | select(valid_request_event and .request_id == $id)) as $event
-        (null; $event)
-      // empty
-    ' "$FORMATION_REQUEST_LOG")"
+    current="$(_request_snapshot_unlocked | jq -c --arg id "$request_id" '
+      map(select(.request_id == $id)) | last // empty
+    ')"
     [[ -n "$current" ]] || {
       echo "no such request: $request_id" >&2
       return 2

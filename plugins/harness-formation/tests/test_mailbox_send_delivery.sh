@@ -35,14 +35,20 @@ printf '%s\n' \
   'printf "tmux %s\n" "$*" >>"$TMUX_LOG"' \
   'case "${1:-}" in' \
   '  list-panes) printf "%%42\n" ;;' \
-  '  display-message|display) [[ " $* " == *" -p "* ]] && printf "0\n" || true ;;' \
+  '  display-message|display)' \
+  '    if [[ " $* " == *" -p "* && " $* " == *formation_identity_locked* ]]; then printf "%s\n" "${TMUX_IDENTITY:-}";' \
+  '    elif [[ " $* " == *" -p "* && " $* " == *window_name* ]]; then printf "%s\n" "${TMUX_WINDOW:-}";' \
+  '    elif [[ " $* " == *" -p "* ]]; then printf "0\n"; fi ;;' \
   '  show-options)' \
   '    if [[ " $* " == *" @formation_exclusive_input "* ]]; then printf "%s\n" "${TMUX_EXCLUSIVE:-0}";' \
   '    elif [[ -s "${TMUX_STATE:-}" ]]; then cat "$TMUX_STATE"; fi ;;' \
   '  set-option)' \
   '    [[ "${TMUX_FAIL_SET_OPTION:-0}" != "1" ]] || exit 1' \
   '    if [[ " $* " == *" @formation_mail_pending "* && " $* " != *" -u "* ]]; then printf "%s\n" "${*: -1}" >"$TMUX_STATE"; fi ;;' \
-  '  load-buffer) dd of=/dev/null status=none ;;' \
+  '  load-buffer)' \
+  '    [[ "${TMUX_FAIL_LOAD:-0}" != "1" ]] || exit 1' \
+  '    dd of=/dev/null status=none ;;' \
+  '  send-keys) [[ "${TMUX_FAIL_ENTER:-0}" != "1" ]] ;;' \
   'esac' \
   >"$FAKE_BIN/tmux"
 chmod +x "$FAKE_BIN/tmux"
@@ -53,14 +59,15 @@ run_send() {
   TMUX_LOG="$TMUX_LOG" \
   FORMATION_HOME="$FORMATION_HOME_FIXTURE" \
   FORMATION_MAILBOX="$MAILBOX" \
-  MAILBOX_FROM="fixture-sender" \
   MAILBOX_SUBMIT_SETTLE_S=0 \
   MAILBOX_SUBMIT_RETRY_S=0 \
 	  TMUX_FAIL_SET_OPTION="${TMUX_FAIL_SET_OPTION:-0}" \
+	  TMUX_FAIL_LOAD="${TMUX_FAIL_LOAD:-0}" \
+	  TMUX_FAIL_ENTER="${TMUX_FAIL_ENTER:-0}" \
 	  TMUX_EXCLUSIVE="${TMUX_EXCLUSIVE:-0}" \
 	  TMUX_STATE="$TMUX_STATE" \
   PATH="$FAKE_BIN:/usr/bin:/bin" \
-    "$FAKE_BIN/mailbox-send" "$@" >"$out" 2>&1
+    "$FAKE_BIN/mailbox-send" "$@" --from fixture-sender >"$out" 2>&1
 }
 
 # Help is sourced from the comment header only; executable setup must not leak
@@ -76,7 +83,7 @@ fi
 run_send "$FIXTURE/default.stdout" %42 "delivery fixture"
 
 grep -Fq 'appended seq=' "$FIXTURE/default.stdout"
-grep -Fq 'signaled %42' "$FIXTURE/default.stdout"
+grep -Fq 'signaled pane=%42 directly' "$FIXTURE/default.stdout"
 grep -Fq 'inject=skipped' "$FIXTURE/default.stdout"
 grep -Fq 'tmux set-option -p -t %42 @formation_mail_pending' "$TMUX_LOG"
 grep -Fq 'tmux display-message -t %42' "$TMUX_LOG"
@@ -90,6 +97,93 @@ jq -e '
   and .to == "pane-42"
   and .body == "delivery fixture"
 ' "$MAILBOX" >/dev/null
+
+# Every public sender uses the locked Formation identity before a mutable
+# window-name fallback.
+resolved_sender="$(FORMATION_SELF="" MAILBOX_FROM="" \
+  TMUX_PANE=%42 TMUX_IDENTITY=steady-heron \
+  TMUX_LOG="$TMUX_LOG" \
+  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  bash -c 'source "$1"; mailbox_resolve_sender "" unknown' \
+    _ "$HERE/../lib/mailbox_delivery.sh")"
+[[ "$resolved_sender" == "steady-heron" ]]
+resolved_sender="$(FORMATION_SELF=locked-worker MAILBOX_FROM=spoofed-window \
+  bash -c 'source "$1"; mailbox_resolve_sender "" unknown' \
+    _ "$HERE/../lib/mailbox_delivery.sh")"
+[[ "$resolved_sender" == "locked-worker" ]]
+resolved_sender="$(FORMATION_SELF="" MAILBOX_FROM=spoofed-window \
+  TMUX_PANE=%42 TMUX_IDENTITY=steady-heron TMUX_LOG="$TMUX_LOG" \
+  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  bash -c 'source "$1"; mailbox_resolve_sender "" unknown' \
+    _ "$HERE/../lib/mailbox_delivery.sh")"
+[[ "$resolved_sender" == "steady-heron" ]]
+resolved_sender="$(FORMATION_SELF="" MAILBOX_FROM=tooling-alias TMUX_PANE="" \
+  bash -c 'source "$1"; mailbox_resolve_sender "" unknown' \
+    _ "$HERE/../lib/mailbox_delivery.sh")"
+[[ "$resolved_sender" == "tooling-alias" ]]
+for mutable_window in claude-lead-alpha bash; do
+  resolved_sender="$(FORMATION_SELF="" MAILBOX_FROM="" \
+    TMUX_PANE=%42 TMUX_IDENTITY="" TMUX_WINDOW="$mutable_window" \
+    TMUX_LOG="$TMUX_LOG" PATH="$FAKE_BIN:/usr/bin:/bin" \
+    bash -c 'source "$1"; mailbox_resolve_sender "" shell 0 0' \
+      _ "$HERE/../lib/mailbox_delivery.sh")"
+  [[ "$resolved_sender" == "pane-42" ]]
+done
+
+# Caller-provided submit timing remains authoritative over the standalone
+# mailbox-send defaults after policy unification.
+timing_log="$(FORMATION_SUBMIT_SETTLE_S=7 FORMATION_SUBMIT_RETRY_S=8 \
+  MAILBOX_SUBMIT_SETTLE_S=9 MAILBOX_SUBMIT_RETRY_S=9 \
+  bash -c '
+    tmux() {
+      case "$1" in
+        show-options) printf "1\n" ;;
+        display-message) printf "0\n" ;;
+        load-buffer) cat >/dev/null ;;
+      esac
+    }
+    sleep() { printf "sleep=%s\n" "$1"; }
+    source "$1"
+    mailbox_inject_nudge %42 1 sender 1
+  ' _ "$HERE/../lib/mailbox_delivery.sh")"
+grep -Fq 'sleep=7' <<<"$timing_log"
+grep -Fq 'sleep=8' <<<"$timing_log"
+if grep -Fq 'sleep=9' <<<"$timing_log"; then
+  echo "FAIL: mailbox defaults overrode caller submit timing" >&2
+  exit 1
+fi
+
+# Direct mailbox-send refusal uses the same metadata-only audit logger as
+# formation msg/ask and never appends the credential-shaped body.
+if run_send "$FIXTURE/credential-refused.stdout" %42 \
+  "token=fixture-not-a-real-secret"; then
+  credential_refused_rc=0
+else
+  credential_refused_rc=$?
+fi
+[[ "$credential_refused_rc" -eq 3 ]]
+grep -Fq $'\tmailbox\tfrom=fixture-sender\tto=pane-42' \
+  "$FORMATION_HOME_FIXTURE/mailbox/refuse.log"
+if grep -Fq 'fixture-not-a-real-secret' \
+  "$FORMATION_HOME_FIXTURE/mailbox/refuse.log" "$MAILBOX"; then
+  echo "FAIL: credential-shaped body leaked into mailbox or refusal log" >&2
+  exit 1
+fi
+
+# Both public send paths must delegate policy to the same library rather than
+# re-growing local relay/injection implementations. Formation legitimately
+# uses relay/wake primitives elsewhere for spawn and reap, so scope that check
+# to cmd_msg.
+grep -Fq 'mailbox_delivery.sh' "$HERE/../bin/mailbox-send"
+grep -Fq 'mailbox_delivery.sh' "$HERE/../bin/formation"
+if grep -Eq '^[[:space:]]*(mailbox_relay_alive|mailbox_signal_pane|tmux_send_submit)' \
+    "$HERE/../bin/mailbox-send" ||
+   sed -n '/^cmd_msg()/,/^clear_mailbox_badge_through()/p' \
+    "$HERE/../bin/formation" |
+    grep -Eq '^[[:space:]]*(mailbox_relay_alive|mailbox_signal_pane|tmux_send_submit)'; then
+  echo "FAIL: a public send path bypasses mailbox_delivery.sh" >&2
+  exit 1
+fi
 
 # Signal ownership is serialized per pane and can never move the badge
 # backwards when an older sender arrives after a newer one.
@@ -107,7 +201,7 @@ else
   inject_refused_rc=$?
 fi
 [[ "$inject_refused_rc" -eq 5 ]]
-grep -Fq 'row is durable and signaled' "$FIXTURE/inject-refused.stdout"
+grep -Fq 'row is durable and its signal path was accepted' "$FIXTURE/inject-refused.stdout"
 if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
   echo "FAIL: refused injection touched the prompt" >&2
   exit 1
@@ -131,6 +225,41 @@ fi
 if grep -Fq 'inject fixture' "$TMUX_LOG"; then
   echo "FAIL: --inject must not paste full body into the prompt" >&2
   cat "$TMUX_LOG" >&2
+  exit 1
+fi
+
+# A failed exceptional nudge is never reported as attempted/successful. The
+# mailbox row and non-destructive signal remain durable.
+if TMUX_EXCLUSIVE=1 TMUX_FAIL_LOAD=1 \
+  run_send "$FIXTURE/inject-failed.stdout" %42 "failed inject fixture" --inject; then
+  inject_failed_rc=0
+else
+  inject_failed_rc=$?
+fi
+[[ "$inject_failed_rc" -eq 4 ]]
+grep -Fq 'prompt nudge was not pasted' "$FIXTURE/inject-failed.stdout"
+if grep -Fq 'inject=attempted' "$FIXTURE/inject-failed.stdout"; then
+  echo "FAIL: failed prompt nudge was reported as attempted success" >&2
+  exit 1
+fi
+jq -e 'select(.body == "failed inject fixture")' "$MAILBOX" >/dev/null
+
+# Once paste succeeded, a submit failure is a distinct non-retryable state:
+# retrying could merge a second nudge into the recipient draft.
+if TMUX_EXCLUSIVE=1 TMUX_FAIL_ENTER=1 \
+  run_send "$FIXTURE/submit-unconfirmed.stdout" %42 \
+    "submit unconfirmed fixture" --inject; then
+  submit_unconfirmed_rc=0
+else
+  submit_unconfirmed_rc=$?
+fi
+[[ "$submit_unconfirmed_rc" -eq 4 ]]
+grep -Fq 'inject=pasted' "$FIXTURE/submit-unconfirmed.stdout"
+grep -Fq 'DO NOT RETRY automatically' "$FIXTURE/submit-unconfirmed.stdout"
+grep -Fq 'tmux paste-buffer -t %42 ' "$TMUX_LOG"
+grep -Fq 'tmux send-keys -t %42 Enter' "$TMUX_LOG"
+if grep -Fq 'inject=attempted' "$FIXTURE/submit-unconfirmed.stdout"; then
+  echo "FAIL: pasted-but-unconfirmed nudge was reported as successful" >&2
   exit 1
 fi
 
@@ -217,9 +346,10 @@ rm -f "$REGISTRY" "$FORMATION_HOME_FIXTURE/formation/worker-42.relay_pid"
 
 # --- all writers share one lock and one seq allocator ---
 for i in $(seq 1 12); do
-  FORMATION_MAILBOX="$MAILBOX" MAILBOX_FROM="cli-$i" \
+  FORMATION_MAILBOX="$MAILBOX" \
     PATH="$FAKE_BIN:/usr/bin:/bin" \
-    "$FAKE_BIN/mailbox-send" %42 "cli concurrent $i" --no-nudge >/dev/null &
+    "$FAKE_BIN/mailbox-send" %42 "cli concurrent $i" \
+      --no-nudge --from "cli-$i" >/dev/null &
   FORMATION_MAILBOX="$MAILBOX" PATH="$FAKE_BIN:/usr/bin:/bin" \
     bash -c 'source "$1"; mailbox_append "$2" pane-42 "$3" >/dev/null' \
       _ "$HERE/../lib/mailbox.sh" "lib-$i" "lib concurrent $i" &
