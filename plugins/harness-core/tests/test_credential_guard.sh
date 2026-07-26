@@ -71,10 +71,31 @@ guard_blocks() {
 expect_block() { if guard_blocks "$1"; then ok "BLOCK: $2"; else bad "should BLOCK: $2 -> [$1]"; fi; }
 expect_allow() { if guard_blocks "$1"; then bad "should ALLOW: $2 -> [$1]"; else ok "ALLOW: $2"; fi; }
 
+# Synthetic SOPS-shaped fixtures contain dummy ciphertext only. They are parsed
+# structurally by the guard; sops is never invoked by this test.
+flat_sops_file="$TEST_ROOT/flat.enc.yaml"
+nested_sops_file="$TEST_ROOT/nested.enc.yaml"
+list_sops_file="$TEST_ROOT/list.enc.yaml"
+printf '%s\n' \
+    'API_TOKEN: ENC[AES256_GCM,data:synthetic-flat,type:str]' \
+    'sops:' \
+    '  version: 3.9.4' > "$flat_sops_file"
+printf '%s\n' \
+    'service:' \
+    '  API_TOKEN: ENC[AES256_GCM,data:synthetic-nested,type:str]' \
+    'sops:' \
+    '  version: 3.9.4' > "$nested_sops_file"
+printf '%s\n' \
+    'services:' \
+    '  - ENC[AES256_GCM,data:synthetic-list,type:str]' \
+    'sops:' \
+    '  version: 3.9.4' > "$list_sops_file"
+
 # --- #6: DSN-with-creds-in-argv ---
 expect_block 'psql postgresql://prs:s3cr3tpw@mars:5434/db -tAc "select 1"' '#6 password DSN in psql argv'
 expect_block 'echo redis://u:p4ss@cache:6379 | nc x' '#6 redis DSN with creds'
-expect_allow 'sops exec-env pg.enc.yaml '\''psql "$POSTGRES_URL" -tAc "select 1"'\''' '#6 env-expanded DSN (no literal pw)'
+env_dsn_cmd="sops exec-env '$flat_sops_file' 'psql \"\$POSTGRES_URL\" -tAc \"select 1\"'"
+expect_allow "$env_dsn_cmd" '#6 env-expanded DSN (no literal pw)'
 expect_allow 'psql postgresql://mars:5434/db -tAc "select 1"' '#6 DSN without password (no creds)'
 
 # --- #10: printenv / set target-agnostic ---
@@ -84,6 +105,16 @@ expect_block 'set | rg postgres' '#10 set piped to non-keyword filter'
 expect_allow 'set -e' '#10 set -e is not an env dump'
 expect_allow 'set -o pipefail' '#10 set -o pipefail is not an env dump'
 expect_block 'HARNESS_ACK_CRED_READ=1 printenv MARS_POSTGRES_URL' '#108 read ACK does not authorize env output'
+
+# --- #156: sops exec-env complex-type errors can print decrypted values ---
+expect_allow "sops exec-env '$flat_sops_file' '/usr/bin/true'" '#156 flat SOPS mapping'
+expect_allow "sops exec-env --pristine '$flat_sops_file' '/usr/bin/true'" '#156 flat mapping with exec-env option'
+expect_block "sops exec-env '$nested_sops_file' '/usr/bin/true'" '#156 nested SOPS mapping'
+expect_block "sops exec-env '$list_sops_file' '/usr/bin/true'" '#156 top-level list value'
+expect_block "sops exec-env '$TEST_ROOT/missing.enc.yaml' '/usr/bin/true'" '#156 unreadable target fails closed'
+expect_block 'sops exec-env "$SOPS_FILE" /usr/bin/true' '#156 dynamic target fails closed'
+expect_block "bash -c \"sops exec-env '$nested_sops_file' /usr/bin/true\"" '#156 shell -c cannot hide nested target'
+expect_allow 'echo "sops exec-env is the supported form"' '#156 prose does not require YAML inspection'
 
 bash_guard_failure_fails_closed() {
     local payload="$1" command_name="${2:-}" tmp_home fake_bin out rc

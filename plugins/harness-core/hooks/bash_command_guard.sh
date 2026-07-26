@@ -80,6 +80,137 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 ')
 
 # ----------------------------------------
+# Refuse `sops exec-env` when its input is not a flat mapping (gh #156).
+#
+# `sops exec-env` cannot export nested mappings/lists. Worse, sops includes the
+# decrypted value in its own type-error text. Inspect only the encrypted YAML
+# structure here, before sops can run; encrypted values remain encrypted while
+# key names and container types are readable. Parser/YAML diagnostics are
+# suppressed because this guard must never turn an error path into an output
+# channel.
+#
+# Exit status:
+#   0  no exec-env invocation, or every inspected file is a flat mapping
+#   10 at least one inspected file contains a nested mapping/list
+#   11 target/path/YAML could not be inspected safely (fail closed)
+classify_sops_exec_env_targets() {
+    [[ "$CMD" =~ sops[[:space:]]+exec-env ]] || return 0
+    python3 - "$CMD" 2>/dev/null <<'PY'
+import os
+import shlex
+import sys
+
+import yaml
+
+cmd = sys.argv[1]
+nested = False
+unsupported = False
+flag_with_value = {"--user", "--keyservice"}
+flag_without_value = {
+    "--background",
+    "--pristine",
+    "--enable-local-keyservice",
+}
+shells = {"bash", "sh", "dash", "zsh", "ksh"}
+
+def tokenize(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+def inspect_command(command, depth=0):
+    global nested, unsupported
+    try:
+        tokens = tokenize(command)
+    except ValueError:
+        unsupported = True
+        return
+
+    # A quoted shell -c body is one outer token; inspect that body as the
+    # command it actually is, rather than allowing it to hide exec-env.
+    if depth < 2:
+        for index, token in enumerate(tokens):
+            if (
+                index >= 2
+                and tokens[index - 1] in {"-c", "-lc", "-ic"}
+                and os.path.basename(tokens[index - 2]) in shells
+                and "exec-env" in token
+            ):
+                inspect_command(token, depth + 1)
+
+    for index, token in enumerate(tokens):
+        if os.path.basename(token) != "sops":
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1] != "exec-env":
+            continue
+        cursor = index + 2
+        target = None
+        while cursor < len(tokens):
+            candidate = tokens[cursor]
+            if candidate in flag_with_value:
+                cursor += 2
+                continue
+            if candidate in flag_without_value or any(
+                candidate.startswith(flag + "=") for flag in flag_with_value
+            ):
+                cursor += 1
+                continue
+            if candidate == "--":
+                cursor += 1
+                continue
+            if candidate.startswith("-"):
+                unsupported = True
+                break
+            target = candidate
+            break
+
+        # A dynamic/globbed path cannot be inspected before shell expansion.
+        if (
+            target is None
+            or any(char in target for char in "$`*?[{")
+            or not os.path.isfile(target)
+        ):
+            unsupported = True
+            continue
+        try:
+            with open(target, encoding="utf-8") as handle:
+                document = yaml.safe_load(handle)
+        except Exception:
+            unsupported = True
+            continue
+        if not isinstance(document, dict):
+            unsupported = True
+            continue
+        if any(
+            key != "sops" and isinstance(value, (dict, list))
+            for key, value in document.items()
+        ):
+            nested = True
+
+inspect_command(cmd)
+
+if nested:
+    sys.exit(10)
+if unsupported:
+    sys.exit(11)
+sys.exit(0)
+PY
+}
+
+classify_sops_exec_env_targets
+SOPS_TARGET_CLASS=$?
+case "$SOPS_TARGET_CLASS" in
+    0) ;;
+    10)
+        emit_deny "- nested/complex value を含む SOPS file は sops exec-env で処理せず、sops edit で flat mapping に再構成しよう。\n次これで行こう。"
+        ;;
+    *)
+        emit_deny "- sops exec-env の対象 file を安全に検査できない。literal path の flat mapping にするか、sops edit で構造を確認・再構成しよう。\n次これで行こう。"
+        ;;
+esac
+
+# ----------------------------------------
 # Pattern → alternative action catalog.
 # Format: <regex>:::<terse alternative action>[:::<flags>]
 # Reason field is action-only: tells the agent what to do, not what was wrong.

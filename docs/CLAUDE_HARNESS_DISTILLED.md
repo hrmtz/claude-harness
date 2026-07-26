@@ -119,6 +119,10 @@ sops edit <file>                  # 編集時 (EDITOR で decrypted 編集、sav
 sops exec-env <file> '<cmd>'      # 使用時 (subprocess の env に注入、stdout に value 出ない)
 ```
 
+`sops exec-env` の対象は scalar だけの flat mapping に限る。nested mapping
+や list を含む complex value は、型エラーに復号値が混ざり得るため実行せず、
+`sops edit <file>` で flat mapping に再構成する。
+
 `sops -d` を含むコマンドは **一切書かない**。出力を `head` / `cat` / `grep` / `tee` / `less` / pipe に流す構文は違反。
 
 ポイント: positive rule (これしか書くな) にすることで、negative rule (こうするな) の網羅漏れを構造的に防ぐ。
