@@ -18,7 +18,10 @@ HOME = os.path.expanduser("~")
 LIVE_SETTINGS = f"{HOME}/.claude/settings.json"
 LIVE_HOOKS = f"{HOME}/.claude/hooks"
 PLUG = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/plugins"
-PLUGINS = ["harness-core", "harness-rails", "harness-formation"]
+PLUGINS = sorted(
+    os.path.basename(os.path.dirname(os.path.dirname(path)))
+    for path in glob.glob(f"{PLUG}/harness-*/hooks/hooks.json")
+)
 DRY = "--dry-run" in sys.argv
 TS = (sys.argv[sys.argv.index("--ts") + 1] if "--ts" in sys.argv
       else datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
