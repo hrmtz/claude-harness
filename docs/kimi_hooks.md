@@ -46,9 +46,11 @@ Claude/Codex-only. The wire.jsonl cron scrubber remains as the detective layer
 
 ## Background
 
-Kimi Code CLI has no native hook API (no PreToolUse/PostToolUse, unlike
-Claude Code and Codex stable `hooks`). This document records how harness-kimi
-achieves PreToolUse-equivalent **preventive** blocking anyway, and the setup.
+At the time of #52 (2026-07-02), Kimi Code CLI had no native hook API (no
+PreToolUse/PostToolUse, unlike Claude Code and Codex stable `hooks`). This
+document records how harness-kimi achieved PreToolUse-equivalent **preventive**
+blocking anyway, and the setup. Superseded by the native hook API in
+Kimi >= 0.28 (#54, see the first section of this doc).
 
 Resolved in [#52](https://github.com/hrmtz/claude-harness/issues/52)
 (2026-07-02, pair-worked with a Kimi formation peer). Companion doc:

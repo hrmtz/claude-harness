@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gh #105 regression: the Formation pane-messaging double-submit rail must be present
+# gh #105/#166 regression: the Formation mailbox-first rail must be present
 # on the always-loaded instruction surfaces (canonical rail, Kimi AGENTS template) and
 # must survive the install paths (pane-rail upsert, kimi AGENTS install).
 set -uo pipefail
@@ -15,20 +15,21 @@ pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-# Tokens that pin the contract on every surface: preferred route, copy-mode cancel,
-# bracketed paste, both delays, double Enter, and the shell-launch distinction.
+# Tokens pin both the safe default and exceptional exclusive-submit path.
 check_surface() {
   local label="$1" file="$2" single_token="$3"
   local missing=""
-  for tok in "formation msg" "tmux_send_submit" "send-keys -X cancel" "#{pane_in_mode}" \
-             "load-buffer" "paste-buffer -p" "0.4" "0.5" "$single_token"; do
+  for tok in "formation msg" "mailbox-send" "zero keystrokes" "--inject" \
+             "receipt unconfirmed" "formation inbox" "tmux_send_submit" \
+             "send-keys -X cancel" "#{pane_in_mode}" "load-buffer" \
+             "paste-buffer -p" "0.4" "0.5" "$single_token"; do
     grep -qF -- "$tok" "$file" || missing="$missing $tok"
   done
   # Double Enter: two distinct Enter submissions separated by the second delay.
   grep -qF -- "sleep ~0.4s" "$file" && grep -qF -- "sleep ~0.5s" "$file" \
     || missing="$missing delayed-double-submit"
   [ "$(grep -cF -- 'Enter' "$file")" -ge 2 ] || missing="$missing double-Enter"
-  if [ -z "$missing" ]; then ok "$label carries the double-submit contract"
+  if [ -z "$missing" ]; then ok "$label carries the mailbox-first contract"
   else bad "$label missing:$missing"; fi
 }
 
