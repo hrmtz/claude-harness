@@ -33,7 +33,7 @@ trap 'rm -f "$block" "$new"' EXIT
 } > "$block"
 # Fail closed if the rail body extraction came out empty (e.g. the source's
 # structure changed) rather than installing a markers-only block.
-grep -qF 'double-submit' "$block" || {
+grep -qF 'mailbox-first' "$block" || {
     echo "error: extracted rail body is empty or unrecognizable; refusing to install" >&2
     exit 1
 }

@@ -48,6 +48,8 @@ export FORMATION_HOME="$TMPDIR_T/formation"
 # Source the script (dispatch is guarded behind BASH_SOURCE==$0, so this only
 # defines functions). FORMATION_SELF avoids tmux lookups in self_id.
 export FORMATION_SELF="tester"
+# Tests must never mutate the invoking pane's live badge.
+unset TMUX_PANE
 # shellcheck source=/dev/null
 source "$BIN"
 # bin/formation sets `set -euo pipefail`; relax it so the test driver can keep
@@ -115,6 +117,119 @@ REMOTE_STATUS="$(PATH="$TMPDIR_T/no-codex" cmd_remote_check)"
 REMOTE_RC=$?
 if [[ "$REMOTE_RC" -eq 1 && "$REMOTE_STATUS" == *"unavailable"* ]]; then ok "remote-check handles missing Codex"; else bad "remote-check missing-Codex result [$REMOTE_RC: $REMOTE_STATUS]"; fi
 
+echo "== mailbox-first formation msg (#166) =="
+: > "$REGISTRY"
+registry_add "worker-a" "%42" "formation-worker-a" "$TMPDIR_T/brief.md"
+TMUX_TEST_LOG="$TMPDIR_T/msg-tmux.log"
+: > "$TMUX_TEST_LOG"
+RELAY_FAKE_BIN="$TMPDIR_T/relay-fake-bin"
+mkdir -p "$RELAY_FAKE_BIN"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >>"$TMUX_TEST_LOG"' \
+  'case "${1:-}" in show-options) exit 0;; set-option|display-message) exit 0;; esac' \
+  > "$RELAY_FAKE_BIN/tmux"
+chmod +x "$RELAY_FAKE_BIN/tmux"
+mailbox_init
+: > "$MAILBOX_LOG"
+TMUX_TEST_LOG="$TMUX_TEST_LOG" FORMATION_MAILBOX="$MAILBOX_LOG" \
+  PATH="$RELAY_FAKE_BIN:/usr/bin:/bin" \
+  bash "$LIB/mailbox_relay.sh" worker-a %42 >"$TMPDIR_T/live-relay.log" 2>&1 &
+RELAY_PID=$!
+echo "$RELAY_PID" > "$FORMATION_DIR/worker-a.relay_pid"
+tmux() { printf '%s\n' "$*" >> "$TMUX_TEST_LOG"; }
+MSG_OUT="$(cmd_msg worker-a "mailbox first fixture")"
+if [[ "$MSG_OUT" == *"appended seq="* && "$MSG_OUT" == *"signal=pending"* ]]; then
+  ok "formation msg reports durable append and relay-owned signal"
+else
+  bad "formation msg output broke mailbox-first contract [$MSG_OUT]"
+fi
+if jq -e 'select(.from == "tester" and .to == "worker-a" and .body == "mailbox first fixture")' "$MAILBOX_LOG" >/dev/null; then
+  ok "formation msg appends a worker-id addressed mailbox row"
+else
+  bad "formation msg did not append the expected mailbox row"
+fi
+for _ in $(seq 1 40); do
+  grep -Fq 'set-option -p -t %42 @formation_mail_pending' "$TMUX_TEST_LOG" && break
+  sleep 0.05
+done
+if grep -Fq 'set-option -p -t %42 @formation_mail_pending' "$TMUX_TEST_LOG"; then
+  ok "formation msg live relay actually sets the mailbox badge"
+else
+  bad "formation msg claimed relay-owned signal but live relay never set the badge"
+fi
+if ! grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_TEST_LOG"; then
+  ok "formation msg sends zero prompt keystrokes through the live relay"
+else
+  bad "formation msg touched tmux prompt input"
+fi
+if ! grep -Fq 'formation-mail-nudge' "$HERE/../bin/formation"; then
+  ok "spawn does not auto-start an idle-heuristic prompt injector"
+else
+  bad "spawn bypasses the explicit --inject contract through formation-mail-nudge"
+fi
+
+pkill -P "$RELAY_PID" 2>/dev/null || true
+kill "$RELAY_PID" 2>/dev/null || true
+wait "$RELAY_PID" 2>/dev/null || true
+if DEAD_RELAY_OUT="$(cmd_msg worker-a "durable while relay dead" 2>&1)"; then
+  DEAD_RELAY_RC=0
+else
+  DEAD_RELAY_RC=$?
+fi
+if [[ "$DEAD_RELAY_RC" -eq 0 && "$DEAD_RELAY_OUT" == *"signaled pane=%42 directly"* ]]; then
+  ok "formation msg safely signals directly when the relay is dead"
+else
+  bad "formation msg dead-relay contract failed [$DEAD_RELAY_RC: $DEAD_RELAY_OUT]"
+fi
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_TEST_LOG"; then
+  bad "dead-relay fallback touched the worker prompt"
+else
+  ok "dead-relay fallback remains zero-keystroke"
+fi
+
+if SHARED_INJECT_OUT="$(cmd_msg --inject worker-a "shared pane inject refusal" 2>&1)"; then
+  SHARED_INJECT_RC=0
+else
+  SHARED_INJECT_RC=$?
+fi
+if [[ "$SHARED_INJECT_RC" -eq 5 && "$SHARED_INJECT_OUT" == *"lacks the registry+pane --exclusive-input contract"* ]]; then
+  ok "formation msg refuses injection into a non-exclusive worker"
+else
+  bad "formation msg exclusive gate failed [$SHARED_INJECT_RC: $SHARED_INJECT_OUT]"
+fi
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_TEST_LOG"; then
+  bad "refused formation msg injection touched the worker prompt"
+else
+  ok "refused formation msg injection is non-destructive"
+fi
+
+# A recycled PID must never be accepted as a relay or killed by reap.
+sleep 30 &
+REUSED_PID=$!
+registry_add "worker-reused" "%44" "formation-worker-reused" "$TMPDIR_T/brief.md"
+echo "$REUSED_PID" > "$FORMATION_DIR/worker-reused.relay_pid"
+if mailbox_relay_alive "$REUSED_PID" "worker-reused"; then
+  bad "PID reuse detector accepted an unrelated live process"
+else
+  ok "PID reuse detector rejects an unrelated live process"
+fi
+REAP_OUT="$(cmd_reap worker-reused 2>&1)"
+if kill -0 "$REUSED_PID" 2>/dev/null; then
+  ok "reap leaves a reused unrelated PID alive"
+else
+  bad "reap killed an unrelated process through a stale relay pidfile"
+fi
+if [[ "$REAP_OUT" == *"not killing it"* ]]; then
+  ok "reap reports stale relay pidfile honestly"
+else
+  bad "reap did not report stale relay pidfile [$REAP_OUT]"
+fi
+kill "$REUSED_PID" 2>/dev/null || true
+wait "$REUSED_PID" 2>/dev/null || true
+unset -f tmux
+unset TMUX_TEST_LOG
+
 # ----------------------------------------------------------------------------
 # Group 2: inbox envelope strips control chars (MED #37)
 # ----------------------------------------------------------------------------
@@ -133,6 +248,100 @@ RENDER="$(cmd_inbox)"
 if printf '%s' "$RENDER" | LC_ALL=C grep -q "$ESC"; then bad "ESC leaked into rendered inbox"; else ok "ESC stripped from rendered body"; fi
 if printf '%s' "$RENDER" | LC_ALL=C grep -q "$BEL"; then bad "BEL leaked into rendered inbox"; else ok "BEL stripped from rendered body"; fi
 if printf '%s' "$RENDER" | LC_ALL=C grep -q "$CR"; then bad "CR leaked into rendered inbox"; else ok "CR stripped from rendered body"; fi
+
+# Reading clears only a badge covered by the rendered snapshot. A newer badge
+# must survive, representing a message that arrived while inbox was rendering.
+echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
+TMUX_PANE="%fixture"
+TMUX_TEST_LOG="$TMPDIR_T/tmux-badge.log"
+TMUX_PENDING_SEQ=1
+TMUX_RACE_ON_CLEAR=0
+tmux() {
+  case "${1:-}" in
+    show-options) printf '%s\n' "$TMUX_PENDING_SEQ" ;;
+    set-option)
+      printf '%s\n' "$*" >> "$TMUX_TEST_LOG"
+      if [[ "$TMUX_RACE_ON_CLEAR" -eq 1 && " $* " == *" -u "* ]]; then
+        jq -cn '{seq:2, ts:"2026-07-26T00:00:01Z", from:"racer", to:"tester", body:"arrived during clear", session_id:null}' \
+          >> "$MAILBOX_LOG"
+      fi
+      ;;
+  esac
+}
+: > "$TMUX_TEST_LOG"
+cmd_inbox >/dev/null
+if grep -Fq 'set-option -p -u -t %fixture @formation_mail_pending' "$TMUX_TEST_LOG"; then
+  ok "inbox clears a badge covered by the rendered snapshot"
+else
+  bad "inbox left its rendered badge permanently set"
+fi
+
+# If a new row is appended/signaled between the option read and unset, the
+# post-clear mailbox reconciliation restores the newer badge.
+echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
+TMUX_PENDING_SEQ=1
+TMUX_RACE_ON_CLEAR=1
+: > "$TMUX_TEST_LOG"
+cmd_inbox >/dev/null
+if grep -Fq 'set-option -p -t %fixture @formation_mail_pending 2' "$TMUX_TEST_LOG"; then
+  ok "inbox restores a newer badge that raced with clear"
+else
+  bad "inbox lost a newer badge during clear race"
+fi
+TMUX_RACE_ON_CLEAR=0
+# Restore the original one-row fixture for the snapshot-newer test.
+sed -n '1p' "$MAILBOX_LOG" > "$MAILBOX_LOG.one"
+mv "$MAILBOX_LOG.one" "$MAILBOX_LOG"
+
+echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
+TMUX_PENDING_SEQ=2
+: > "$TMUX_TEST_LOG"
+cmd_inbox >/dev/null
+if [[ ! -s "$TMUX_TEST_LOG" ]]; then
+  ok "inbox preserves a newer badge that arrived after its snapshot"
+else
+  bad "inbox cleared a newer unread badge"
+fi
+
+# Rows written before registry-based canonical addressing used pane-N. A worker
+# with a codename must still pull its current pane alias into the same cursor.
+: > "$MAILBOX_LOG"
+echo 0 > "$FORMATION_HOME/mailbox/cursor/tester.txt"
+jq -cn '{seq:7, ts:"2026-07-26T00:00:00Z", from:"legacy-sender", to:"pane-fixture", body:"pane alias body", session_id:null}' \
+  >> "$MAILBOX_LOG"
+TMUX_PENDING_SEQ=7
+ALIAS_RENDER="$(cmd_inbox)"
+if [[ "$ALIAS_RENDER" == *"pane alias body"* ]]; then
+  ok "inbox reads current pane alias alongside canonical self id"
+else
+  bad "pane-addressed row became a dead letter after identity canonicalization"
+fi
+if [[ "$(cat "$FORMATION_HOME/mailbox/cursor/tester.txt")" == "7" ]]; then
+  ok "pane alias read advances the canonical worker cursor"
+else
+  bad "pane alias read did not advance canonical cursor"
+fi
+
+printf 'not-a-number\n' > "$FORMATION_HOME/mailbox/cursor/tester.txt"
+jq -cn '{seq:8, ts:"2026-07-26T00:00:01Z", from:"sender", to:"tester", body:"after corrupt cursor", session_id:null}' \
+  >> "$MAILBOX_LOG"
+CORRUPT_CURSOR_RENDER="$(cmd_inbox)"
+if [[ "$CORRUPT_CURSOR_RENDER" == *"after corrupt cursor"* ]]; then
+  ok "corrupt cursor fails safe to unread instead of breaking inbox"
+else
+  bad "corrupt cursor hid or broke unread mail"
+fi
+printf '{torn-json\n' >> "$MAILBOX_LOG"
+jq -cn '{seq:9, ts:"2026-07-26T00:00:02Z", from:"sender", to:"tester", body:"after malformed row", session_id:null}' \
+  >> "$MAILBOX_LOG"
+MALFORMED_RENDER="$(cmd_inbox)"
+if [[ "$MALFORMED_RENDER" == *"after malformed row"* ]]; then
+  ok "malformed mailbox row is skipped without hiding later valid mail"
+else
+  bad "malformed mailbox row broke the inbox reader"
+fi
+unset -f tmux
+unset TMUX_PANE TMUX_PENDING_SEQ TMUX_TEST_LOG
 # Printable residue and UTF-8 must survive; multi-line body keeps its prefix.
 if printf '%s' "$RENDER" | grep -q "RED"; then ok "printable text preserved"; else bad "printable text lost"; fi
 if printf '%s' "$RENDER" | grep -q "日本語"; then ok "UTF-8 multibyte preserved"; else bad "UTF-8 multibyte mangled"; fi

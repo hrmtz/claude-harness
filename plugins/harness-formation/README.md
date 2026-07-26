@@ -10,7 +10,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
-| `lib/{mailbox,wake,redact,mailbox_relay}.sh` | Helpers sourced by `bin/formation` |
+| `lib/{mailbox,mailbox_notify,mailbox_relay,requests,wake,redact}.sh` | Mailbox storage, non-destructive signaling, relay, durable ASK state, exceptional submit, and redaction helpers |
 | `hooks/formation_suggest.sh` | UserPromptSubmit hook: detects worker-spawn intent, injects a formation keyword to surface the skill |
 
 ## Trigger keywords (auto-suggest hook)
@@ -65,9 +65,10 @@ After install:
    ```bash
    export FORMATION_SUGGEST_MODE=shadow
    ```
-5. Codex/Kimi panes: install the pane-messaging double-submit rail (gh #105/#130)
+5. Codex/Kimi panes: install the mailbox-first pane-messaging rail (gh #105/#130/#166)
    into the always-loaded AGENTS surface so agents that have not loaded the
-   Formation skill still route through `formation msg` / `tmux_send_submit`:
+   Formation skill still route through durable `formation msg`; the rail keeps
+   `tmux_send_submit` only for explicitly exclusive prompt injection:
    ```bash
    bash ~/.claude/plugins/harness-formation/bin/install-pane-messaging-rail.sh            # ~/AGENTS.md (Codex global)
    bash ~/.claude/plugins/harness-formation/bin/install-pane-messaging-rail.sh <project>/AGENTS.md
@@ -76,6 +77,19 @@ After install:
    is marker-bounded and idempotent, fails closed on any inconsistent marker
    state, preserves foreign content, and takes a persistent Sanada backup
    before modifying an existing file.
+
+Prompt injection is not inferred from an apparently idle pane. If a worker
+truly has no concurrent human input, create it with
+`formation spawn --exclusive-input ...`; this records the contract in both the
+registry and `@formation_exclusive_input`. Only then may
+`formation msg --inject <worker> ...` or `mailbox-send ... --inject` send a
+short pull nudge. The durable body always remains in the mailbox.
+
+ASKs are durable semantic state, stored separately from mailbox transport.
+`formation ask` returns a request id and makes the worker `WAITING_PARENT`;
+the parent closes it explicitly with `formation ack` or `formation resolve`.
+`formation status` keeps unresolved requests visible after later reports, and
+`formation reap` refuses them unless `--force` is explicit.
 
 ## Migration from legacy standalone formation
 

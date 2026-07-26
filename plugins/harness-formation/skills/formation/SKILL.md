@@ -30,7 +30,7 @@ Paradigm comparison:
 | Lifetime | one-shot, returns | persistent pane |
 | Observability | result only | user tails the pane live |
 | Mid-flight redirect | impossible | `formation msg` |
-| Remote ack | no | all: `formation msg`; Claude: `/rc formation-<id>` |
+| Remote decision | no | redirect: `formation msg`; close ASK: `formation ack` / `resolve`; Claude TUI: `/rc formation-<id>` |
 | Nesting | shallow | worker can spawn its own |
 
 **Do not invoke for:** quick greps, single-file reads, one-shot research.
@@ -74,7 +74,8 @@ Template: `templates/briefing.md`, resolved relative to this `SKILL.md`.
 
 ```bash
 formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
-  [--model <model>] [--orchestrator] [--task <label>] <path/to/briefing.md> [worker_name]
+  [--model <model>] [--orchestrator] [--exclusive-input] [--task <label>] \
+  <path/to/briefing.md> [worker_name]
 ```
 
 - **Claude and Codex default to full permission/sandbox bypass** so an
@@ -107,6 +108,11 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   the old split-pane behavior. Either way it launches `claude --session-name
   formation-<name>` in the new pane and paste-loads the briefing.
 - Registers the worker in `~/.formation/formation/registry.jsonl`.
+- `--exclusive-input` is an explicit promise that no human or other sender
+  will type into this worker's prompt concurrently. It records
+  `exclusive_input=true` in the registry and
+  `@formation_exclusive_input=1` on the pane. Without that spawn contract,
+  `--inject` is refused after the durable row is appended and signaled.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
 - **Identity is unified and locked (#101):** `FORMATION_SELF` /
@@ -131,9 +137,9 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   `~/.claude/themes/`) as a "no guardrails here" light.
 - **Auto-starts a mailbox relay daemon** (`lib/mailbox_relay.sh`) in the
   background that watches `~/.formation/mailbox/log.jsonl` via inotify and
-  injects any new entries addressed to this worker into its tmux pane.
-  Without this, the worker only notices new mailbox entries when it idly
-  polls — the user historically had to poke each worker manually. The relay
+  sets `@formation_mail_pending` and a display signal for new entries addressed
+  to this worker. It sends zero keystrokes into the worker prompt; the worker
+  pulls the durable body with `formation inbox`. The relay
   pid is recorded at `~/.formation/formation/<name>.relay_pid`; logs at
   `/tmp/formation_relay_<name>.log`.
 
@@ -142,7 +148,11 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
 ```bash
 formation status          # all workers: task, age, last mailbox report (or last pane line)
 formation inbox           # reports addressed to you
+formation inbox --history # last 50 addressed rows; does not move the unread cursor
 formation msg <id> "<x>"  # send instruction to worker
+formation msg --inject <id> "<x>" # exclusive worker only; short pull nudge
+formation ack <request-id> ["summary"]
+formation resolve <request-id> "<summary>"
 formation reap <id>       # stop relay daemon, close pane, drop registry row
 ```
 
@@ -156,8 +166,21 @@ Drop these patterns into the briefing so the worker knows its own protocol:
 - Every ~30 min or at logical checkpoints:
   `formation report "<1-line status>"`
 - When a decision exceeds its boundary:
-  `formation ask "<question>"` — writes to the lead's mailbox. The lead can
-  reply with `formation msg`; Claude workers also allow `/rc formation-<id>`.
+  `formation ask "<question>"` — creates a durable opaque request id, marks
+  the worker `WAITING_PARENT`, and writes the ASK to the lead's mailbox.
+  Use `--next-state READY_TO_MERGE` (or another uppercase state) when a
+  resolution should transition somewhere other than `RUNNING`. The lead must
+  close it with `formation ack <request-id> [summary]` or
+  `formation resolve <request-id> <summary>`; an ordinary `formation msg`
+  does not clear the ASK. ACK/resolution returns through the normal
+  zero-keystroke mailbox relay.
+- Parent authorization uses the exact `parent_id` captured by the ASK. If a
+  tmux/server recovery changes the lead's fallback identity, the local
+  operator can recover without weakening the gate:
+  `FORMATION_SELF=<original-parent-id> formation ack <request-id> <summary>`.
+  Use `formation status`, whose sticky ASK row remains caller-independent and
+  shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
+  wildcard.
 - On completion:
   `formation done "<summary>"` — mailbox.
 
@@ -171,12 +194,16 @@ Attaches the remote client to the worker's session. The user can type
 directly at the worker's prompt — no separate injection mechanism.
 
 For a Codex worker, use `formation msg <worker_id> "..."` or attach to its tmux
-pane. **Never hand-roll a raw `tmux send-keys -l "<text>" && tmux send-keys Enter`
-to nudge a peer pane.** A single Enter races the render tick and leaves the text
-visible-but-unsubmitted (the "詰まる"/stuck symptom, especially on Codex TUIs),
-and `send-keys -l` can drop the pane into copy-mode/search. Always route through
-`formation msg` (or `mailbox-send <pane>`), which use the gapped `tmux_send_submit`
-(copy-mode cancel → bracketed paste → Enter, settle ~0.4s, Enter). Current Codex
+pane. `formation msg` is mailbox-first: it appends the durable body and lets the
+relay set a non-destructive badge with zero keystrokes into the prompt. An idle
+agent is not proof that its draft is empty. **Never hand-roll a raw
+`tmux send-keys -l "<text>" && tmux send-keys Enter` to nudge a peer pane.**
+Only a worker spawned with `formation spawn --exclusive-input` may use
+`formation msg --inject <worker_id> <body>` or
+`mailbox-send <pane> <body> --inject`; even then the output remains
+`receipt unconfirmed`, and only a short
+pull nudge is injected through `tmux_send_submit` (copy-mode cancel → bracketed
+paste → Enter, settle ~0.4s, Enter). Current Codex
 may expose experimental `codex remote-control` commands for
 an app-server daemon, but they do not attach to the already-running interactive
 TUI that Formation spawned. Check the installed CLI without starting a daemon:
@@ -392,8 +419,8 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   and a literal `/` from `send-keys -l` opens copy-mode *search* (the
   "search-mode" symptom). A secondary cause is `send-keys -l` itself — typed
   keystrokes race the render tick and embedded newlines in a multi-line
-  briefing submit early. `tmux_send_submit` (used by `formation msg`, the seed,
-  and the relay daemon) now (1) **leaves copy-mode first**
+  briefing submit early. `tmux_send_submit` (used by the initial seed and the
+  exceptional `mailbox-send --inject` path) (1) **leaves copy-mode first**
   (`send-keys -X cancel` when `#{pane_in_mode}` is 1) and (2) injects via
   **bracketed paste** (`load-buffer` + `paste-buffer -p`, which reaches the app
   tty even from copy-mode and lands atomically), then sleeps before the submit

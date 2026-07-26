@@ -1,76 +1,99 @@
 #!/usr/bin/env bash
-# mailbox_relay.sh — mailbox write → target pane auto-inject
+# mailbox_relay.sh — mailbox write → target pane non-destructive signal
 #
 # mailbox append-only log の欠点 (対象 agent が読まない限り気付かない) を補う relay:
 #   - inotifywait で log.jsonl の変更監視
-#   - 新 line の "to" field が watch 対象 agent なら該当 tmux pane に send-keys inject
-#   - agent は次 input wait で injected text を user input として処理
+#   - 新 line の "to" field が watch 対象 agent なら該当 tmux pane に signal
+#   - signal = @formation_mail_pending + display-message (TUI prompt に keystroke しない)
+#   - body inject はしない (#166: draft 連結 / silent miss)。pull が正本。
 #
 # 使い方 (各 pane の裏で独立 daemon として走らせる):
 #
-#   # main-5 pane 用 (main-5 宛の msg を main-5 tmux pane に inject):
+#   # main-5 pane 用 (main-5 宛の msg を main-5 tmux pane に signal):
 #   nohup bash lib/mailbox_relay.sh main-5 main-5 > /tmp/relay_main5.log 2>&1 &
 #
 #   # qdrant-parallel pane 用:
 #   nohup bash lib/mailbox_relay.sh qdrant-parallel qdrant-exp > /tmp/relay_qdrant.log 2>&1 &
 #
 # 第 1 引数: mailbox 上の agent 名 (msg の "to" field で filter)
-# 第 2 引数: tmux session/pane 名 (send-keys 対象)
+# 第 2 引数: tmux session/pane 名 (signal 対象)
 #
 # 依存: inotifywait (apt install inotify-tools) or fallback to polling
 # 停止: pkill -f "mailbox_relay.sh.*$AGENT"
 
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=/dev/null
-source "$SCRIPT_DIR/wake.sh"
+source "$SCRIPT_DIR/mailbox.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/mailbox_notify.sh"
 
 AGENT="${1:?agent name required (msg 'to' field value)}"
 PANE="${2:?tmux session/pane target}"
-FORMATION_HOME="${FORMATION_HOME:-$HOME/.formation}"
-MAILBOX="${MAILBOX:-$FORMATION_HOME/mailbox/log.jsonl}"
+MAILBOX="${MAILBOX:-$MAILBOX_LOG}"
 LOG_PREFIX="[formation-relay:$AGENT→$PANE]"
 
-# track last line processed
+# Track the mailbox sequence high-water, not a physical line offset. Retention
+# and recovery may replace/truncate the file; seq remains monotonic in
+# log.jsonl.seq and lets a live relay follow the new generation safely.
 if [[ ! -f "$MAILBOX" ]]; then
   mkdir -p "$(dirname "$MAILBOX")"
   touch "$MAILBOX"
 fi
-LAST=$(wc -l < "$MAILBOX")
-echo "$LOG_PREFIX start, agent=$AGENT pane=$PANE mailbox=$MAILBOX last_line=$LAST"
+LAST_SEQ="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
+echo "$LOG_PREFIX start, agent=$AGENT pane=$PANE mailbox=$MAILBOX last_seq=$LAST_SEQ"
 
 process_new_lines() {
-  local current
-  current=$(wc -l < "$MAILBOX")
-  if [[ $current -le $LAST ]]; then return; fi
-  # read lines [LAST+1 .. current]
-  sed -n "$((LAST+1)),${current}p" "$MAILBOX" | while IFS= read -r line; do
+  local current_seq
+  current_seq="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
+  [[ "$current_seq" =~ ^[0-9]+$ ]] || current_seq=0
+  if [[ "$current_seq" -lt "$LAST_SEQ" ]]; then
+    echo "$LOG_PREFIX sequence generation moved backwards; re-anchor seq=$LAST_SEQ -> 0"
+    LAST_SEQ=0
+  fi
+  if [[ "$current_seq" -le "$LAST_SEQ" ]]; then return 1; fi
+  # Bound the read to this snapshot. A later append is handled by the next
+  # event instead of being signaled twice.
+  jq -Rrc --argjson after "$LAST_SEQ" --argjson through "$current_seq" \
+    'fromjson?
+     | select(((.seq? | type) == "number")
+              and .seq > $after and .seq <= $through)' "$MAILBOX" |
+  while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    # parse JSON
-    local to subj from
-    to=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('to',''))" 2>/dev/null)
+    local to from seq
+    to=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('to',''))" 2>/dev/null) || continue
     if [[ "$to" != "$AGENT" ]]; then continue; fi
-    subj=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('subject',''))" 2>/dev/null)
     from=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('from',''))" 2>/dev/null)
-    echo "$LOG_PREFIX new msg from=$from subj=$(echo "$subj" | head -c 60), injecting into $PANE"
-    tmux_send_submit "$PANE" "mailbox: 新着 from $from — '$subj' (tail -1 ~/.formation/mailbox/log.jsonl で内容確認して reply)"
+    seq=$(echo "$line" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('seq',''))" 2>/dev/null)
+    echo "$LOG_PREFIX new msg seq=$seq from=$from — signal only (no prompt inject)"
+    if ! mailbox_signal_pane "$PANE" "${seq:-0}" "${from:-unknown}"; then
+      echo "$LOG_PREFIX WARN: msg seq=${seq:-0} remains in mailbox but pane signal failed" >&2
+      continue
+    fi
     sleep 1  # debounce、連続 msg で burst 防ぐ
   done
-  LAST=$current
+  LAST_SEQ=$current_seq
+  return 0
 }
 
 # inotify 優先、fallback polling
 if command -v inotifywait >/dev/null 2>&1; then
   echo "$LOG_PREFIX mode=inotify"
   while true; do
-    inotifywait -qq -e modify -e create -e close_write "$MAILBOX" 2>/dev/null || sleep 10
-    process_new_lines
+    # The timeout is a correctness backstop for the tiny startup/re-arm window:
+    # even if an append occurs before the one-shot watcher is armed, seq drain
+    # observes it within one second instead of waiting for a later write.
+    inotifywait -qq -t 1 -e modify -e create -e close_write "$MAILBOX" 2>/dev/null || true
+    # inotifywait is one-shot. An append can happen while processing/debouncing
+    # the previous batch, when no watcher exists. Drain by seq until stable
+    # before arming the next watcher so that event cannot be lost.
+    while process_new_lines; do :; done
   done
 else
   echo "$LOG_PREFIX mode=polling (inotify-tools not installed, apt install inotify-tools 推奨)"
   while true; do
     sleep 10
-    process_new_lines
+    while process_new_lines; do :; done
   done
 fi

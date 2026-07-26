@@ -52,11 +52,13 @@ These defaults exist because earlier multi-worker runs lost hours to vague
 discipline. Override only with a written reason below.
 
 ### Mailbox discipline
-- The relay daemon will inject new mailbox entries into your pane, so most
-  messages will arrive as user input. Even so, glance at
-  `tail -5 ~/.formation/mailbox/log.jsonl` whenever you go idle (between long
-  scripts, before ending a turn, after a `Monitor` tick) — a stalled relay or
-  a missed `to` field can hide a parent ack.
+- The relay daemon signals new mailbox entries without typing into your prompt.
+  At every turn boundary, run `formation inbox` (or inspect
+  `tail -5 ~/.formation/mailbox/log.jsonl`) — a badge cannot wake an idle agent,
+  and a stalled relay or missed `to` field can hide a parent ack.
+- Unless this worker was spawned with `--exclusive-input`, parent messages
+  never type into the prompt. Even for an exclusive worker, an explicit
+  `--inject` sends only a short pull nudge; the body is read through this inbox.
 - Skip your own outbound entries; only act on `from` ≠ self.
 - Do not let parent acks stall longer than 15 min unanswered: if you are
   blocked on a parent decision, that wait is parent's blocker too.
@@ -67,8 +69,9 @@ discipline. Override only with a written reason below.
 - Off-cadence triggers: large rate change, unexpected error, shard / phase
   completion. Report immediately, don't wait for the next 30 min mark.
 - When you cross your decision boundary, use `formation ask "<question>"` and
-  wait idle until the parent answers. Don't proceed past the boundary on a
-  guess.
+  retain the printed request id. Wait idle until the parent closes it with
+  `formation ack` or `formation resolve`; an ordinary message is not an ACK.
+  Don't proceed past the boundary on a guess.
 
 ### Memory namespace
 - Write only under `~/.claude/projects/<project>/memory/formation/<self_id>/`.

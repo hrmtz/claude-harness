@@ -30,7 +30,7 @@ worker 起動のコストは「fresh な AI agent プロセス (claude or codex)
 
 - 生観測 (pane を tail してリアルタイムで見たい)
 - 途中で方針変更 (`formation msg worker-1 "approach B に切り替え"`)
-- human-in-the-loop ── worker が `formation ask` で mailbox に問い合わせる。Claude worker は必要なら `/remote-control` (alias `/rc`)、Codex worker は tmux / `formation msg` で返信
+- human-in-the-loop ── worker が `formation ask` で durable な request id を作り、parent が `formation ack` / `formation resolve` で明示的に閉じる
 
 これより短い作業は built-in `Task` tool を使え。
 
@@ -97,6 +97,10 @@ formation ask "schema migration vs dual-write どっち？"
 formation done "PR #42 出した、tests green"
 ```
 
+`formation ask` は `WAITING_PARENT` を durable に保持する。後続の report
+では消えず、parent は `formation ack <request-id> [summary]` または
+`formation resolve <request-id> <summary>` を実行する。
+
 ### スマホ介入
 
 Claude worker の `[ASK]` を確認して直接返す場合:
@@ -105,10 +109,12 @@ Claude worker の `[ASK]` を確認して直接返す場合:
 /remote-control formation-refactor-1
 ```
 
-worker の session に attach される。そのまま手でタイプして返事すればいい。
+worker の session に attach される。手で補足を返せるが、durable ASK state
+自体は parent pane から `formation ack` / `formation resolve` で閉じる。
 
 Codex worker は `formation msg <worker_id> "..."` または tmux pane へ attach
-する。現行 Codex に experimental な `codex remote-control` が存在する場合も、
+して補足できる。ASK は別途 `formation ack` / `formation resolve` で閉じる。
+現行 Codex に experimental な `codex remote-control` が存在する場合も、
 これは別 app-server daemon の start/stop/pair 用で、Formation が起動済みの TUI
 session には attach できない。installed CLI の capability は daemon を起動せず確認できる:
 
