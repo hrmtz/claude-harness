@@ -1,52 +1,123 @@
 #!/usr/bin/env python3
-"""Detect drift between live ~/.claude/settings.json hook wiring and the
-claude-harness plugin hooks.json union (gh #30 / #1).
+"""Detect drift between live Claude hook wiring and the plugin hook union.
 
-- ORPHAN  = a hook wired live but in NO plugin  -> would be SILENT-DROPPED by a
-            plugin->live overwrite; must be ported into a plugin. (FATAL: exit 1)
-- DORMANT = a hook wired in a plugin but NOT live -> a guard committed to the
-            'canonical' repo that never fires; deploy it or remove it. (WARN)
-
-Known-intentional live-only integrations (not harness guardrails) are allowlisted.
-Run in CI / pre-deploy so the repo and the running agent cannot silently diverge.
+ORPHAN hooks are live but absent from every plugin. DORMANT hooks are declared
+by a plugin but absent from live wiring. Either direction is drift and exits 1.
+Unreadable or malformed inputs exit 2 so a cron observer can distinguish a
+broken check from a confirmed mismatch.
 """
-import json, os, re, glob, sys
 
-HOME = os.path.expanduser("~")
-LIVE = f"{HOME}/.claude/settings.json"
-PLUG = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/plugins"
+from __future__ import annotations
 
-# live-only events/commands that are deliberately not harness guardrails
+import argparse
+import glob
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_LIVE = Path.home() / ".claude" / "settings.json"
+DEFAULT_PLUGINS = ROOT / "plugins"
+
+# Live-only integrations that deliberately do not belong to claude-harness.
 ALLOW_LIVE_ONLY = {
     ("SessionEnd", "session_end_ingest.sh"),  # hippocampus ingest integration
 }
 
-def names(hooks):
-    out = set()
+
+def hook_names(hooks: Any) -> set[tuple[str, str]]:
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an object")
+    found: set[tuple[str, str]] = set()
     for event, blocks in hooks.items():
-        for blk in blocks:
-            for h in blk.get("hooks", []):
-                m = re.search(r"/([A-Za-z0-9_]+\.(sh|py))", h.get("command", ""))
-                if m:
-                    out.add((event, m.group(1)))
-    return out
+        if not isinstance(event, str) or not isinstance(blocks, list):
+            raise ValueError("hook events must map to arrays")
+        for block in blocks:
+            if not isinstance(block, dict):
+                raise ValueError(f"{event} hook block must be an object")
+            entries = block.get("hooks", [])
+            if not isinstance(entries, list):
+                raise ValueError(f"{event} hooks must be an array")
+            for hook in entries:
+                if not isinstance(hook, dict):
+                    raise ValueError(f"{event} hook entry must be an object")
+                command = hook.get("command", "")
+                if not isinstance(command, str):
+                    raise ValueError(f"{event} hook command must be a string")
+                match = re.search(r"/([A-Za-z0-9_]+\.(?:sh|py))", command)
+                if match:
+                    found.add((event, match.group(1)))
+    return found
 
-live = names(json.load(open(LIVE)).get("hooks", {}))
-plugin = set()
-for hj in glob.glob(f"{PLUG}/harness-*/hooks/hooks.json"):
-    plugin |= names(json.load(open(hj)).get("hooks", {}))
 
-orphan = {x for x in (live - plugin) if x not in ALLOW_LIVE_ONLY}
-dormant = plugin - live
+def read_json(path: Path) -> Any:
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
 
-print(f"live-wired: {len(live)}  plugin-wired: {len(plugin)}")
-if orphan:
-    print("\nORPHAN (live-wired, in NO plugin — would be dropped by overwrite; PORT these):")
-    for e, n in sorted(orphan): print(f"  [{e}] {n}")
-if dormant:
-    print("\nDORMANT (plugin-wired, not live — deploy or remove):")
-    for e, n in sorted(dormant): print(f"  [{e}] {n}")
-if not orphan and not dormant:
-    print("\nIN SYNC ✓ (live wiring == plugin union, modulo allowlisted live-only)")
 
-sys.exit(1 if orphan else 0)
+def compare(live_path: Path, plugins_root: Path) -> tuple[
+    set[tuple[str, str]],
+    set[tuple[str, str]],
+    set[tuple[str, str]],
+    set[tuple[str, str]],
+]:
+    live_payload = read_json(live_path)
+    if not isinstance(live_payload, dict):
+        raise ValueError("live settings must be an object")
+    live = hook_names(live_payload.get("hooks", {}))
+
+    plugin: set[tuple[str, str]] = set()
+    hook_files = sorted(
+        Path(path)
+        for path in glob.glob(str(plugins_root / "harness-*" / "hooks" / "hooks.json"))
+    )
+    if not hook_files:
+        raise ValueError(f"no plugin hooks.json files found under {plugins_root}")
+    for hook_file in hook_files:
+        payload = read_json(hook_file)
+        if not isinstance(payload, dict):
+            raise ValueError(f"{hook_file} must contain an object")
+        plugin |= hook_names(payload.get("hooks", {}))
+
+    orphan = {item for item in live - plugin if item not in ALLOW_LIVE_ONLY}
+    dormant = plugin - live
+    return live, plugin, orphan, dormant
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--live", type=Path, default=DEFAULT_LIVE)
+    result.add_argument("--plugins", type=Path, default=DEFAULT_PLUGINS)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        live, plugin, orphan, dormant = compare(
+            args.live.expanduser().resolve(),
+            args.plugins.expanduser().resolve(),
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"HOOK WIRING CHECK ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"live-wired: {len(live)}  plugin-wired: {len(plugin)}")
+    if orphan:
+        print("\nORPHAN (live-wired, in NO plugin — would be dropped by overwrite):")
+        for event, name in sorted(orphan):
+            print(f"  [{event}] {name}")
+    if dormant:
+        print("\nDORMANT (plugin-wired, not live — guard does not fire):")
+        for event, name in sorted(dormant):
+            print(f"  [{event}] {name}")
+    if not orphan and not dormant:
+        print("\nIN SYNC ✓ (live wiring == plugin union, modulo allowlisted live-only)")
+    return 1 if orphan or dormant else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
