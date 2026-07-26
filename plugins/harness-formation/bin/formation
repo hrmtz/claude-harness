@@ -554,22 +554,36 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   # the durable body with `formation inbox`.
   local relay_log="/tmp/formation_relay_${name}.log"
   local relay_pid_file="$FORMATION_DIR/$name.relay_pid"
-  nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
+  local relay_ready_file="$FORMATION_DIR/$name.relay_ready"
+  rm -f "$relay_pid_file" "$relay_ready_file"
+  FORMATION_RELAY_READY_FILE="$relay_ready_file" \
+    nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
     > "$relay_log" 2>&1 &
   local relay_pid=$!
-  echo "$relay_pid" > "$relay_pid_file"
 
-  # Healthcheck: confirm the relay daemon is still alive a moment later.
-  # Common failure: lib/mailbox_relay.sh missing on disk, or a syntax error
-  # there. The nohup launch returns 0 either way, so without this check the
-  # spawn output would falsely report relay_pid=NNN.
-  sleep 0.3
-  if ! mailbox_relay_alive "$relay_pid" "$name"; then
-    echo "warn: relay daemon for $name died immediately; tail $relay_log" >&2
-    rm -f "$relay_pid_file"
+  # Do not publish a relay PID until the daemon has anchored its mailbox
+  # high-water and is ready to observe later appends. Publishing the PID first
+  # creates a startup race where senders defer signaling to a live-but-unready
+  # relay and that relay then anchors past their row.
+  local relay_ready=0 i
+  for i in $(seq 1 40); do
+    if [[ "$(cat "$relay_ready_file" 2>/dev/null || true)" == "$relay_pid" ]] &&
+       mailbox_relay_alive "$relay_pid" "$name"; then
+      relay_ready=1
+      break
+    fi
+    kill -0 "$relay_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ "$relay_ready" -ne 1 ]]; then
+    echo "warn: relay daemon for $name did not become ready; tail $relay_log" >&2
+    kill "$relay_pid" 2>/dev/null || true
+    wait "$relay_pid" 2>/dev/null || true
+    rm -f "$relay_pid_file" "$relay_ready_file"
     echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=DEAD log=$relay_log"
     return 1
   fi
+  printf '%s\n' "$relay_pid" > "$relay_pid_file"
 
   echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay_pid=$relay_pid log=$relay_log"
 }
@@ -827,6 +841,7 @@ cmd_reap() {
   # Stop relay daemon first; otherwise it keeps inotifywait open on a
   # pane that is about to die.
   local relay_pid_file="$FORMATION_DIR/$worker_id.relay_pid"
+  local relay_ready_file="$FORMATION_DIR/$worker_id.relay_ready"
   if [[ -f "$relay_pid_file" ]]; then
     local rpid; rpid="$(cat "$relay_pid_file" 2>/dev/null || true)"
     if mailbox_relay_alive "$rpid" "$worker_id"; then
@@ -840,6 +855,7 @@ cmd_reap() {
     fi
     rm -f "$relay_pid_file"
   fi
+  rm -f "$relay_ready_file"
 
   tmux kill-pane -t "$pane_id" 2>/dev/null || true
   registry_remove "$worker_id"
