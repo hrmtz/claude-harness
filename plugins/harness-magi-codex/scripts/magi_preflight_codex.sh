@@ -7,6 +7,8 @@ PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 SCHEMA="$PLUGIN_DIR/schemas/preflight-review.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 EVALUATOR="$SELF_DIR/magi_preflight.py"
+# shellcheck source=magi_target_root.sh
+source "$SELF_DIR/magi_target_root.sh"
 
 usage() {
     echo "usage: $0 <absolute-brief-path> <output-directory>" >&2
@@ -20,6 +22,13 @@ case "$BRIEF" in /*) ;; *) echo "preflight: brief path must be absolute" >&2; ex
 [ ! -L "$OUT_DIR" ] || { echo "preflight: output directory must not be a symlink" >&2; exit 64; }
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(realpath "$OUT_DIR")"
+# Reviewers must be able to verify the brief's claims against the repository that owns it, not
+# just against the brief's own directory (gh #151). Same derivation as the fan-out and
+# cross-family arms; the document directory remains the documented non-git fallback.
+TARGET_ROOT="$(magi_target_root "$BRIEF" preflight)" || exit 64
+# The lookup deliberately ignores ambient repository overrides; keep them out of the reviewer
+# processes as well.
+unset GIT_DIR GIT_WORK_TREE
 
 command -v codex >/dev/null 2>&1 || {
     echo "preflight: codex CLI not found" >&2
@@ -186,7 +195,7 @@ for index in 0 1 2; do
             -- timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" \
             env -u TMUX_PANE TMPDIR="$runtime/tmp" \
             codex exec --skip-git-repo-check -s read-only --ephemeral \
-            -C "$(dirname "$BRIEF")" --output-schema "$SCHEMA" -o "$fifo" - < "$prompt" \
+            -C "$TARGET_ROOT" --output-schema "$SCHEMA" -o "$fifo" - < "$prompt" \
             >/dev/null 2>&1
     ) &
     PIDS+=("$!")

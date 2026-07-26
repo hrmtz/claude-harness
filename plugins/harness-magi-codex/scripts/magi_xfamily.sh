@@ -37,6 +37,8 @@ if [ -z "$CROSS_CLI_GUARD" ]; then
 fi
 # shellcheck source=magi_lock.sh
 source "$SELF_DIR/magi_lock.sh"
+# shellcheck source=magi_target_root.sh
+source "$SELF_DIR/magi_target_root.sh"
 
 usage() {
     echo "usage: $0 [--reviewer claude|grok] <doc-path> <round> <prior-findings-json|-> <out-prefix>" >&2
@@ -91,7 +93,15 @@ fi
 
 STATE_DIR="$(dirname "$OUT_PREFIX")"
 mkdir -p "$STATE_DIR"
+# gh #151: canonicalize every caller-supplied path before the provider is spawned. The
+# reviewer launches with the TARGET repository as its cwd (below), not the caller's cwd, so
+# a relative DOC_PATH/OUT_PREFIX/PRIOR would otherwise resolve against the wrong repository
+# — including the absolute TARGET DOC path the prompt hands the reviewer to verify against.
+STATE_DIR="$(realpath "$STATE_DIR")"
+OUT_PREFIX="$STATE_DIR/$(basename "$OUT_PREFIX")"
+DOC_PATH="$(realpath "$DOC_PATH")"
 if [ "$PRIOR" != "-" ]; then
+    PRIOR="$(realpath "$PRIOR")"
     python3 "$VALIDATOR" "$PRIOR" "$SCHEMA_FILE" --same-doc "$DOC_PATH" \
         --prior-for-round "$ROUND" --state-dir "$STATE_DIR" || {
         echo "magi-xfamily: prior synthesis failed identity/round/schema validation" >&2
@@ -110,6 +120,14 @@ esac
 DOC_REAL="$(realpath "$DOC_PATH")"
 DOC_LOCK_ID="$(printf '%s' "$DOC_REAL" | sha256sum | cut -c1-16)"
 DOC_CONTROL_DIR="$(dirname "$DOC_REAL")/.dual-magi"
+# The cross-family round is the MANDATORY independent gate, so its grounding is the one
+# nobody double-checks: a reviewer running in the harness checkout still reports
+# verify_commands_executed that succeeded — against the wrong tree (gh #151). Ground it in
+# the repository that owns the document, exactly as the fan-out arm does.
+TARGET_ROOT="$(magi_target_root "$DOC_REAL" magi-xfamily)" || exit 64
+# The target-root lookup deliberately ignores ambient repository overrides. Keep them from
+# contaminating protocol snapshot git reads and the reviewer subprocess too.
+unset GIT_DIR GIT_WORK_TREE
 
 PROMPT_FILE=""
 RAW_FILE=""
@@ -366,14 +384,24 @@ HDR
 } > "$PROMPT_FILE"
 
 RAW_FILE="$(mktemp)"
+# The Claude CLI has no cwd flag: its reviewer grounding IS the process working directory, so
+# the launch subshell must chdir into the target repository. Resolve everything the exec line
+# still needs (guard binary, schema bytes) before that chdir — after it, a relative path would
+# resolve inside the target repository instead of the caller's cwd.
+SCHEMA_JSON="$(cat "$SCHEMA_FILE")"
+case "$CROSS_CLI_GUARD" in
+    /*) ;;
+    *) CROSS_CLI_GUARD="$(cd "$(dirname "$CROSS_CLI_GUARD")" && pwd)/$(basename "$CROSS_CLI_GUARD")" ;;
+esac
 set +e
 if [ "$REVIEWER" = "claude" ]; then
     (
         eval "exec ${MAGI_LOCK_FD}>&-"
+        cd "$TARGET_ROOT" || exit 2
         exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
             timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" claude -p \
             --output-format json \
-            --json-schema "$(cat "$SCHEMA_FILE")" \
+            --json-schema "$SCHEMA_JSON" \
             --model "$MODEL" \
             --safe-mode \
             --strict-mcp-config \
@@ -388,7 +416,7 @@ else
         exec "$CROSS_CLI_GUARD" --isolate-tmux -- \
             timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" grok \
             --prompt-file "$PROMPT_FILE" \
-            --cwd "$PWD" \
+            --cwd "$TARGET_ROOT" \
             --model "$MODEL" \
             --effort high \
             --max-turns 40 \
@@ -400,7 +428,7 @@ else
             --deny 'MCPTool' \
             --sandbox read-only \
             --output-format json \
-            --json-schema "$(cat "$SCHEMA_FILE")"
+            --json-schema "$SCHEMA_JSON"
     ) > "$RAW_FILE" 2>"${RAW_FILE}.err" &
 fi
 PROVIDER_PID=$!

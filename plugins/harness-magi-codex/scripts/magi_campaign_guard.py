@@ -54,6 +54,7 @@ PROTOCOL_FILES = (
     "scripts/magi_plateau_gate.sh",
     "scripts/magi_review_packet.py",
     "scripts/magi_scrub.py",
+    "scripts/magi_target_root.sh",
     "scripts/magi_validate_findings.py",
     "scripts/magi_verify_round.py",
     "scripts/magi_xfamily.sh",

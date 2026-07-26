@@ -44,6 +44,7 @@ RUNTIME_FILES = (
     "scripts/magi_rename_noreplace.py",
     "scripts/magi_scrub.py",
     "scripts/magi_synthesize.py",
+    "scripts/magi_target_root.sh",
     "scripts/magi_validate_findings.py",
     "scripts/magi_verify_canonical_templates.py",
     "scripts/magi_verify_round.py",

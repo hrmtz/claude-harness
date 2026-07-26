@@ -53,6 +53,9 @@ if [ -z "$CROSS_CLI_GUARD" ]; then
     done
 fi
 
+# shellcheck source=magi_target_root.sh
+source "$SELF_DIR/magi_target_root.sh"
+
 usage() {
     echo "usage: $0 <doc-path> <round> <out-dir> [--persona-set magi|bug-hunt] [--prior <json|->] [--review-mode full|incremental]" >&2
     exit 64
@@ -143,26 +146,11 @@ if [ "$PRIOR" != "-" ]; then
 fi
 # Reviewer verification commands must run in the repository/worktree that owns the
 # document, not in the harness checkout: a relative doc path in repo B launched from
-# repo A must still ground reviewers in repo B (gh #57). Fall back to the document's
-# own directory when it lives outside any git worktree. Strip GIT_DIR/GIT_WORK_TREE:
-# an inherited pair would make rev-parse ignore on-disk discovery and silently
-# re-narrow grounding to the document directory. Warn (not silently degrade) when the
-# lookup fails for anything other than "not a git repository" (e.g. dubious
-# ownership), since the fallback narrows what reviewers can ground against.
-git_toplevel="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$(dirname "$DOC_PATH")" \
-    rev-parse --show-toplevel 2>&1)" && TARGET_ROOT="$git_toplevel" || {
-    case "$git_toplevel" in
-        *"not a git repository"*) : ;;
-        *) echo "fanout: git toplevel lookup failed; refusing narrowed grounding:" >&2
-           echo "        $git_toplevel" >&2
-           exit 64 ;;
-    esac
-    TARGET_ROOT=""
-}
-if [ -z "$TARGET_ROOT" ]; then
-    TARGET_ROOT="$(dirname "$DOC_PATH")"
-fi
-unset git_toplevel
+# repo A must still ground reviewers in repo B (gh #57). magi_target_root.sh owns the
+# derivation (git top-level, GIT_DIR/GIT_WORK_TREE stripped, fail-closed on anything
+# other than "not a git repository", document directory as the documented fallback);
+# the cross-family and pre-flight arms share it so grounding cannot drift (gh #151).
+TARGET_ROOT="$(magi_target_root "$DOC_PATH" fanout)" || exit 64
 # The target-root lookup above deliberately ignores ambient repository overrides.
 # Keep them from contaminating protocol snapshot git reads and reviewer subprocesses too.
 unset GIT_DIR GIT_WORK_TREE
