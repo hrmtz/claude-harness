@@ -101,6 +101,10 @@ PYEOF
         then
             err "codex managed hook block is absent or malformed (run install-codex-hooks.sh + re-trust)"
         else
+            # Live commands carry the chassis stamp the overlay has no reason to
+            # know about (#177). Comparing raw would make every managed block
+            # read as missing-and-extra the moment an installer is re-run.
+            python3 "$HARNESS_DIR/scripts/lib/chassis_stamp.py" --unstamp < "$got" > "$got.n" && mv "$got.n" "$got"
             sort -o "$got" "$got"
             missing="$(comm -23 "$want" "$got")"
             extra="$(comm -13 "$want" "$got")"
@@ -128,7 +132,8 @@ PYEOF
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" grok "$HARNESS_DIR"
         } | sort > "$want"
         jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$GROK_HOOKS" 2>/dev/null \
-            | grep -E 'hooks/' | sort > "$got"
+            | grep -E 'hooks/' \
+            | python3 "$HARNESS_DIR/scripts/lib/chassis_stamp.py" --unstamp | sort > "$got"
         if ! diff -u "$want" "$got" >&2; then
             err "grok harness.json hook set differs from overlay (run install-grok-hooks.sh)"
         fi
@@ -145,7 +150,8 @@ PYEOF
             | awk -v root="$PLUGINS_DIR" '{ runner = ($1 ~ /\.py$/ ? "python3" : "bash"); print runner " " root "/" $0 }' \
             | sort > "$want"
         sed -n '/# >>> harness-kimi hooks/,/# <<< harness-kimi hooks <<</p' "$KIMI_CONFIG" \
-            | sed -n "s/^command = ['\"]\\(.*\\)['\"]$/\\1/p" | sort > "$got"
+            | sed -n "s/^command = ['\"]\\(.*\\)['\"]$/\\1/p" \
+            | python3 "$HARNESS_DIR/scripts/lib/chassis_stamp.py" --unstamp | sort > "$got"
         if ! diff -u "$want" "$got" >&2; then
             err "kimi config.toml hook block differs from overlay (run install-kimi-hooks.sh)"
         fi

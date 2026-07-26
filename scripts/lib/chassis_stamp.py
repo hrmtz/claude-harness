@@ -40,3 +40,33 @@ def stamp(command: str, chassis: str) -> str:
     if not command or not command.strip():
         raise ValueError("refusing to stamp an empty command")
     return f"export HARNESS_CHASSIS={chassis}; {command}"
+
+
+def unstamp(command: str) -> str:
+    """Inverse of :func:`stamp`, for comparing live config against the overlay.
+
+    The drift checker compares generated command strings to the overlay they
+    came from. Once the installers stamp, every live command carries a prefix
+    the overlay does not, and a whole managed block reads as missing-and-extra
+    at once. A checker that is always red teaches people to ignore it, which
+    costs more than the drift it was watching for.
+
+    The older assignment-prefix form is accepted too, so a config written by the
+    installer between #179 and #181 normalises rather than looking like drift.
+    """
+    for chassis in _VALID:
+        for prefix in (f"export HARNESS_CHASSIS={chassis}; ", f"HARNESS_CHASSIS={chassis} "):
+            if command.startswith(prefix):
+                return command[len(prefix):]
+    return command
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--unstamp":
+        for line in sys.stdin:
+            sys.stdout.write(unstamp(line.rstrip("\n")) + "\n")
+    else:
+        sys.stderr.write("usage: chassis_stamp.py --unstamp  (filters stdin)\n")
+        sys.exit(64)
