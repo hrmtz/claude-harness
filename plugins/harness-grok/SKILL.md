@@ -61,10 +61,10 @@ echo '{"toolInput":{"command":"sops -d secrets.enc.yaml"}}' \
 | CLI | ドキュメント | インストーラ | overlay |
 |-----|-------------|-------------|---------|
 | Codex | `docs/codex_hooks.md` | `install-codex-hooks.sh` | `cross_cli_hooks.json` → `codex` |
-| Kimi | `docs/kimi_hooks.md` | `install-kimi-bash-guard.sh` 等 | `cross_cli_hooks.json` → `kimi` |
+| Kimi | `docs/kimi_hooks.md` | `install-kimi-hooks.sh` | `cross_cli_hooks.json` → `kimi` |
 | **Grok** | `docs/grok_hooks.md`（新規） | `install-grok-hooks.sh`（新規） | `cross_cli_hooks.json` → `grok`（新規） |
 
-Grok は **ネイティブ hook API あり** → Kimi の BASH_ENV ハックは不要。Codex 移植に近い。
+Grok は **ネイティブ hook API あり** → Codex / Kimi (>= 0.28) と同じ native 移植路。Kimi の旧 BASH_ENV ハック (#52) のような迂回は不要。
 
 ---
 

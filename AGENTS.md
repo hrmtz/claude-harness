@@ -1,7 +1,10 @@
 # Agent harness — behavioral rails（Kimi / Codex / local models 共通）
 
-> Kimi Code CLI には Claude/Codex のような PreToolUse/PostToolUse hook がないため、
-> 本 AGENTS.md は harness の核心を behavioral/instruction 層に移植したもの。
+> Kimi Code CLI >= 0.28 には native hook API がある (PreToolUse/PostToolUse/
+> UserPromptSubmit/Stop 等。`install-kimi-hooks.sh` が `plugins/cross_cli_hooks.json`
+> から `~/.kimi-code/config.toml` の `[[hooks]]` に配線する。gh #54)。
+> ただし Kimi hook は fail-open (hook の error/timeout は allow 扱い) であり、
+> 唯一の防御線にはできない。本 AGENTS.md はその behavioral/instruction 補完層。
 > 構造的後詰めとして、別途 `kimi_session_scrub` が `~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl`
 > を定期的にスキャンし、既知の credential 値を自動 redact する。
 
@@ -64,36 +67,7 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 
 tmux pane 内で動作している場合、起動時に window name が `<chassis>-<codename>` 形式で設定されている（例: `kimi-rust-fox` / `codex-iron-petal`）。
 
-- Formation worker では pane option `@formation_identity_locked`（通常は `FORMATION_SELF` と同値）を routing / self-reference の source of truth とし、window name や互換 alias の `@formation_id` より優先する。window name は `<chassis>-<formation_identity_locked>` と表示する。
-- session 開始時（または identity が曖昧になった時）、まず `tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'` を実行して自分の名前を確認する。`-t "$TMUX_PANE"` は省略しない（省略すると detached worker が親 client の current window を読む）。
+- session 開始時（または identity が曖昧になった時）、まず `tmux display-message -p -t "$TMUX_PANE" '#{@formation_id}|#{window_name}'` を実行して自分の名前を確認する。`-t "$TMUX_PANE"` は省略しない（省略すると detached worker が親 client の current window を読む）。
 - 名前が `<chassis>-<codename>` 形式なら、self-reference 時は **<codename>** を使う。
 - codename が取得できない場合は、**実行中の実モデルと異なる固有名（Kimi 等）を名乗らない**。中立に self-reference する。
 - user への第一声は、codename があれば「ドーモ、 **<codename>** デス」と名乗る（例: `kimi-rust-fox` → 「ドーモ、rust-fox デス」）。codename が無ければ通常応答から始める。
-
-## 9. Formation pane messaging（mailbox-first レール, gh #105 / #166）
-
-Formation worker pane へのメッセージ送信:
-
-- 原則 `formation msg <worker-id> <message>` を使う。本文は mailbox に永続化され、
-  relay は recipient prompt に **zero keystrokes** の badge/signal だけを設定する。
-  `mailbox-send <pane> <body>` も同じ安全な default。signal は receipt ではないため、
-  turn 境界で `formation inbox` を読む。
-- idle は prompt-empty の証明ではない。通常 pane へ本文を paste して wake しない。
-- prompt injection は明示的 exclusive worker だけ:
-  `formation spawn --exclusive-input ...` で生成し、
-  `formation msg --inject <worker-id> <body>` または
-  `mailbox-send <pane> <body> --inject` を使う。出力は `receipt unconfirmed` のままで、
-  本文ではなく短い pull nudge だけを送る。
-- exclusive direct tmux injection が不可避な場合は共有 `tmux_send_submit` を使う:
-  - 先に copy-mode を解除する（`#{pane_in_mode}` が 1 なら `send-keys -X cancel`）
-  - 注入は bracketed paste（`load-buffer` + `paste-buffer -p`）。`send-keys -l` は使わない
-  - `Enter` 1発では visible-but-unsubmitted になり得るため、
-    `sleep ~0.4s` → `Enter` → `sleep ~0.5s` → `Enter` の delayed double-submit
-- CLI 起動などの shell command launch は従来どおり `Enter` 1発。double-submit レールは
-  pane へのメッセージ textarea 専用。混同しない。
-- `formation ask` は mailbox receipt とは別の semantic state。
-  printed request id を保持して `WAITING_PARENT` で止まり、parent の
-  `formation ack <request-id>` / `formation resolve <request-id> <summary>`
-  だけを ACK として扱う。通常の `formation msg` や report は ASK を閉じない。
-
-canonical: `plugins/harness-formation/agents/pane-messaging-rail.md`
