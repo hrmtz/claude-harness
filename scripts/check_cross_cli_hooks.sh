@@ -53,40 +53,10 @@ if [[ $LIVE -eq 1 ]]; then
     CODEX_CONFIG="$HOME/.codex/config.toml"
     if [[ -f "$CODEX_CONFIG" ]]; then
         want=$(mktemp); got=$(mktemp)
-        {
-            python3 - "$OVERLAY" "$HARNESS_DIR" <<'PYEOF'
-import json, sys
-overlay_path, harness_dir = sys.argv[1], sys.argv[2]
-plugins_dir = f"{harness_dir}/plugins"
-overlay = json.load(open(overlay_path))["codex"]
-specs = [({"path": item} if isinstance(item, str) else item)
-         for item in overlay["hooks"]]
-lookup = {}
-for plugin in sorted({spec["path"].split("/")[0] for spec in specs}):
-    hooks_json = json.load(open(f"{plugins_dir}/{plugin}/hooks/hooks.json"))
-    for event, blocks in hooks_json.get("hooks", {}).items():
-        for blk in blocks:
-            for h in blk.get("hooks", []):
-                name = h["command"].split("/hooks/")[-1]
-                lookup.setdefault(f"{plugin}/hooks/{name}", []).append((event, blk.get("matcher"), h["command"]))
-for spec in specs:
-    hook = spec["path"]
-    candidates = lookup.get(hook, [])
-    if "event" in spec:
-        candidates = [item for item in candidates if item[0] == spec["event"]]
-    if "matcher" in spec:
-        candidates = [item for item in candidates if item[1] == spec["matcher"]]
-    if len(candidates) != 1:
-        print(f"INVALID OVERLAY SELECTION: {hook}", file=sys.stderr)
-        sys.exit(1)
-    plugin = hook.split("/", 1)[0]
-    plugin_root = f"{plugins_dir}/{plugin}"
-    print(candidates[0][2].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root))
-PYEOF
-            python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" codex "$HARNESS_DIR"
-        } | sort > "$want"
+        python3 "$HARNESS_DIR/scripts/lib/render_codex_hooks.py" \
+            commands "$OVERLAY" "$HARNESS_DIR" | sort > "$want"
         if ! python3 - "$CODEX_CONFIG" "$HARNESS_DIR/scripts/lib/merge_codex_hooks.py" > "$got" <<'PYEOF'
-import importlib.util, pathlib, re, sys
+import importlib.util, json, pathlib, re, sys
 config_path, helper_path = map(pathlib.Path, sys.argv[1:])
 spec = importlib.util.spec_from_file_location("merge_codex_hooks", helper_path)
 module = importlib.util.module_from_spec(spec)
@@ -96,7 +66,9 @@ if block is None:
     print("error: no claude-harness managed hook block", file=sys.stderr)
     sys.exit(1)
 for match in re.finditer(r'^\s*command\s*=\s*"(.*)"\s*$', block, re.MULTILINE):
-    print(match.group(1))
+    # Installer renders commands with json.dumps, which is valid TOML basic
+    # string escaping. Compare decoded command values, not their `\"` source.
+    print(json.loads(f'"{match.group(1)}"'))
 PYEOF
         then
             err "codex managed hook block is absent or malformed (run install-codex-hooks.sh + re-trust)"
