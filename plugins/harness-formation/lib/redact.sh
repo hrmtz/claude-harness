@@ -35,3 +35,24 @@ is_credential_like() {
   fi
   return 1
 }
+
+# Refusal logging is metadata-only: never copy the credential-shaped body into
+# the log. All Formation entrypoints call this same function so direct
+# mailbox-send invocations cannot bypass the audit trail.
+refuse_credential() {
+  local channel="$1" from="$2" context="$3"
+  local formation_home="${FORMATION_HOME:-$HOME/.formation}"
+  local refuse_log="${FORMATION_REFUSE_LOG:-$formation_home/mailbox/refuse.log}"
+  local ts
+  channel="$(printf '%s' "$channel" | tr -d '\000-\037\177')"
+  from="$(printf '%s' "$from" | tr -d '\000-\037\177')"
+  context="$(printf '%s' "$context" | tr -d '\000-\037\177')"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$(dirname "$refuse_log")"
+  printf '%s\t%s\tfrom=%s\t%s\n' "$ts" "$channel" "$from" "$context" \
+    >> "$refuse_log"
+  echo "formation: refusing — body matches credential pattern." >&2
+  echo "formation: reference a SOPS-encrypted file instead, e.g." >&2
+  echo "           sops exec-env config/secrets.enc.yaml '<cmd that uses \$key>'" >&2
+  echo "formation: attempted send logged at $refuse_log" >&2
+}

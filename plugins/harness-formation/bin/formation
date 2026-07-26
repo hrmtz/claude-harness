@@ -34,47 +34,20 @@ REGISTRY="$FORMATION_DIR/registry.jsonl"
 # shellcheck source=/dev/null
 source "$LIB_DIR/mailbox.sh"
 # shellcheck source=/dev/null
-source "$LIB_DIR/wake.sh"
-# shellcheck source=/dev/null
 source "$LIB_DIR/redact.sh"
 # shellcheck source=/dev/null
-source "$LIB_DIR/mailbox_notify.sh"
+source "$LIB_DIR/mailbox_delivery.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/requests.sh"
 
 mkdir -p "$FORMATION_DIR"
 touch "$REGISTRY"
 
-REFUSE_LOG="$FORMATION_HOME/mailbox/refuse.log"
-
-refuse_credential() {
-  # $1 = channel (mailbox/msg/briefing), $2 = from_id, $3 = context
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  mkdir -p "$(dirname "$REFUSE_LOG")"
-  printf '%s\t%s\tfrom=%s\t%s\n' "$ts" "$1" "$2" "$3" >> "$REFUSE_LOG"
-  echo "formation: refusing — body matches credential pattern." >&2
-  echo "formation: reference a SOPS-encrypted file instead, e.g." >&2
-  echo "           sops exec-env config/secrets.enc.yaml '<cmd that uses \$key>'" >&2
-  echo "formation: attempted send logged at $REFUSE_LOG" >&2
-}
-
 self_id() {
-  # Identify the caller. Priority: launch env > immutable pane identity >
-  # legacy mutable pane option > pane_id.
-  if [[ -n "${FORMATION_SELF:-}" ]]; then
-    echo "$FORMATION_SELF"; return
-  fi
-  local opt=""
-  if [[ -n "${TMUX_PANE:-}" ]]; then
-    opt="$(tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' 2>/dev/null || true)"
-  fi
-  if [[ -n "$opt" ]]; then
-    echo "$opt"
-  elif [[ -n "${TMUX_PANE:-}" ]]; then
-    echo "pane-${TMUX_PANE#%}"
-  else
-    echo "shell-$$"
-  fi
+  # Semantic identity must not depend on mutable window names or the
+  # standalone mailbox sender override. Without a locked Formation identity,
+  # the stable pane id is the only safe fallback for ASK authorization/cursors.
+  mailbox_resolve_sender "" "shell-$$" 0 0
 }
 
 registry_add() {
@@ -602,11 +575,13 @@ cmd_msg() {
     refuse_credential msg "$from" "to=$worker_id"
     exit 3
   fi
-  local row; row="$(registry_get "$worker_id")"
-  [[ -n "$row" ]] || { echo "no such worker: $worker_id" >&2; exit 2; }
-  local pane_id exclusive_input
-  pane_id="$(echo "$row" | jq -r '.pane_id')"
-  exclusive_input="$(echo "$row" | jq -r '.exclusive_input // false')"
+  if ! mailbox_resolve_recipient "$worker_id" "$REGISTRY" 0; then
+    echo "no such worker: $worker_id" >&2
+    exit 2
+  fi
+  worker_id="$MAILBOX_RECIPIENT_LABEL"
+  local pane_id="$MAILBOX_RECIPIENT_PANE"
+  local exclusive_input="$MAILBOX_RECIPIENT_EXCLUSIVE"
 
   # The mailbox row, not prompt injection, is the delivery guarantee. The
   # worker's relay is the single signal owner for worker-id addressed mail.
@@ -614,29 +589,12 @@ cmd_msg() {
   seq="$(mailbox_append "$from" "$worker_id" "$text")"
   echo "appended seq=$seq from=$from to=$worker_id"
 
-  local relay_pid_file="$FORMATION_DIR/$worker_id.relay_pid"
-  local relay_pid=""
-  [[ -f "$relay_pid_file" ]] && relay_pid="$(cat "$relay_pid_file" 2>/dev/null || true)"
-  if mailbox_relay_alive "$relay_pid" "$worker_id"; then
-    echo "signal=pending relay_pid=$relay_pid pane=$pane_id (zero keystrokes into prompt)"
-  else
-    if ! mailbox_signal_pane "$pane_id" "$seq" "$from"; then
-      echo "WARN (exit 4): message appended, but relay for $worker_id is not running and pane $pane_id could not be signaled." >&2
-      return 4
-    fi
-    echo "signaled pane=$pane_id directly because relay is unavailable (zero keystrokes into prompt)"
-  fi
+  mailbox_signal_or_defer "$worker_id" "$pane_id" "$seq" "$from" \
+    "$FORMATION_DIR" || return $?
 
   if [[ "$inject" -eq 1 ]]; then
-    local pane_exclusive
-    pane_exclusive="$(tmux show-options -p -v -t "$pane_id" @formation_exclusive_input 2>/dev/null || true)"
-    if [[ "$exclusive_input" != "true" || "$pane_exclusive" != "1" ]]; then
-      echo "REFUSED (exit 5): row is durable and signaled, but $worker_id lacks the registry+pane --exclusive-input contract; prompt injection skipped." >&2
-      return 5
-    fi
-    local notify="[mailbox seq=${seq} from=${from}] pull with formation inbox (receipt unconfirmed)"
-    tmux_send_submit "$pane_id" "$notify"
-    echo "inject=attempted pane=$pane_id (short pull nudge only; receipt unconfirmed)"
+    mailbox_inject_nudge "$pane_id" "$seq" "$from" \
+      "$exclusive_input" || return $?
   else
     echo "inject=skipped (default; zero prompt keystrokes)"
   fi

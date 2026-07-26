@@ -10,7 +10,11 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
-| `lib/{mailbox,mailbox_notify,mailbox_relay,requests,wake,redact}.sh` | Mailbox storage, non-destructive signaling, relay, durable ASK state, exceptional submit, and redaction helpers |
+| `lib/mailbox.sh` | Durable JSONL storage, locking, sequence allocation, and read cursors |
+| `lib/mailbox_delivery.sh` | Shared recipient/sender resolution, relay delegation, and exclusive-injection policy |
+| `lib/mailbox_notify.sh`, `lib/mailbox_relay.sh` | Zero-keystroke pane signaling primitives and the per-worker signal daemon |
+| `lib/requests.sh` | Durable semantic ASK/ACK/resolve state, separate from transport |
+| `lib/wake.sh`, `lib/redact.sh` | The single exceptional submit primitive and shared credential refusal/audit |
 | `hooks/formation_suggest.sh` | UserPromptSubmit hook: detects worker-spawn intent, injects a formation keyword to surface the skill |
 
 ## Trigger keywords (auto-suggest hook)

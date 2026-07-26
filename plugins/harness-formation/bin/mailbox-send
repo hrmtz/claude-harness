@@ -23,8 +23,9 @@
 #   <body>  message text (single arg; quote it)
 #
 # Options:
-#   --from NAME    sender codename (default: window name of $TMUX_PANE minus
-#                  "claude-"/"main-" prefix, or $MAILBOX_FROM)
+#   --from NAME    explicit sender override and tmux-free/offline-safe identity.
+#                  Default: FORMATION_SELF, then the pane's locked Formation
+#                  identity, then MAILBOX_FROM/window fallback.
 #   --session ID   session uuid for the entry (default: $MAILBOX_SESSION|"unknown")
 #   --no-nudge     append only; skip signal and inject (bulk ticks only)
 #   --inject       also attempt prompt inject (exclusive workers / explicit wake).
@@ -32,18 +33,20 @@
 #   --force        bypass the credential-shaped-body guard (use with care)
 #
 # Exit: 0 ok / 2 usage / 3 credential-shaped body refused /
-#       4 pane/signal unavailable / 5 injection refused (not exclusive)
+#       4 pane/signal/nudge unavailable / 5 injection refused (not exclusive)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=/dev/null
-source "$SCRIPT_DIR/../lib/wake.sh"
-# shellcheck source=/dev/null
 source "$SCRIPT_DIR/../lib/mailbox.sh"
 # shellcheck source=/dev/null
-source "$SCRIPT_DIR/../lib/mailbox_notify.sh"
+source "$SCRIPT_DIR/../lib/mailbox_delivery.sh"
 
-usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() {
+  awk 'NR == 1 { next }
+       /^#/ { sub(/^# ?/, ""); print; next }
+       { exit }' "$0"
+}
 
 FROM=""; SESSION=""; NUDGE=1; INJECT=0; FORCE=0
 posargs=()
@@ -63,89 +66,37 @@ done
 TO="${posargs[0]}"; BODY="${posargs[1]}"
 
 # --- resolve sender codename ---
-[[ -z "$FROM" ]] && FROM="${MAILBOX_FROM:-}"
-if [[ -z "$FROM" && -n "${TMUX_PANE:-}" ]]; then
-  wn="$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null || true)"
-  FROM="${wn#claude-}"; FROM="${FROM#main-}"
-fi
-FROM="${FROM:-unknown}"
+FROM="$(mailbox_resolve_sender "$FROM" unknown)"
 SESSION="${SESSION:-${MAILBOX_SESSION:-unknown}}"
-
-# --- normalize recipient: pane-NN (mailbox label) + %NN (tmux target) ---
-raw="${TO#pane-}"; raw="${raw#%}"
-TO_LABEL=""
-TMUX_TARGET=""
-[[ "$raw" =~ ^[0-9]+$ ]] && {
-  TO_LABEL="pane-${raw}"
-  TMUX_TARGET="%${raw}"
-}
 
 # Mailbox addressing is worker-id based; pane ids are delivery metadata. Resolve
 # from the registry without touching tmux so --no-nudge remains append-only.
 REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
-REGISTRY_EXCLUSIVE=0
-if [[ -s "$REGISTRY" ]]; then
-  registry_row="$(jq -c --arg to "$TO" --arg raw "$raw" --arg pane "$TMUX_TARGET" \
-    'select(.id == $to or .id == $raw or ($pane != "" and .pane_id == $pane))' \
-    "$REGISTRY" 2>/dev/null | tail -n1)"
-  canonical_to="$(printf '%s' "$registry_row" | jq -r '.id // empty' 2>/dev/null || true)"
-  if [[ -n "$canonical_to" ]]; then
-    TO_LABEL="$canonical_to"
-    TMUX_TARGET="$(printf '%s' "$registry_row" | jq -r '.pane_id')"
-  fi
-  [[ "$(printf '%s' "$registry_row" | jq -r '.exclusive_input // false' 2>/dev/null || true)" == "true" ]] &&
-    REGISTRY_EXCLUSIVE=1
-fi
-if [[ -z "$TO_LABEL" || -z "$TMUX_TARGET" ]]; then
+if ! mailbox_resolve_recipient "$TO" "$REGISTRY" 1; then
   echo "mailbox-send: unknown recipient '$TO' (use a numeric pane id or registered worker id)" >&2
   exit 2
 fi
+TO_LABEL="$MAILBOX_RECIPIENT_LABEL"
+TMUX_TARGET="$MAILBOX_RECIPIENT_PANE"
+REGISTRY_EXCLUSIVE="$MAILBOX_RECIPIENT_EXCLUSIVE"
 
 # --- canonical append under the shared mailbox lock ---
 if SEQ="$(mailbox_append "$FROM" "$TO_LABEL" "$BODY" "$SESSION" "$FORCE")"; then
   :
 else
   rc=$?
-  [[ "$rc" -eq 3 ]] &&
-    echo "REFUSED (exit 3): body looks credential-shaped. Reference key NAME only, never values. Override with --force if certain." >&2
   exit "$rc"
 fi
 echo "appended seq=$SEQ from=$FROM to=$TO_LABEL chars=${#BODY}"
 
 # --- signal (default) / optional inject ---
 if [[ "$NUDGE" -eq 1 ]]; then
-  relay_pid_file="$FORMATION_HOME/formation/$TO_LABEL.relay_pid"
-  relay_pid=""
-  [[ -f "$relay_pid_file" ]] && relay_pid="$(cat "$relay_pid_file" 2>/dev/null || true)"
-  relay_alive=0
-  mailbox_relay_alive "$relay_pid" "$TO_LABEL" && relay_alive=1
-  if [[ "$relay_alive" -eq 1 ]]; then
-    echo "signal=pending relay_pid=$relay_pid pane=$TMUX_TARGET (relay owns signaling)"
-  else
-    if ! tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx "$TMUX_TARGET"; then
-      echo "WARN (exit 4): pane $TMUX_TARGET not found — message appended but NOT signaled." >&2
-      exit 4
-    fi
-    if ! mailbox_signal_pane "$TMUX_TARGET" "$SEQ" "$FROM"; then
-      echo "WARN (exit 4): message appended but pane $TMUX_TARGET could not be signaled." >&2
-      exit 4
-    fi
-    echo "signaled $TMUX_TARGET (@formation_mail_pending=$SEQ; zero keystrokes into prompt)"
-  fi
+  mailbox_signal_or_defer "$TO_LABEL" "$TMUX_TARGET" "$SEQ" "$FROM" \
+    "$FORMATION_HOME/formation" || exit $?
 
   if [[ "$INJECT" -eq 1 ]]; then
-    exclusive="$(tmux show-options -p -v -t "$TMUX_TARGET" @formation_exclusive_input 2>/dev/null || true)"
-    if [[ "$REGISTRY_EXCLUSIVE" -ne 1 || "$exclusive" != "1" ]]; then
-      echo "REFUSED (exit 5): row is durable and signaled, but pane $TMUX_TARGET lacks the registry+pane --exclusive-input contract; prompt injection skipped." >&2
-      exit 5
-    fi
-    # Opt-in exclusive wake only. Short nudge, not a substitute for pull:
-    # full body remains in the mailbox JSONL.
-    notify="[mailbox seq=${SEQ} from=${FROM}] pull inbox (body in log.jsonl; receipt unconfirmed)"
-    FORMATION_SUBMIT_SETTLE_S="${MAILBOX_SUBMIT_SETTLE_S:-0.4}" \
-    FORMATION_SUBMIT_RETRY_S="${MAILBOX_SUBMIT_RETRY_S:-0.5}" \
-      tmux_send_submit "$TMUX_TARGET" "$notify"
-    echo "inject=attempted $TMUX_TARGET (bracketed paste + gapped double-enter; receipt unconfirmed)"
+    mailbox_inject_nudge "$TMUX_TARGET" "$SEQ" "$FROM" \
+      "$REGISTRY_EXCLUSIVE" || exit $?
   else
     echo "inject=skipped (default; --inject requires a Formation --exclusive-input worker)"
   fi

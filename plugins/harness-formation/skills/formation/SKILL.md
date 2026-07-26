@@ -437,10 +437,31 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   from `formation` itself so this works regardless of where the repo lives):
   ```bash
   LIB="$(dirname "$(readlink -f "$(command -v formation)")")/../lib"
-  nohup bash "$LIB/mailbox_relay.sh" <worker_id> <pane_id> \
+  STATE="${FORMATION_HOME:-$HOME/.formation}/formation"
+  READY="$STATE/<worker_id>.relay_ready"
+  PIDFILE="$STATE/<worker_id>.relay_pid"
+  rm -f "$READY" "$PIDFILE"
+  FORMATION_RELAY_READY_FILE="$READY" \
+    nohup bash "$LIB/mailbox_relay.sh" <worker_id> <pane_id> \
     > /tmp/formation_relay_<worker_id>.log 2>&1 &
-  echo $! > ~/.formation/formation/<worker_id>.relay_pid
+  PID=$!
+  for _ in $(seq 1 40); do
+    [[ "$(cat "$READY" 2>/dev/null)" == "$PID" ]] && break
+    sleep 0.05
+  done
+  source "$LIB/mailbox_notify.sh"
+  if [[ "$(cat "$READY" 2>/dev/null)" == "$PID" ]] &&
+     mailbox_relay_alive "$PID" <worker_id>; then
+    printf '%s\n' "$PID" > "$PIDFILE"
+  else
+    kill "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    rm -f "$READY"
+    echo "relay failed to become ready; inspect the log" >&2
+  fi
   ```
-  Tail `/tmp/formation_relay_<worker_id>.log` to confirm inotify events are
-  firing. If the log shows `mode=polling`, install `inotify-tools` for
-  sub-second delivery.
+  Do not publish the pidfile before the ready marker matches the child PID;
+  doing so recreates the startup race where a sender defers to a relay that has
+  not anchored its mailbox high-water yet. Tail
+  `/tmp/formation_relay_<worker_id>.log` to confirm events are firing. If the
+  log shows `mode=polling`, install `inotify-tools` for lower-latency delivery.

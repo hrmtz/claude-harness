@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Verify every text-injection path uses delayed double Enter without real tmux.
+# Verify the single text-injection primitive uses delayed double Enter.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOG="$(mktemp)"
-PAYLOAD="$(mktemp)"
-trap 'rm -f "$LOG" "$PAYLOAD"' EXIT
+trap 'rm -f "$LOG"' EXIT
 
 tmux() {
   printf 'tmux %s\n' "$*" >> "$LOG"
   case "${1:-}" in
-    list-panes) printf '%%42\n' ;;
     display-message) printf '0\n' ;;
+    load-buffer) cat >/dev/null ;;
+    paste-buffer) [[ "${FAIL_PASTE:-0}" != "1" ]] ;;
+    send-keys) [[ "${FAIL_ENTER:-0}" != "1" ]] ;;
   esac
 }
 sleep() { printf 'sleep %s\n' "$1" >> "$LOG"; }
@@ -32,16 +33,42 @@ assert_submit_contract() {
 }
 
 : > "$LOG"
-wake_pane %42 "check inbox"
-assert_submit_contract wake_pane
-
-printf 'pasted note' > "$PAYLOAD"
-: > "$LOG"
-wake_paste %42 "$PAYLOAD"
-assert_submit_contract wake_paste
-
-: > "$LOG"
 tmux_send_submit %42 "mailbox message"
 assert_submit_contract tmux_send_submit
 
-echo "test_wake_submit: 3 passed, 0 failed"
+if FAIL_PASTE=1 tmux_send_submit %42 "paste failure"; then
+  echo "FAIL: tmux_send_submit hid a paste-buffer failure" >&2
+  exit 1
+else
+  paste_failure_rc=$?
+fi
+[[ "$paste_failure_rc" -eq "$TMUX_SUBMIT_NOT_PASTED" ]] || {
+  echo "FAIL: pre-paste failure was misclassified as non-retryable" >&2
+  exit 1
+}
+grep -Fq 'tmux delete-buffer -b ' "$LOG" || {
+  echo "FAIL: failed paste left its tmux buffer allocated" >&2
+  exit 1
+}
+
+if FAIL_ENTER=1 tmux_send_submit %42 "submit failure"; then
+  echo "FAIL: tmux_send_submit hid a post-paste submit failure" >&2
+  exit 1
+else
+  submit_failure_rc=$?
+fi
+[[ "$submit_failure_rc" -eq "$TMUX_SUBMIT_PASTED_UNCONFIRMED" ]] || {
+  echo "FAIL: post-paste submit failure was not classified as non-retryable" >&2
+  exit 1
+}
+
+if declare -F wake_pane >/dev/null || declare -F wake_paste >/dev/null; then
+  echo "FAIL: legacy raw/paste wake entrypoints are still exported" >&2
+  exit 1
+fi
+if grep -Eq '^[[:space:]]*tmux send-keys -l' "$HERE/../lib/wake.sh"; then
+  echo "FAIL: wake.sh still contains raw prompt text injection" >&2
+  exit 1
+fi
+
+echo "test_wake_submit: 5 passed, 0 failed"

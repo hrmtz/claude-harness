@@ -19,6 +19,34 @@ unset TMUX_PANE
 # shellcheck source=/dev/null
 source "$HERE/../bin/formation"
 
+[[ "$(grep -Fc 'def valid_request_event' "$HERE/../lib/requests.sh")" -eq 1 ]] || {
+  echo "FAIL: request event schema gate is duplicated" >&2
+  exit 1
+}
+
+# Readers must share the writer lock; otherwise a large JSONL append can be
+# observed mid-write and the unresolved-ASK reap gate can fail open.
+request_init
+LOCK_HELD="$FIXTURE/request-lock-held"
+(
+  flock -x 202
+  touch "$LOCK_HELD"
+  sleep 0.25
+) 202>"$FORMATION_REQUEST_LOCK" &
+LOCK_HOLDER_PID=$!
+for _ in $(seq 1 40); do
+  [[ -e "$LOCK_HELD" ]] && break
+  sleep 0.01
+done
+lock_wait_start="$(date +%s%N)"
+request_snapshot >/dev/null
+lock_wait_ms=$(( ($(date +%s%N) - lock_wait_start) / 1000000 ))
+wait "$LOCK_HOLDER_PID"
+[[ "$lock_wait_ms" -ge 150 ]] || {
+  echo "FAIL: request snapshot did not wait for the writer lock (${lock_wait_ms}ms)" >&2
+  exit 1
+}
+
 request_id="$(cmd_ask 'Choose rollout A or B')"
 [[ "$request_id" == req-* ]]
 [[ "$(request_unresolved worker-a parent-a | jq -r '.request_id')" == "$request_id" ]]
