@@ -240,6 +240,11 @@ for (event, matcher), entries in groups.items():
             plugin_root = f"{plugins_dir}/{plugin}"
             command = entry[2].replace("${CLAUDE_PLUGIN_ROOT}", plugin_root)
             timeout = entry[1]
+        # Every command this installer emits runs under Codex, and the hooks it
+        # points at have to know that. Inferring the chassis from PLUGIN_ROOT
+        # made every Claude session look like a Codex plugin host (#177), so the
+        # host states it instead of leaving it to be guessed.
+        command = f"HARNESS_CHASSIS=codex {command}"
         print(f"\n[[hooks.{event}.hooks]]")
         print('type = "command"')
         print(f"command = {json.dumps(command)}")

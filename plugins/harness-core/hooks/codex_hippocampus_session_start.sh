@@ -4,7 +4,16 @@
 # hooks.json, so resolve it at runtime and silently no-op when it is absent.
 set -uo pipefail
 
-[ -n "${PLUGIN_ROOT:-}" ] || exit 0
+# Second instance of the same misread (#177): PLUGIN_ROOT was the "native Codex
+# plugin" signal here too, and harness-hook fabricated it on every chassis, so
+# this codex-only adapter ran inside Claude sessions instead of no-opping.
+# Prefer the explicit chassis; keep PLUGIN_ROOT as the fallback for a plugin
+# host that predates it.
+case "${HARNESS_CHASSIS:-}" in
+    codex) : ;;
+    "")    [ -n "${PLUGIN_ROOT:-}" ] || exit 0 ;;
+    *)     exit 0 ;;
+esac
 HOOK_INPUT=$(cat 2>/dev/null || true)
 HIPPOCAMPUS_HOME="${HARNESS_HIPPOCAMPUS_HOME:-${HIPPOCAMPUS_HOME:-$HOME/projects/hippocampus-mcp}}"
 SCRIPT="$HIPPOCAMPUS_HOME/scripts/hooks/codex_session_start.sh"
