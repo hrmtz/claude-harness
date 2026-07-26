@@ -31,6 +31,7 @@
       "harness-core/hooks/credential_value_scrub.sh",
       "harness-core/hooks/credential_scrub.sh",
       "harness-core/hooks/admission_reminder.sh",
+      "harness-core/hooks/secret_delivery_prompt.py",
       "harness-core/hooks/code_review_suggest.sh",
       "harness-core/hooks/temporal_anchor.sh",
       "harness-core/hooks/tmux_hyperlink_guard.sh",
@@ -72,7 +73,8 @@
       "harness-rails/hooks/phase_review_gate.sh",
       "harness-core/hooks/long_task_advisor.sh",
       "harness-core/hooks/credential_value_scrub.sh",
-      "harness-core/hooks/admission_reminder.sh"
+      "harness-core/hooks/admission_reminder.sh",
+      "harness-core/hooks/secret_delivery_prompt.py"
     ],
     "external": []
   },
@@ -101,6 +103,7 @@
       "harness-core/hooks/credential_value_scrub.sh",
       "harness-core/hooks/credential_scrub.sh",
       "harness-core/hooks/admission_reminder.sh",
+      "harness-core/hooks/secret_delivery_prompt.py",
       "harness-core/hooks/code_review_suggest.sh"
     ]
   }

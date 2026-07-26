@@ -123,7 +123,8 @@ PYEOF
     if [[ -f "$GROK_HOOKS" ]]; then
         want=$(mktemp); got=$(mktemp)
         {
-            jq -r '.grok.hooks[]' "$OVERLAY" | sed "s|^|bash $PLUGINS_DIR/|"
+            jq -r '.grok.hooks[]' "$OVERLAY" \
+                | awk -v root="$PLUGINS_DIR" '{ runner = ($1 ~ /\.py$/ ? "python3" : "bash"); print runner " " root "/" $0 }'
             python3 "$HARNESS_DIR/scripts/lib/cross_cli_externals.py" "$OVERLAY" grok "$HARNESS_DIR"
         } | sort > "$want"
         jq -r '.hooks | to_entries[] | .value[] | .hooks[] | .command' "$GROK_HOOKS" 2>/dev/null \
@@ -141,7 +142,8 @@ PYEOF
     if [[ -f "$KIMI_CONFIG" ]] && grep -qF '# >>> harness-kimi hooks' "$KIMI_CONFIG"; then
         want=$(mktemp); got=$(mktemp)
         jq -r '.kimi.hooks[] | if type == "object" then .path else . end' "$OVERLAY" \
-            | sed "s|^|bash $PLUGINS_DIR/|" | sort > "$want"
+            | awk -v root="$PLUGINS_DIR" '{ runner = ($1 ~ /\.py$/ ? "python3" : "bash"); print runner " " root "/" $0 }' \
+            | sort > "$want"
         sed -n '/# >>> harness-kimi hooks/,/# <<< harness-kimi hooks <<</p' "$KIMI_CONFIG" \
             | sed -n "s/^command = ['\"]\\(.*\\)['\"]$/\\1/p" | sort > "$got"
         if ! diff -u "$want" "$got" >&2; then

@@ -1,6 +1,6 @@
 # Issue #108 Epic — Secret disclosure authorization
 
-Status: active
+Status: active; Slice 1 merged, Slice 2A implemented
 Parent issue: <https://github.com/hrmtz/claude-harness/issues/108>
 Invariant: a credential read authorization alone must never authorize disclosure.
 
@@ -20,27 +20,27 @@ Design: `docs/designs/ISSUE_108/01-LEGACY_OUTPUT_SEPARATION.md`
 
 Completion evidence:
 
-- [ ] design plateau marker for the exact slice revision;
-- [ ] implementation bug-hunt and cross-family plateau;
-- [ ] direct harness-core and cross-CLI tests;
-- [ ] merged PR linked from Issue #108.
+- [ ] design plateau marker for the exact slice revision (not achieved; maintainer human waiver
+      recorded after the bounded 16/16 campaign);
+- [x] implementation bug-hunt and cross-family findings applied under the same waiver;
+- [x] direct harness-core and cross-CLI tests;
+- [x] merged PR #146 linked from Issue #108 at `9e2bcd1`.
 
 Rollback boundary: the new denial can be reverted independently, although rollback must not restore
 an undocumented plaintext bypass.
 
 ### Slice 2 — Destination-bound delivery
 
-- add a user-prompt-derived one-use authorization receipt;
-- bind scope, destination, representation, nonce, and expiry;
-- support a file-preserving SSH transfer through one repo-owned wrapper;
-- record value-free recent successful destinations;
-- never infer chat plaintext from “send it”.
+Coordination: `docs/designs/ISSUE_108/02-DESTINATION_BOUND_DELIVERY.md`
+
+The maintainer approved a minimal explicit-delivery scope. It adds a value-free classifier mode,
+a 120-second one-use receipt, and one fixed `scp` wrapper. Remote temp/rename, recovery,
+supervision, scheduling, telemetry, and destination history are not required for this slice.
 
 Completion evidence:
 
-- [ ] child design and plateau;
-- [ ] wrapper injection/failure tests;
-- [ ] value-free history tests;
+- [x] 2A implementation and synthetic tests;
+- [x] Claude, Codex, Grok, and Kimi hook selection;
 - [ ] merged PR linked from Issue #108.
 
 Dependency: Slice 1.
@@ -74,18 +74,15 @@ Rollback boundary: remove recurrence state without changing the receipt or legac
 - missing/malformed authorization state denies disclosure but does not break benign tools;
 - a malicious same-UID process is outside the forgery-resistance claim;
 - PostToolUse transcript redaction is defense in depth, not pre-disclosure prevention;
-- Claude is unavailable for this Epic because the official capacity signal reported headroom 0.02;
-  Grok is the explicit cross-family fallback.
 
 ## Sequencing
 
-Only Slice 1 is admitted now. Later slices must not be implemented or pulled into review findings
-for Slice 1. Security defects that show Slice 1 itself is unsafe remain in scope; richer delivery or
-history features are follow-up scope.
+Slice 1 is merged and Slice 2A is implemented. Recent-destination UX remains optional follow-up
+work. Slice 3 remains dependent on the explicit-delivery path being merged.
 
 ## Epic completion
 
-- [ ] Slice 1 merged and evidenced
+- [x] Slice 1 merged and evidenced via PR #146 and maintainer human waiver
 - [ ] Slice 2 merged and evidenced
 - [ ] Slice 3 merged and evidenced
 - [ ] Issue #108 acceptance criteria traced to shipped tests

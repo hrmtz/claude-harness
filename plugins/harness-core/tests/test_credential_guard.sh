@@ -265,6 +265,7 @@ expect_read_allow '/tmp/proj/.env.test' 'template .env.test'
 expect_read_allow '/tmp/proj/.env.local-example' 'template .env.local-example'
 expect_read_block '/tmp/proj/.env' 'real .env'
 expect_read_block '/tmp/proj/.env.production' 'real .env.production'
+expect_read_block '/tmp/proj/credentials.txt' 'credential artifact'
 expect_read_block '/tmp/proj/.env.example.bak' 'template suffix not final segment'
 
 expect_payload_block() {
