@@ -67,6 +67,10 @@ monotonically; never restart at rounds 1/2 inside the same campaign:
 The valid sequence is fan-out 1 → cross-family 2 → fan-out 3 → cross-family 4, continuing until the
 gate accepts the current revision or the fixed campaign allowance stops it. Every nonzero provider,
 validator, or gate exit blocks implementation.
+The default per-campaign allowance is 12 weighted model launches: three fan-out plus mandatory
+cross-family pairs without retries. Requirement revision may roll into the fixed global allowance
+of 16, but changing the state directory cannot reset history. For a smaller target,
+`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten 12 and cannot extend it.
 
 Run every phase through this checked Bash pattern in the same tool call as the command. The failure
 line is the handoff record: it contains the exact shell-escaped originating command and status.

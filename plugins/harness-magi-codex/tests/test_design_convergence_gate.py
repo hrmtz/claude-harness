@@ -423,8 +423,8 @@ class DesignConvergenceGateTest(unittest.TestCase):
         result = self.assert_decision(
             "BLOCKED", "DESIGN_NEXT_FANOUT_UNAFFORDABLE"
         )
-        self.assertEqual(result["usage"], 13)
-        self.assertEqual(result["ceiling"], 16)
+        self.assertEqual(result["usage"], guard.DEFAULT_MAX_MODEL_LAUNCHES + 1)
+        self.assertEqual(result["ceiling"], guard.GLOBAL_MAX_MODEL_LAUNCHES)
 
     def test_stale_review_artifact_fails_closed_with_exit_two(self) -> None:
         current = self.current_sha()

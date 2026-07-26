@@ -245,7 +245,7 @@ not by the three same-family reviewers who read the same text.
 
 ## Cost
 
-Per task: the default design campaign permits at most 16 weighted model launches (four pairs
+Per task: the default design campaign permits at most 12 weighted model launches (three pairs
 without retries),
 build varies, bug-hunt ~1 fan-out, code-review ~5 min.
 A hard canonical task is a multi-hour loop. That is the point — it is cheaper than restoring

@@ -56,6 +56,10 @@ adversarial review → Codex fixes/tests. Kimi may control or implement reversib
 silently remove the Codex/Claude review gates. Kimi has no Codex autorun Stop hook; durable campaign
 state supports inspection/resume but not acknowledgement-free continuation.
 
+The design campaign defaults to 12 weighted model launches (three fan-out plus mandatory
+cross-family pairs without retries). Requirement revisions share a fixed global allowance of 16.
+`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default for smaller targets, never extend it.
+
 Whenever actual routing differs from the preferred route, write this literal handoff before that
 phase:
 

@@ -174,17 +174,21 @@ For guarded campaigns, fan-out admission preserves one weighted launch for its i
 following mandatory cross-family review. Reserve denial is a definitive blocked state, never
 permission to ship; the cross-family claim still passes the normal transition and budget guards
 and is not double-charged.
+The default per-campaign ceiling is 12 weighted model launches (three fan-out/cross-family pairs
+without retries). Requirement revisions share a fixed global allowance of 16.
+`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default for smaller targets, never extend it.
 
 ## Convergence economics (v0.2.0 — token budget + altitude rails)
 
 Rigor per round is worthless if the loop never terminates. Four rails, all learned from the
 2026-07-10 41-round run:
 
-- **Round budget.** Design gate [2] soft budget = **5 rounds**. Hitting it does not mean "keep
-  grinding" — it triggers a mandatory **altitude checkpoint**: choose (a) ship the plateau'd
-  core and defer the rest, (b) slice the doc into smaller per-task docs, or (c) descend — stop
-  reviewing prose and start writing the code + executable checks that settle the open questions.
-  **8 rounds = hard stop**; continuing requires explicit user sign-off with a stated reason.
+- **Round budget.** Design gate [2] permits **3 full pairs / 12 weighted launches per campaign**.
+  Hitting it triggers a mandatory **altitude checkpoint**: choose (a) ship the plateau'd core and
+  defer the rest, (b) slice the doc into smaller per-task docs, or (c) descend — stop reviewing
+  prose and start writing the code + executable checks that settle the open questions. Only a real
+  requirement revision may use the remaining task-global allowance, for at most one further pair;
+  user sign-off cannot extend either bound.
 - **Deferred ledger.** MED/LOW findings are recorded in `${doc_dir}/.dual-magi-<slug>/DEFERRED.md`
   with the gate that will resolve each ([4] bug-hunt / [5] code-review / a named executable
   check). The doc is NOT revised for them.

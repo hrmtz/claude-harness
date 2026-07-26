@@ -25,6 +25,11 @@ VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 SCHEMA = json.loads((PLUGIN / "schemas" / "finding.schema.json").read_text())
 sys.path.insert(0, str(PLUGIN / "scripts"))
 from magi_validate_findings import validate as validate_findings  # noqa: E402
+from magi_campaign_guard import (  # noqa: E402
+    DEFAULT_MAX_MODEL_LAUNCHES,
+    GLOBAL_MAX_MODEL_LAUNCHES,
+    PHASE_WEIGHT,
+)
 
 
 def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -122,10 +127,20 @@ class CampaignGuardTest(unittest.TestCase):
         return result
 
     def fill_default_campaign(self) -> None:
-        for round_no in range(1, 9):
+        """Claim alternating rounds until the default ceiling is consumed.
+
+        Derived from the guard's own ceiling rather than a fixed round count, so
+        the helper keeps meaning "budget is now full" when that ceiling moves.
+        """
+        spent = 0
+        round_no = 0
+        while spent < DEFAULT_MAX_MODEL_LAUNCHES:
+            round_no += 1
             phase = "fanout" if round_no % 2 else "xfamily"
             result = self.claim(round_no, phase)
             self.assertEqual(result.returncode, 0, result.stderr)
+            spent += PHASE_WEIGHT[phase]
+        self.filled_rounds = round_no
 
     def seed_ledger(self, launches: list[dict[str, object]]) -> Path:
         control = self.doc.parent / ".dual-magi"
@@ -228,13 +243,43 @@ class CampaignGuardTest(unittest.TestCase):
         if process.stderr is not None:
             process.stderr.close()
 
-    def test_global_fuse_has_no_extension_path(self) -> None:
+    def test_per_campaign_ceiling_requires_revision(self) -> None:
         self.fill_default_campaign()
-        denied = self.claim(9, "fanout")
+        denied = self.claim(self.filled_rounds + 1, "fanout")
         self.assertEqual(denied.returncode, 4)
         self.assertIn("NOT PLATEAU", denied.stderr)
         self.assertIn("MAGI_BUDGET_EXHAUSTED", denied.stderr)
+        self.assertIn("active campaign", denied.stderr)
         self.assertFalse(any((self.doc.parent / ".dual-magi").glob("PLATEAU*")))
+
+    def test_requirement_revision_can_reach_but_not_exceed_global_fuse(self) -> None:
+        self.fill_default_campaign()
+        self.doc.write_text("# revised requirement\n")
+        rollover = self.claim(1, "fanout")
+        self.assertEqual(rollover.returncode, 0, rollover.stderr)
+        self.assertIn(
+            f"global model launches 15/{GLOBAL_MAX_MODEL_LAUNCHES}",
+            rollover.stdout,
+        )
+        self.assertIn(
+            f"campaign model launches 3/{DEFAULT_MAX_MODEL_LAUNCHES}",
+            rollover.stdout,
+        )
+        diverse = self.claim(2, "xfamily")
+        self.assertEqual(diverse.returncode, 0, diverse.stderr)
+        self.assertIn(
+            f"global model launches 16/{GLOBAL_MAX_MODEL_LAUNCHES}",
+            diverse.stdout,
+        )
+
+        self.doc.write_text("# second revised requirement\n")
+        denied = self.claim(1, "fanout")
+        self.assertEqual(denied.returncode, 4)
+        self.assertIn("global campaign history", denied.stderr)
+        self.assertIn(
+            f"20/{GLOBAL_MAX_MODEL_LAUNCHES} model launches",
+            denied.stderr,
+        )
 
     def test_owner_registration_is_verified_and_optional(self) -> None:
         claimed = self.guard(
@@ -350,7 +395,9 @@ class CampaignGuardTest(unittest.TestCase):
         self.doc.write_text("# revised requirement\n")
         rollover = self.claim(1, "fanout")
         self.assertEqual(rollover.returncode, 0, rollover.stderr)
-        self.assertIn("global model launches 6/16", rollover.stdout)
+        self.assertIn(
+            f"global model launches 6/{GLOBAL_MAX_MODEL_LAUNCHES}", rollover.stdout
+        )
         ledger = json.loads(ledger_path.read_text())
         self.assertEqual(len(ledger["campaigns"]), 2)
         self.assertEqual(
@@ -436,7 +483,10 @@ class CampaignGuardTest(unittest.TestCase):
 
     def test_illegal_transition_precedes_exhausted_budget(self) -> None:
         self.fill_default_campaign()
-        denied = self.guard("claim", str(self.doc), "9", "xfamily", str(self.state))
+        denied = self.guard(
+            "claim", str(self.doc), str(self.filled_rounds + 1), "xfamily",
+            str(self.state),
+        )
         self.assertEqual(denied.returncode, 64)
         self.assertIn("MAGI_TRANSITION_ERROR", denied.stderr)
 
@@ -474,7 +524,9 @@ class CampaignGuardTest(unittest.TestCase):
         control = self.doc.parent / ".dual-magi"
         approval = control / "CAMPAIGN_CONTINUE.untrusted.json"
         approval.write_text('{"schema_version": 1')
-        self.assertEqual(self.claim(9, "fanout").returncode, 4)
+        self.assertEqual(
+            self.claim(self.filled_rounds + 1, "fanout").returncode, 4
+        )
 
     def test_administrative_campaign_reset_is_disabled_in_production(self) -> None:
         self.assertEqual(self.claim(1, "fanout").returncode, 0)
@@ -529,7 +581,9 @@ class CampaignGuardTest(unittest.TestCase):
         )
         claimed = self.claim(2, "xfamily")
         self.assertEqual(claimed.returncode, 0, claimed.stderr)
-        self.assertIn("model launches 4/16", claimed.stdout)
+        self.assertIn(
+            f"model launches 4/{DEFAULT_MAX_MODEL_LAUNCHES}", claimed.stdout
+        )
         migrated = json.loads(ledger_path.read_text())
         self.assertEqual(migrated["campaigns"][0]["launches"][0]["model_launches"], 3)
 
@@ -624,6 +678,22 @@ class CampaignGuardTest(unittest.TestCase):
 
     def test_budget_denial_happens_before_provider_launch(self) -> None:
         self.fill_default_campaign()
+        # The prior artifact must belong to the round just before the one being
+        # claimed, so it follows the filled campaign rather than a fixed number.
+        prior_round = self.filled_rounds
+        prior_source = self.state / f"round_{prior_round}_source.json"
+        prior_source.write_text(
+            json.dumps(empty_review(self.doc, prior_round, "SOURCE"))
+        )
+        self.prior = self.state / f"round_{prior_round}_codex.json"
+        prior_payload = empty_review(self.doc, prior_round, "SYNTHESIS")
+        prior_payload["source_artifacts"] = [
+            {
+                "path": prior_source.name,
+                "sha256": hashlib.sha256(prior_source.read_bytes()).hexdigest(),
+            }
+        ]
+        self.prior.write_text(json.dumps(prior_payload))
         stub_bin = self.root / "bin"
         stub_bin.mkdir()
         marker = self.root / "provider-started"
@@ -641,7 +711,7 @@ class CampaignGuardTest(unittest.TestCase):
         fanout = run(
             str(FANOUT),
             str(self.doc),
-            "9",
+            str(self.filled_rounds + 1),
             str(self.state),
             "--prior",
             str(self.prior),

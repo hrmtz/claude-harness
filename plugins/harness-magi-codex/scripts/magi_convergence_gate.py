@@ -476,8 +476,8 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     ledger, ledger_path, ledger_sha = load_ledger(manifest_path)
     campaigns = ledger["campaigns"]
     used = guard.model_launches(campaigns)
-    ceiling = min(
-        guard.GLOBAL_MAX_MODEL_LAUNCHES,
+    ceiling = guard.GLOBAL_MAX_MODEL_LAUNCHES
+    campaign_ceiling = min(
         guard.base_ceiling(),
         int(manifest.get("max_model_launches", guard.DEFAULT_MAX_MODEL_LAUNCHES)),
     )
@@ -530,6 +530,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     active = guard.active_campaign(ledger)
     active_launches = active["launches"]
     assert isinstance(active_launches, list)
+    active_used = guard.model_launches([active])
     current_protocol_sha = guard.protocol_sha()
     transition = guard.next_transition(active_launches)
     transition_blocked = transition["kind"] == "transition-blocked" and not guard.may_rollover(
@@ -642,7 +643,15 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         "incremental_allowed": incremental_allowed,
         "targeted_persona": targeted_persona(manifest),
         "admissions": {
-            phase: guard.admission_decision(used, ceiling, phase)
+            phase: guard.bounded_admission_decision(
+                0
+                if guard.may_rollover(ledger, active, manifest_path, 1, phase)
+                else active_used,
+                campaign_ceiling,
+                used,
+                ceiling,
+                phase,
+            )
             for phase in ("fanout", "targeted", "xfamily")
         },
     }

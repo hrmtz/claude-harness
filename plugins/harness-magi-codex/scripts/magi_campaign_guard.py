@@ -26,9 +26,29 @@ from magi_protocol import (
 )
 
 
-DEFAULT_MAX_MODEL_LAUNCHES = 16
+# Per-campaign autonomous ceiling: 3 full rounds (fanout + its mandatory
+# cross-family review, 4 launches each). A campaign that needs more must earn it
+# through a real requirement revision, which rolls over into the global fuse
+# below; it cannot simply keep re-reviewing the same unchanged target.
+#
+# Measured 2026-07-27 across 28 multi-round campaigns / 1,084 round artifacts:
+# the median campaign stops producing NEW CRITICAL/HIGH findings at artifact
+# round 6 (= 3 full rounds), and past roughly that point the findings are
+# predominantly residue of the previous round's own fix ("the r34 fix was r35's
+# CRITICAL") rather than pre-existing defects. Three rounds covers the median
+# campaign whole; a smaller default would cut below it.
+#
+# For a target far below design scale — one function, one guard clause — tighten
+# further per run with MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES rather than relying on
+# this ceiling. A flat allowance is what let a one-function shell guard consume
+# 14 of 16 launches over four rounds.
+DEFAULT_MAX_MODEL_LAUNCHES = 12
 PHASE_WEIGHT = {"fanout": 3, "targeted": 1, "xfamily": 1}
 FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
+# Hard fuse across all revision campaigns for one target. Deliberately NOT cut:
+# in the same corpus five campaigns were still surfacing new CRITICAL/HIGH at
+# this boundary, and one shipped-blocking CRITICAL appeared at the 4th
+# cross-family round. Depth stays available; it just has to be earned.
 GLOBAL_MAX_MODEL_LAUNCHES = 16
 TERMINAL_STATUSES = {
     "success",
@@ -510,7 +530,9 @@ def validate_transition(launches: list[object], round_no: int, phase: str) -> in
     )
 
 
-def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, object]:
+def admission_decision(
+    total_used: int, ceiling: int, phase: str, *, scope: str = "global campaign history"
+) -> dict[str, object]:
     weight = PHASE_WEIGHT[phase]
     reserve = FINAL_XFAMILY_RESERVE if phase in {"fanout", "targeted"} else 0
     arithmetic = kernel.launch_affordability(
@@ -522,7 +544,7 @@ def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, o
     required = int(arithmetic["required"])
     affordable = bool(arithmetic["affordable"])
     reason = (
-        f"global campaign history would require {total_used + required}/{ceiling} "
+        f"{scope} would require {total_used + required}/{ceiling} "
         f"model launches ({weight} for {phase}"
         + (f" plus {reserve} reserved for mandatory xfamily)" if reserve else ")")
     )
@@ -532,6 +554,39 @@ def admission_decision(total_used: int, ceiling: int, phase: str) -> dict[str, o
         "required": required,
         "affordable": affordable,
         "reason": reason,
+    }
+
+
+def bounded_admission_decision(
+    campaign_used: int,
+    campaign_ceiling: int,
+    total_used: int,
+    global_ceiling: int,
+    phase: str,
+) -> dict[str, object]:
+    """Require both the per-campaign allowance and the task-global fuse."""
+    campaign = admission_decision(
+        campaign_used,
+        campaign_ceiling,
+        phase,
+        scope="active campaign",
+    )
+    global_history = admission_decision(total_used, global_ceiling, phase)
+    affordable = bool(campaign["affordable"]) and bool(global_history["affordable"])
+    if not campaign["affordable"]:
+        reason = str(campaign["reason"])
+    else:
+        reason = str(global_history["reason"])
+    return {
+        "weight": campaign["weight"],
+        "reserve": campaign["reserve"],
+        "required": campaign["required"],
+        "affordable": affordable,
+        "reason": reason,
+        "campaign_used": campaign_used,
+        "campaign_ceiling": campaign_ceiling,
+        "global_used": total_used,
+        "global_ceiling": global_ceiling,
     }
 
 
@@ -562,14 +617,16 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
         assert isinstance(campaigns, list)
         transition = next_transition(launches)
         total_used = model_launches(campaigns)
-        ceiling = min(GLOBAL_MAX_MODEL_LAUNCHES, base_ceiling())
+        campaign_ceiling = base_ceiling()
+        global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
         last = launches[-1] if launches else None
-        if (
-            transition["kind"] == "transition-blocked"
-            and isinstance(last, dict)
-            and last.get("status") == "superseded-by-requirement-revision"
+        rollover_available = (
+            isinstance(last, dict)
+            and last.get("artifact_sha") != file_sha(doc)
+            and last.get("status") not in NONTERMINAL_STATUSES
             and may_rollover(ledger, campaign, doc, 1, "fanout")
-        ):
+        )
+        if rollover_available:
             transition = {
                 "kind": "candidate",
                 "round": 1,
@@ -581,16 +638,25 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
                 **transition,
                 "ledger_sha": ledger_sha,
                 "used": total_used,
-                "ceiling": ceiling,
+                "ceiling": global_ceiling,
+                "campaign_used": model_launches([campaign]),
+                "campaign_ceiling": campaign_ceiling,
             }
-        admission = admission_decision(total_used, ceiling, str(transition["phase"]))
+        campaign_used = 0 if rollover_available else model_launches([campaign])
+        admission = bounded_admission_decision(
+            campaign_used,
+            campaign_ceiling,
+            total_used,
+            global_ceiling,
+            str(transition["phase"]),
+        )
         return {
             **transition,
             **admission,
             "kind": "candidate" if admission["affordable"] else "budget-blocked",
             "ledger_sha": ledger_sha,
             "used": total_used,
-            "ceiling": ceiling,
+            "ceiling": global_ceiling,
         }
 
 
@@ -685,10 +751,17 @@ def claim(
             assert isinstance(launches, list)
             attempt = 1
             planned_rollover = True
-        configured_ceiling = base_ceiling()
+        campaign_ceiling = base_ceiling()
+        campaign_used = model_launches([campaign])
         total_used = model_launches(campaigns)
-        global_ceiling = min(GLOBAL_MAX_MODEL_LAUNCHES, configured_ceiling)
-        admission = admission_decision(total_used, global_ceiling, phase)
+        global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
+        admission = bounded_admission_decision(
+            campaign_used,
+            campaign_ceiling,
+            total_used,
+            global_ceiling,
+            phase,
+        )
         if not admission["affordable"]:
             raise BudgetDenied(str(admission["reason"]))
         weight = int(admission["weight"])
@@ -716,6 +789,7 @@ def claim(
     print(
         f"CAMPAIGN CLAIMED: {campaign['campaign_id']} global model launches "
         f"{total_used + weight}/{global_ceiling}, "
+        f"campaign model launches {campaign_used + weight}/{campaign_ceiling}, "
         f"round {round_no} {phase}, attempt {attempt}; "
         f"PROTOCOL_SHA={claim_protocol_sha}; CLAIM_ID={claim_id}"
     )

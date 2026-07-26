@@ -244,7 +244,7 @@ the exception: fan-out mechanically publishes its validated one-source
 
 ## Campaign guard
 
-The default autonomous campaign stops after 16 weighted model launches: fan-out costs 3,
+The default autonomous campaign stops after 12 weighted model launches: fan-out costs 3,
 incremental targeted review costs 1, and cross-family costs 1. Fan-out and targeted admission both
 preserve one weighted launch for the immediately following mandatory cross-family review. If that
 reserve cannot be preserved, the campaign is blocked before any provider starts; denial is never
@@ -256,8 +256,9 @@ means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction 
 change, then invoke round 1. A changed document or review-protocol SHA rolls into the next campaign
 automatically, without acknowledgement.
 
-`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the fixed global ceiling of 16; it cannot extend it.
-All revision campaigns share those same 16 weighted model launches. Changing state directory is not a reset. Global exhaustion produces a definitive blocked result,
+`MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the per-campaign ceiling of 12; it cannot extend it.
+All revision campaigns share a separate fixed global allowance of 16 weighted model launches.
+Changing state directory is not a reset. Global exhaustion produces a definitive blocked result,
 not an acknowledgement prompt.
 
 Arming binds the workflow to the current Codex thread. On its intact path, the bundled Stop hook keeps the turn chain
