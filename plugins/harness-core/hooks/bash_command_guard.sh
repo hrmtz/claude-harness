@@ -94,10 +94,11 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 #   10 at least one inspected file contains a nested mapping/list
 #   11 target/path/YAML could not be inspected safely (fail closed)
 classify_sops_exec_env_targets() {
-    [[ "$CMD" =~ sops[[:space:]]+exec-env ]] || return 0
+    [[ "$DEOBF" == *sops* || "$DEOBF" == *exec-env* ]] || return 0
     python3 - "$CMD" 2>/dev/null <<'PY'
 import os
 import shlex
+import stat
 import sys
 
 import yaml
@@ -105,6 +106,10 @@ import yaml
 cmd = sys.argv[1]
 nested = False
 unsupported = False
+target_count = 0
+MAX_FILE_BYTES = 1024 * 1024
+MAX_TARGETS = 8
+MAX_SHELL_DEPTH = 8
 flag_with_value = {"--user", "--keyservice"}
 flag_without_value = {
     "--background",
@@ -112,6 +117,8 @@ flag_without_value = {
     "--enable-local-keyservice",
 }
 shells = {"bash", "sh", "dash", "zsh", "ksh"}
+control_tokens = {";", "&&", "||", "|", "&", "(", ")"}
+dynamic_chars = "$`*?[{"
 
 def tokenize(command):
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
@@ -120,7 +127,7 @@ def tokenize(command):
     return list(lexer)
 
 def inspect_command(command, depth=0):
-    global nested, unsupported
+    global nested, unsupported, target_count
     try:
         tokens = tokenize(command)
     except ValueError:
@@ -129,20 +136,41 @@ def inspect_command(command, depth=0):
 
     # A quoted shell -c body is one outer token; inspect that body as the
     # command it actually is, rather than allowing it to hide exec-env.
-    if depth < 2:
-        for index, token in enumerate(tokens):
-            if (
-                index >= 2
-                and tokens[index - 1] in {"-c", "-lc", "-ic"}
-                and os.path.basename(tokens[index - 2]) in shells
-                and "exec-env" in token
-            ):
+    for index, token in enumerate(tokens):
+        if (
+            index >= 2
+            and tokens[index - 1] in {"-c", "-lc", "-ic"}
+            and os.path.basename(tokens[index - 2]) in shells
+            and "exec-env" in token
+        ):
+            if depth >= MAX_SHELL_DEPTH:
+                unsupported = True
+            else:
                 inspect_command(token, depth + 1)
 
     for index, token in enumerate(tokens):
         if os.path.basename(token) != "sops":
             continue
-        if index + 1 >= len(tokens) or tokens[index + 1] != "exec-env":
+        if index + 1 >= len(tokens):
+            unsupported = True
+            continue
+        subcommand = tokens[index + 1]
+        if subcommand == "edit":
+            continue
+        if subcommand != "exec-env":
+            # The two-command policy permits only edit and exec-env. Dynamic
+            # or otherwise unknown subcommands cannot be proven safe.
+            unsupported = True
+            continue
+        # A compound shell command can replace the checked path before sops
+        # opens it. The inner exec-env consumer stays one quoted token and is
+        # therefore unaffected by this outer-control-token check.
+        if any(token in control_tokens for token in tokens):
+            unsupported = True
+            continue
+        target_count += 1
+        if target_count > MAX_TARGETS:
+            unsupported = True
             continue
         cursor = index + 2
         target = None
@@ -168,14 +196,35 @@ def inspect_command(command, depth=0):
         # A dynamic/globbed path cannot be inspected before shell expansion.
         if (
             target is None
-            or any(char in target for char in "$`*?[{")
-            or not os.path.isfile(target)
+            or any(char in target for char in dynamic_chars)
         ):
             unsupported = True
             continue
         try:
-            with open(target, encoding="utf-8") as handle:
+            before = os.lstat(target)
+            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_FILE_BYTES:
+                unsupported = True
+                continue
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(target, flags)
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_size > MAX_FILE_BYTES
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                os.close(descriptor)
+                unsupported = True
+                continue
+            with os.fdopen(descriptor, encoding="utf-8") as handle:
                 document = yaml.safe_load(handle)
+            after = os.stat(target, follow_symlinks=False)
+            if (
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            ):
+                unsupported = True
+                continue
         except Exception:
             unsupported = True
             continue
@@ -187,6 +236,14 @@ def inspect_command(command, depth=0):
             for key, value in document.items()
         ):
             nested = True
+
+    # Dynamic executable construction must not turn exec-env into an orphan
+    # token that escapes the direct `sops` scan above.
+    for index, token in enumerate(tokens):
+        if token == "exec-env" and (
+            index == 0 or os.path.basename(tokens[index - 1]) != "sops"
+        ):
+            unsupported = True
 
 inspect_command(cmd)
 

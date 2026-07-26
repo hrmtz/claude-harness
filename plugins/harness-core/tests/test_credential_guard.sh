@@ -90,6 +90,7 @@ printf '%s\n' \
     '  - ENC[AES256_GCM,data:synthetic-list,type:str]' \
     'sops:' \
     '  version: 3.9.4' > "$list_sops_file"
+ln -s "$flat_sops_file" "$TEST_ROOT/symlink.enc.yaml"
 
 # --- #6: DSN-with-creds-in-argv ---
 expect_block 'psql postgresql://prs:s3cr3tpw@mars:5434/db -tAc "select 1"' '#6 password DSN in psql argv'
@@ -114,6 +115,19 @@ expect_block "sops exec-env '$list_sops_file' '/usr/bin/true'" '#156 top-level l
 expect_block "sops exec-env '$TEST_ROOT/missing.enc.yaml' '/usr/bin/true'" '#156 unreadable target fails closed'
 expect_block 'sops exec-env "$SOPS_FILE" /usr/bin/true' '#156 dynamic target fails closed'
 expect_block "bash -c \"sops exec-env '$nested_sops_file' /usr/bin/true\"" '#156 shell -c cannot hide nested target'
+wrapped_nested="sops exec-env '$nested_sops_file' /usr/bin/true"
+for _wrap in 1 2 3 4; do
+    printf -v wrapped_nested 'bash -c %q' "$wrapped_nested"
+done
+expect_block "$wrapped_nested" '#156 four shell wrappers cannot hide nested target'
+expect_block "sops ex\"ec-env\" '$nested_sops_file' /usr/bin/true" '#156 quote-spliced subcommand'
+expect_block "sops \$'exec-env' '$nested_sops_file' /usr/bin/true" '#156 ANSI-C quoted subcommand'
+expect_block "cp '$nested_sops_file' '$flat_sops_file'; sops exec-env '$flat_sops_file' /usr/bin/true" '#156 compound replacement denied'
+expect_block "sops exec-env '$TEST_ROOT/symlink.enc.yaml' /usr/bin/true" '#156 absent/symlink target fails closed'
+large_sops_file="$TEST_ROOT/large.enc.yaml"
+truncate -s 1048577 "$large_sops_file"
+expect_block "sops exec-env '$large_sops_file' /usr/bin/true" '#156 target above 1 MiB ceiling'
+expect_block '"$SOPS" exec-env "$SOPS_FILE" /usr/bin/true' '#156 dynamic executable/subcommand fails closed'
 expect_allow 'echo "sops exec-env is the supported form"' '#156 prose does not require YAML inspection'
 
 bash_guard_failure_fails_closed() {
