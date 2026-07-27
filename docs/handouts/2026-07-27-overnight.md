@@ -204,3 +204,24 @@ mz-orch には設計のみ指示済み。**最重要は 3 番目**:
 
 #5 の位置づけも変わった。「重複を削除する」ではなく「**chat が掲載価格を正しく返していない**」。削除禁止の裁定は維持 — 削除は元々間違った方向だった。
 
+
+### 01:37 zetith-site — 判断材料が揃った。**タグは 1 つも変更していない**
+
+zs-orch の報告:
+
+- **#63**: user 判断用の brief を issue に投稿済み。各タグの **fire / 失われるもの / 所有者 / privacy** を matrix 化。`req-4dc0b82` の保留指示どおり **tag の変更はゼロ**
+- **#61**: Ads の正確な欠測額は blocked だが、**再現可能な UI クエリを issue に投稿済み**。user がそのまま実行できる形
+- **#65**: 11 checkout の棚卸し完了。**すべて clean、削除ゼロ**。`628674d` の local-only commit を保全
+
+#65 は「消す前に列挙し、未 push commit がないか各々確認せよ」と指示した通りに動いている。local-only commit を見つけて保全したのは、誰かの未完了作業をゴミと判断しなかったということ。
+
+### 01:36 PRS-LLM — pl-orch が 4 件処理
+
+| issue | 判定 |
+|---|---|
+| #411 | 既に修正済みだった (`1513770`)。value-safe な live probe で 31 行読めることを確認して close |
+| #412 | direct NAT は fail closed、canonical tunnel は live 成功。`33c93b41` が dev/main 上。close |
+| #410 | **修正前に PDF fallback が死んでいたことを再現**したうえで、lazy fallback が 3 test を通ることを確認して close |
+| #406 | 完全に stale な Qdrant fanout test を削除、現行 PG fallback は 4/4 pass |
+
+#410 の順序が良い。「直っている」ではなく「**直る前は壊れていた**」を先に再現してから、直った状態を確認している。
