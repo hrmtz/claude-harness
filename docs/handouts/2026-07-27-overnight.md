@@ -279,3 +279,44 @@ review 待ちが 3 本に増えたが、reviewer は kimi 2 体で quota 49%。P
 pl-orch に「#414 は Draft のまま、review 不要で進む作業に切り替えろ」と指示。**1 分で #397 (critique/retriever の fail-open) の part 1 を実装、28/28 pass** に切り替わった。reviewer を消費せず価値のある作業へ回っている。
 
 あわせて pl-orch には非可逆クラスタ (#388/#402/#403/#407/#413/#386) に手を出さないことを再確認。**設計と rehearsal は自由、実行は ack 必須**、user 就寝中なので朝まで承認は出ない。
+
+### 01:46 クラスタ分離 — 私は harness + hippos だけを見る体制に
+
+user の指示: 「君は harness と hippos だけ残して、ほかは切り離してくれ」「zetith-site 側のオーケストレーターは別立てで立てて、君と協業させてよ。でないと hippos + harness の作業が汚染されていく」
+
+**指摘は正しかった。** 今夜 reviewer が product 側に取られて、infrastructure の本筋 (Deja Review 配線 PR #207) が止まりかけている。PRS-LLM の stale test 整理に kimi が消費されかけたのを user が見つけた。
+
+**新しい構成:**
+
+```
+私 (indigo-lantern)          claude-harness / hippocampus-mcp のみ
+  ├ hc-orch %332             claude-harness
+  ├ hx-orch %333             hippocampus-mcp
+  ├ verifier %340            infra reviewer
+  ├ verifier2 %359           infra reviewer
+  └ rust-crane %330          ghost 層
+
+zc-coord %368 (claude)       product cluster — 私の peer、部下ではない
+  ├ zs-orch %365             zetith-site
+  ├ mz-orch %367             mafutsu-zetith-backend
+  ├ pl-orch %366             PRS-LLM
+  └ zc-review %369 (kimi)    product reviewer (専用)
+```
+
+**携帯から**: `/remote-control formation-zc-coord` で zc-coord に直接つながる (claude worker として立てたため)。
+
+私に残る例外は 4 つだけ: production deploy / 価格・医療表現の変更 / clinic 所有データの削除 / 新 pane の spawn。それ以外は zc-coord が決める。
+
+保留していた ask 2 件 (PR #415 の reviewer 割当、#6 の source-path 設計) も zc-coord に引き継いだ。
+
+### 01:45 mz-orch が本当の scope を掘り当てた — ジュブゼンは 7 件のうちの 1 つ
+
+**overlay 7 件中 7 件が掲載価格と乖離。うち 6 slug が実行時に重複**している (legacy な numeric ID が D1 の ULID を dedupe できないため)。全 7 label が重複した prompt header を作る。
+
+影響を受けている施術: **alar-reduction / buccal-fat / ptosis-repair / rhinoplasty / xerf / jubezen / jalupro**
+
+私が「1 件だけ直しても構造は残る」と指示した通り、**構造の方が本体だった**。ジュブゼンは症状の 1 つに過ぎない。
+
+提案されている修正 (D1 を唯一の権威にする / 両 slug を保持 / synonyms のみ enrichment / runtime parity と unique-slug の release gate) は方向として妥当。**no-price-edit** と明記されているが、実装が本当にそうなっているかは zc-coord が確認する。
+
+**まだ何も修正していない。**
