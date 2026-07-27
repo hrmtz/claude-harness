@@ -449,3 +449,25 @@ verifier2 が PR #207 の review 中に発見。**PR の欠陥ではなく既存
 `reason=nonexclusive` が全 pane で出る。**全 worker が `--exclusive-input` なしで spawn されているため、helper は誰にも nudge を撃てない**。alert を出すだけ。
 
 つまり mail 滞留の自動解消は**現状機能していない**。「alert → 人間か統括が起こす」経路だけが生きている。安全側ではあるが、期待した自動化ではない。#168 の landing は「検出できるようになった」までで、「自動で解消する」には至っていない。
+
+### 02:07 朝いちで user がやること — 準備は全部済んでいる
+
+**(1) API key の rotate** — 準備完了。branch `codex/issue6-safe-rotation` に実装済み、focused test 28 pass、**credential 操作も production 操作も一切していない**。
+
+分かっていること:
+- 当該 key を消費するのは compose service `prs-llm` / container `mafutsu-prs-llm-1` のみ。import 時 snapshot なので、source 更新後は **prs-llm だけ force-recreate すれば足りる**
+- local の候補 5,472 件を安全走査して **raw occurrence 0 件**
+- 私の側でも `scan_session_creds.py` を `--days 7` で回して **clean (exit 0)**。2026-07-22 を含む窓で hit なし
+- **R2 remote backup のみ未監査**。ただし rotate すれば旧 key は無効化されるので、**rotate が先、backup 監査は後**で合理的
+
+user がやるのは Anthropic Console での rotate だけ。その後の反映は runbook 化済み。
+
+**(2) GA4 / Ads / タグ所有者** — zs-orch が判断材料を揃えている。
+- `#60` GA4 UI で測定 ID がプロパティ 359262593 のものか確認
+- `#61` Ads UI の再現可能クエリを issue に投稿済み
+- `#63` 各タグの fire 状況 / 止めた場合に失われるもの / 所有者 / privacy を matrix 化済み。**私は本番タグの停止を承認しなかった** — 止めた期間のデータは復元できず、`#61` がまさにその穴の欠測額を数える案件だから
+
+**(3) overlay 修正の時期** — 急ぎではない。
+- 7 施術のうち 5 件は D1 単一権威で no-loss 証明済み、**rhinoplasty と jalupro は STOP** (D1 に対応する tier がない)
+- 実害は極小 (1 ヶ月で chat 問い合わせ 1 件、うち価格提示 0 件)
+- **価格に触れない部分だけ** PR #11 として先行中 (presentation-only の重複ヘッダ修正)
