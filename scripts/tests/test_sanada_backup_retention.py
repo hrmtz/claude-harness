@@ -88,6 +88,7 @@ class SanadaRetentionTest(unittest.TestCase):
 
     def test_apply_skips_read_only_nested_directory_without_mutation(self) -> None:
         old_auto = self.make_dir("auto_read_only", 4)
+        safe_auto = self.make_dir("auto_safe", 4)
         parent = old_auto / "parent"
         child = parent / "child"
         child.mkdir(parents=True)
@@ -97,8 +98,10 @@ class SanadaRetentionTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 4, result.stderr)
         self.assertTrue(old_auto.exists())
+        self.assertFalse(safe_auto.exists())
         self.assertEqual(parent.stat().st_mode & 0o777, 0o500)
         self.assertIn("skipped_dirs=1", result.stdout)
+        self.assertIn("deleted_dirs=1", result.stdout)
         log = (self.home / "retention.log").read_text()
         self.assertIn("skip not_owner_deletable=auto_read_only", log)
 
