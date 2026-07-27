@@ -22,6 +22,14 @@ PANE_RE = re.compile(r"^%[0-9]{1,10}$")
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 RESULTS = {"", "attempted-unconfirmed", "refused", "failed"}
 EFFECTS = {"", "badge-cleared-or-advanced", "durable-worker-row", "no-effect", "parent-route-unavailable"}
+RECEIPTS = {
+    "not-attempted",
+    "attempted-unconfirmed",
+    "effective",
+    "parent-alerted-no-attempt",
+    "parent-alerted-no-effect",
+}
+NO_ATTEMPT_REASONS = {"", "idle-never-stable", "nonexclusive", "registry-route-invalid"}
 MAX_INTERVAL = 86400
 STOP = False
 
@@ -144,6 +152,8 @@ def new_state(row: dict[str, str], now: int, checksum: str) -> dict[str, object]
         "attempt_mailbox_seq": 0,
         "effect": "",
         "parent_alerted": False,
+        "receipt": "not-attempted",
+        "no_attempt_reason": "",
     }
 
 
@@ -167,6 +177,8 @@ def load_state(path: Path, row: dict[str, str]) -> dict[str, object] | None:
         "attempt_mailbox_seq",
         "effect",
         "parent_alerted",
+        "receipt",
+        "no_attempt_reason",
     }
     if not isinstance(value, dict) or set(value) != expected:
         return None
@@ -194,6 +206,8 @@ def load_state(path: Path, row: dict[str, str]) -> dict[str, object] | None:
         or not 0 <= value["attempt_mailbox_seq"] <= 2**63 - 1
         or value["effect"] not in EFFECTS
         or not isinstance(value["parent_alerted"], bool)
+        or value["receipt"] not in RECEIPTS
+        or value["no_attempt_reason"] not in NO_ATTEMPT_REASONS
     ):
         return None
     return value
@@ -216,9 +230,10 @@ def recheck(row: dict[str, str], registry: Path) -> str:
     if (
         current["worker"] != row["worker"]
         or current["seq"] != row["seq"]
-        or current["exclusive"] != "1"
     ):
         return "live-pane-drift"
+    if current["exclusive"] != "1":
+        return "live-nonexclusive"
     if not registry_match(registry, row["worker"], row["pane"]):
         return "registry-refused"
     return ""
@@ -267,14 +282,22 @@ def alert_parent(
     verify_seconds: int,
     parent_id: str,
     parent_pane: str,
+    no_attempt_reason: str = "",
 ) -> int:
     mailbox = script_dir.parent / "lib" / "mailbox.sh"
     delivery = script_dir.parent / "lib" / "mailbox_delivery.sh"
-    body = (
-        f"mail-nudge escalation: worker={row['worker']} pane={row['pane']} seq={seq}\n"
-        f"attempt remained unconfirmed after {verify_seconds}s; "
-        "operator/orchestrator inspection required"
-    )
+    if no_attempt_reason:
+        body = (
+            f"mail-nudge escalation: worker={row['worker']} pane={row['pane']} seq={seq}\n"
+            f"no child nudge attempted after {verify_seconds}s; "
+            f"reason={no_attempt_reason}; operator/orchestrator inspection required"
+        )
+    else:
+        body = (
+            f"mail-nudge escalation: worker={row['worker']} pane={row['pane']} seq={seq}\n"
+            f"attempt remained unconfirmed after {verify_seconds}s; "
+            "operator/orchestrator inspection required"
+        )
     command = (
         'source "$1"; source "$2"; '
         'alert_seq="$(mailbox_append mail-nudge "$3" "$5")" || exit $?; '
@@ -342,6 +365,66 @@ def durable_worker_effect(worker: str, after_seq: int, attempted_at: int) -> boo
     return False
 
 
+def no_attempt_reason(
+    row: dict[str, str],
+    registry: Path,
+    age: int,
+    stale_required: int,
+    idle: int,
+    idle_required: int,
+) -> str:
+    latest = registry_row(registry, row["worker"])
+    if latest is None or latest.get("pane_id") != row["pane"]:
+        return "registry-route-invalid"
+    if latest.get("exclusive_input") is not True or row["exclusive"] != "1":
+        return "nonexclusive"
+    if age < stale_required or idle < idle_required:
+        return "idle-never-stable"
+    return ""
+
+
+def escalate_without_attempt(
+    args: argparse.Namespace,
+    script_dir: Path,
+    registry: Path,
+    path: Path,
+    row: dict[str, str],
+    state: dict[str, object],
+    reason: str,
+) -> None:
+    state["attempt_result"] = ""
+    state["no_attempt_reason"] = reason
+    state["parent_alerted"] = True
+    state["receipt"] = "parent-alerted-no-attempt"
+    route = parent_route(row, registry)
+    if route is None:
+        state["effect"] = "parent-route-unavailable"
+        atomic_json(path, state)
+        message = (
+            f"parent-route-unavailable worker={row['worker']} pane={row['pane']} "
+            f"seq={row['seq']} receipt=not-attempted reason={reason}"
+        )
+        run_tmux("set-option", "-g", "@formation_mail_nudge_alert", message)
+        print(message)
+        return
+    atomic_json(path, state)
+    print(
+        f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+        f"receipt=parent-alerted-no-attempt reason={reason} parent={route[0]}",
+        flush=True,
+    )
+    rc = alert_parent(
+        script_dir,
+        row,
+        int(row["seq"]),
+        args.no_attempt_alert,
+        route[0],
+        route[1],
+        reason,
+    )
+    print(f"parent={route[0]} no_attempt_alert_signal_rc={rc}", flush=True)
+
+
 def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry: Path) -> None:
     now = int(time.time())
     rows = pane_rows()
@@ -356,6 +439,12 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
     for row in rows:
         if PANE_RE.fullmatch(row["pane"]) and not row["seq"].isdigit():
             path = state_path(state_dir, row["pane"])
+            cleared = load_state(path, row)
+            if cleared is not None and cleared["attempted"]:
+                print(
+                    f"{row['pane']} worker={row['worker']} old_seq={cleared['pending_seq']} "
+                    "receipt=effective effect=badge-cleared-or-advanced"
+                )
             if path.exists() and not args.dry_run:
                 path.unlink(missing_ok=True)
             continue
@@ -370,7 +459,7 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             if state["attempted"]:
                 print(
                     f"{row['pane']} worker={row['worker']} old_seq={state['pending_seq']} "
-                    "effect=badge-cleared-or-advanced"
+                    "receipt=effective effect=badge-cleared-or-advanced"
                 )
         if state is None or state["pending_seq"] != int(row["seq"]):
             print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=would-observe")
@@ -386,10 +475,11 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             ):
                 print(
                     f"{row['pane']} worker={row['worker']} seq={row['seq']} "
-                    "effect=durable-worker-row"
+                    "receipt=effective effect=durable-worker-row"
                 )
                 if not args.dry_run:
                     state["effect"] = "durable-worker-row"
+                    state["receipt"] = "effective"
                     atomic_json(path, state)
                 continue
             if now - attempted_at < args.verify:
@@ -400,6 +490,7 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
                 print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result={result}")
                 continue
             state["parent_alerted"] = True
+            state["receipt"] = "parent-alerted-no-effect"
             route = parent_route(row, registry)
             if route is None:
                 state["effect"] = "parent-route-unavailable"
@@ -415,7 +506,8 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             atomic_json(path, state)
             print(
                 f"{row['pane']} worker={row['worker']} seq={row['seq']} "
-                f"effect=no-effect parent={route[0]} alert=attempted",
+                f"receipt=parent-alerted-no-effect effect=no-effect "
+                f"parent={route[0]} alert=attempted",
                 flush=True,
             )
             rc = alert_parent(
@@ -428,15 +520,32 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             )
             print(f"parent={route[0]} alert_signal_rc={rc}", flush=True)
             continue
+        if state["receipt"] == "parent-alerted-no-attempt":
+            continue
         if state["snapshot_crc"] != checksum:
             print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=snapshot-changed")
             if not args.dry_run:
                 state["snapshot_crc"] = checksum
                 state["snapshot_since"] = now
                 atomic_json(path, state)
-            continue
         age = max(0, now - int(state["first_seen_at"]))
         idle = max(0, now - int(state["snapshot_since"]))
+        reason = no_attempt_reason(
+            row, registry, age, args.stale, idle, args.idle
+        )
+        if age >= args.no_attempt_alert and reason:
+            if args.dry_run:
+                print(
+                    f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                    f"result=would-alert-parent-no-attempt reason={reason}"
+                )
+            else:
+                escalate_without_attempt(
+                    args, script_dir, registry, path, row, state, reason
+                )
+            continue
+        if state["snapshot_crc"] != checksum:
+            continue
         if age < args.stale or idle < args.idle:
             continue
         if row["exclusive"] != "1" or not registry_match(registry, row["worker"], row["pane"]):
@@ -449,9 +558,12 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             continue
 
         refusal = recheck(row, registry)
-        state["attempted"] = True
         if refusal:
-            state["attempt_result"] = "refused"
+            state["attempt_result"] = ""
+            state["receipt"] = "not-attempted"
+            state["no_attempt_reason"] = (
+                "nonexclusive" if refusal == "live-nonexclusive" else "registry-route-invalid"
+            )
             atomic_json(path, state)
             print(
                 f"{row['pane']} worker={row['worker']} seq={row['seq']} "
@@ -460,7 +572,10 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             continue
 
         # Persist the attempt before crossing the prompt-writing boundary.
+        state["attempted"] = True
         state["attempt_result"] = "attempted-unconfirmed"
+        state["receipt"] = "attempted-unconfirmed"
+        state["no_attempt_reason"] = ""
         state["attempted_at"] = now
         state["attempt_snapshot_crc"] = checksum
         state["attempt_mailbox_seq"] = mailbox_highwater(row["worker"])
@@ -474,7 +589,8 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
             outcome = "attempted-unconfirmed"
         print(
             f"{row['pane']} worker={row['worker']} seq={row['seq']} "
-            f"age={age}s result={outcome} receipt=unconfirmed"
+            f"age={age}s result={outcome} receipt=unconfirmed "
+            "state_receipt=attempted-unconfirmed"
         )
 
 
@@ -535,6 +651,11 @@ def main() -> None:
     parser.add_argument("--stale", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_STALE", "120"))
     parser.add_argument("--idle", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_IDLE", "25"))
     parser.add_argument("--verify", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_VERIFY", "30"))
+    parser.add_argument(
+        "--no-attempt-alert",
+        type=positive_int,
+        default=os.getenv("FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT", "300"),
+    )
     args = parser.parse_args()
     if args.watch and args.dry_run:
         die("--watch and --dry-run cannot be combined")

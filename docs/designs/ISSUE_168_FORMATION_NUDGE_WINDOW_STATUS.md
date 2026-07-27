@@ -127,7 +127,9 @@ Use one strict JSON file per pane under the namespaced state directory:
   "attempt_snapshot_crc": "",
   "attempt_mailbox_seq": 0,
   "effect": "",
-  "parent_alerted": false
+  "parent_alerted": false,
+  "receipt": "not-attempted",
+  "no_attempt_reason": ""
 }
 ```
 

@@ -58,7 +58,9 @@ write_fixture() {
 
 age_state() {
   local state="$1"
-  jq '.first_seen_at=0 | .snapshot_since=0' "$state" >"$state.tmp"
+  local old
+  old="$(( $(date +%s) - 10 ))"
+  jq --argjson old "$old" '.first_seen_at=$old | .snapshot_since=$old' "$state" >"$state.tmp"
   mv "$state.tmp" "$state"
 }
 
@@ -88,6 +90,47 @@ for mode in missing mismatch; do
   ! grep -Eq 'load-buffer|paste-buffer|send-keys' "$MUT"
 done
 
+# A far-ahead pending sequence that never becomes attempt-eligible alerts its
+# parent once with a strict reason and sends zero child/parent prompt keys.
+for reason in nonexclusive registry-route-invalid idle-never-stable; do
+  home="$TMP/no-attempt-$reason"
+  write_fixture "$home" 1 1
+  jq '.pane.seq="9001"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+  case "$reason" in
+    nonexclusive)
+      jq '.pane.exclusive="0"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+      ;;
+    registry-route-invalid)
+      jq -cn '{id:"child",pane_id:"%99",exclusive_input:true,
+        parent_id:"parent",parent_pane:"%7"}' >>"$home/formation/registry.jsonl"
+      ;;
+  esac
+  FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 \
+    --no-attempt-alert 1 >/dev/null
+  no_attempt_state="$home/state/mail-nudge/pane-42.json"
+  jq '.first_seen_at=0' "$no_attempt_state" >"$no_attempt_state.tmp"
+  mv "$no_attempt_state.tmp" "$no_attempt_state"
+  if [[ "$reason" == "idle-never-stable" ]]; then
+    jq '.pane.snapshot="still repainting"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+  fi
+  : >"$MUT"
+  FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 \
+    --no-attempt-alert 1 >"$TMP/no-attempt-$reason.out"
+  jq -e --arg reason "$reason" '
+    .pending_seq == 9001
+    and .attempted == false
+    and .receipt == "parent-alerted-no-attempt"
+    and .no_attempt_reason == $reason
+    and .parent_alerted == true
+  ' "$no_attempt_state" >/dev/null
+  [[ "$(grep -c "reason=$reason" "$home/mailbox/log.jsonl")" -eq 1 ]]
+  ! grep -Eq 'load-buffer|paste-buffer|send-keys' "$MUT"
+  FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 \
+    --no-attempt-alert 1 >/dev/null
+  [[ "$(grep -c "reason=$reason" "$home/mailbox/log.jsonl")" -eq 1 ]]
+  ! grep -Eq 'load-buffer|paste-buffer|send-keys' "$MUT"
+done
+
 # Lead panes are never nudged.
 home="$TMP/lead"
 write_fixture "$home" 1 1 lead
@@ -109,6 +152,8 @@ grep -Fq 'snapshot-changed' "$TMP/change.out"
 age_state "$home/state/mail-nudge/pane-42.json"
 FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 >"$TMP/nudge.out"
 grep -Fq 'result=attempted-unconfirmed receipt=unconfirmed' "$TMP/nudge.out"
+jq -e '.receipt == "attempted-unconfirmed" and .attempted == true' \
+  "$home/state/mail-nudge/pane-42.json" >/dev/null
 [[ "$(grep -c '^load-buffer ' "$MUT")" -eq 1 ]]
 [[ "$(grep -c '^send-keys ' "$MUT")" -eq 2 ]]
 before="$(grep -c '^load-buffer ' "$MUT")"
@@ -121,7 +166,11 @@ jq '.attempted_at=0' "$state" >"$state.tmp" && mv "$state.tmp" "$state"
 # A repaint after injection is deliberately not treated as success evidence.
 jq '.pane.snapshot="post-attempt repaint"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
 FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 >"$TMP/alert.out"
-jq -e '.effect == "no-effect" and .parent_alerted == true' "$state" >/dev/null
+jq -e '
+  .effect == "no-effect"
+  and .receipt == "parent-alerted-no-effect"
+  and .parent_alerted == true
+' "$state" >/dev/null
 [[ "$(grep -c 'mail-nudge escalation:' "$home/mailbox/log.jsonl")" -eq 1 ]]
 [[ "$(grep -c '^load-buffer ' "$MUT")" -eq "$before" ]]
 FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 >/dev/null
@@ -152,7 +201,11 @@ jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   >"$home/mailbox/log.jsonl"
 FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 >"$TMP/report.out"
 grep -Fq 'effect=durable-worker-row' "$TMP/report.out"
-jq -e '.effect == "durable-worker-row" and .parent_alerted == false' "$report_state" >/dev/null
+jq -e '
+  .effect == "durable-worker-row"
+  and .receipt == "effective"
+  and .parent_alerted == false
+' "$report_state" >/dev/null
 [[ "$(wc -l <"$home/mailbox/log.jsonl")" -eq 1 ]]
 
 # A missing live parent route is visible and never guessed.

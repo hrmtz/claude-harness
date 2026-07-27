@@ -244,6 +244,11 @@ durable row from the canonical worker counts as effect; a pane repaint does
 not. If neither is observable after the verification interval, it appends one
 fixed-metadata alert to the recorded parent and uses the existing zero-keystroke signal path.
 A missing/mismatched legacy parent route is visible and never guessed.
+If no child attempt ever becomes eligible, the bounded
+`FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT` ceiling (default 300 seconds) emits
+one distinct durable parent alert with reason `idle-never-stable`,
+`nonexclusive`, or `registry-route-invalid`. It sends zero child/parent prompt
+keystrokes and is never retried.
 
 Use `formation-mail-nudge --dry-run` before a one-shot run or `--watch`.
 Neither plugin install nor spawn starts it. Persistent operation requires an

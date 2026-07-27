@@ -105,6 +105,11 @@ canonical worker is the only success evidence; a pane repaint is not. If
 neither appears through the verification interval, it appends one fixed-metadata
 alert to the spawn-time parent and signals that parent with zero prompt keystrokes. Legacy or
 mismatched parent routes are reported visibly and are never guessed.
+If a pending sequence never becomes eligible for any child attempt, the
+bounded `FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT` ceiling (default 300 seconds)
+still produces one durable parent alert with
+`idle-never-stable`, `nonexclusive`, or `registry-route-invalid`. This path
+sends zero child and parent prompt keystrokes and never retries the alert.
 
 ```bash
 formation-mail-nudge --dry-run

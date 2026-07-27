@@ -104,6 +104,11 @@ live pane の両方の exclusive 宣言、古い badge、一定時間不変の p
 row だけで、pane repaint は成功扱いしない。検証時間後もこの効果がなければ、
 spawn 時に記録した parent へ固定 metadata の durable alert を一度 append し、parent prompt には触れず
 zero-keystroke signal する。legacy / 不一致 parent route は可視化し、推測しない。
+pending seq が child 注入条件を一度も満たさない場合も、
+`FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT`（既定300秒）の上限で parent へ一度だけ
+durable alert を送り、理由を `idle-never-stable` / `nonexclusive` /
+`registry-route-invalid` として記録する。この経路は child / parent prompt の
+keystroke をゼロに保ち、alert を再送しない。
 
 ```bash
 formation-mail-nudge --dry-run
