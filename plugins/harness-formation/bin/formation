@@ -95,9 +95,12 @@ registry_remove() {
   ) 202>"$REGISTRY_LOCK"
 }
 
-# Persist relay state on the worker's registry row. The fields are additive so
-# rows written by older Formation versions remain readable. A unique temp file
-# avoids two status/spawn processes sharing the old fixed registry.tmp name.
+# Persist the latest state synchronously observed by the lifecycle command on
+# the worker's registry row. A relay that finishes a slow startup after spawn
+# returns promotes only its public pidfile; `relay_effective_state` overlays
+# that live delivery truth without making the daemon rewrite registry.jsonl or
+# making status mutate it. The fields are additive so older rows remain
+# readable. A unique temp avoids processes sharing the old registry.tmp name.
 registry_set_relay_state() {
   local worker_id="$1" state="$2" pid="${3:-}" reason="${4:-}" log="${5:-}"
   [[ "$state" =~ ^(STARTING|READY|DEAD)$ ]] || {
@@ -152,9 +155,11 @@ relay_start_failure_diagnostic() {
   fi
 }
 
-# Compute delivery-visible relay health for status. Legacy registry rows have
-# no relay fields; their pidfile + exact argv shape remains the compatibility
-# source. READY is never trusted without a live published relay.
+# Compute delivery-visible relay health for status. The persisted row is the
+# latest synchronous observation, while public/private pidfiles are the async
+# lifecycle source of truth. Legacy rows have no relay fields; their pidfile +
+# exact argv shape remains the compatibility source. READY is never trusted
+# without a live published relay. This function is intentionally read-only.
 relay_effective_state() {
   local worker_id="$1" row="$2"
   local stored pid_file starting_pid_file public_pid="" starting_pid=""

@@ -84,9 +84,14 @@ export RELAY_JQ_DELAY_MARKER="$FIXTURE/fixed-delay.marker"
 export FORMATION_RELAY_LOG_DIR="$FIXTURE/logs"
 export FORMATION_RELAY_READY_ATTEMPTS=2
 export FORMATION_RELAY_READY_SLEEP=0.02
+registry_add fixed-slow %42 formation-fixed-slow "$FIXTURE/fixed-briefing.md" \
+  test-fixed-session claude relay-fixed-test "relay fixed test" 0 parent %40
 fixed_out="$(start_mailbox_relay fixed-slow %42 formation-fixed-slow claude)"
 fixed_rc=$?
 [[ "$fixed_rc" -eq 0 && "$fixed_out" == *"relay=PENDING"* ]]
+fixed_row="$(registry_get fixed-slow)"
+[[ "$(printf '%s\n' "$fixed_row" | jq -r '.relay_state')" == "STARTING" ]]
+[[ "$(printf '%s\n' "$fixed_row" | jq -r '.relay_reason')" == "readiness_timeout" ]]
 fixed_starting="$FORMATION_DIR/fixed-slow.relay_starting_pid"
 fixed_public="$FORMATION_DIR/fixed-slow.relay_pid"
 fixed_ready="$FORMATION_DIR/fixed-slow.relay_ready"
@@ -103,20 +108,29 @@ done
 [[ "$(cat "$fixed_public")" == "$fixed_pid" ]]
 [[ ! -e "$fixed_starting" ]]
 mailbox_relay_alive "$fixed_pid" fixed-slow
+[[ "$(relay_effective_state fixed-slow "$(registry_get fixed-slow)")" == "READY" ]]
+fixed_status="$(cmd_status)"
+[[ "$fixed_status" == *"fixed-slow"* && "$fixed_status" == *"relay=READY"* ]]
+# Status is a read-only overlay: async promotion does not grant the daemon
+# registry write ownership or erase the last synchronous timeout observation.
+fixed_row_after_status="$(registry_get fixed-slow)"
+[[ "$(printf '%s\n' "$fixed_row_after_status" | jq -r '.relay_state')" == "STARTING" ]]
+[[ "$(printf '%s\n' "$fixed_row_after_status" | jq -r '.relay_reason')" == "readiness_timeout" ]]
 stop_owned_relay "$fixed_pid"
+registry_remove fixed-slow
 ACTIVE_PID=""
 
 # Reap also owns the private STARTING state. This closes the race where a slow
 # relay has not yet promoted itself to the public pidfile when its pane exits.
 export RELAY_JQ_DELAY_MARKER="$FIXTURE/reap-delay.marker"
+registry_add reap-slow %44 formation-reap-slow "$FIXTURE/reap-briefing.md" \
+  test-reap-session claude relay-reap-test "relay reap test" 0 parent %40
 reap_out="$(start_mailbox_relay reap-slow %44 formation-reap-slow claude)"
 [[ "$reap_out" == *"relay=PENDING"* ]]
 reap_starting="$FORMATION_DIR/reap-slow.relay_starting_pid"
 reap_pid="$(cat "$reap_starting")"
 ACTIVE_PID="$reap_pid"
 [[ ! -e "$FORMATION_DIR/reap-slow.relay_pid" ]]
-registry_add reap-slow %44 formation-reap-slow "$FIXTURE/reap-briefing.md" \
-  test-reap-session claude relay-reap-test "relay reap test" 0 parent %40
 cmd_reap reap-slow >/dev/null
 for _ in $(seq 1 40); do
   kill -0 "$reap_pid" 2>/dev/null || break
@@ -139,6 +153,8 @@ EOF
 chmod +x "$broken_lib/mailbox_relay.sh"
 saved_lib="$LIB_DIR"
 LIB_DIR="$broken_lib"
+registry_add broken %43 formation-broken "$FIXTURE/broken-briefing.md" \
+  test-broken-session claude relay-broken-test "relay broken test" 0 parent %40
 if broken_out="$(start_mailbox_relay broken %43 formation-broken claude 2>&1)"; then
   broken_rc=0
 else
@@ -146,8 +162,14 @@ else
 fi
 LIB_DIR="$saved_lib"
 [[ "$broken_rc" -eq 1 && "$broken_out" == *"relay=DEAD"* ]]
+broken_row="$(registry_get broken)"
+[[ "$(printf '%s\n' "$broken_row" | jq -r '.relay_state')" == "DEAD" ]]
+[[ "$(printf '%s\n' "$broken_row" | jq -r '.relay_reason')" == "daemon_exit" ]]
+broken_status="$(cmd_status)"
+[[ "$broken_status" == *"broken"* && "$broken_status" == *"relay=DEAD"* ]]
 [[ ! -e "$FORMATION_DIR/broken.relay_pid" ]]
 [[ ! -e "$FORMATION_DIR/broken.relay_starting_pid" ]]
 [[ ! -e "$FORMATION_DIR/broken.relay_ready" ]]
+registry_remove broken
 
 echo "test_relay_startup_lifecycle: passed"
