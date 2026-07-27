@@ -791,3 +791,48 @@ cwd が `~/projects/claude-harness` — 私が handout を commit し続けて�
 - **zs-orch を評価した** — 「control query が空配列でなく明示的な 7403 を返したので、absence query を走らせること自体を拒否し、先の結論を自主的に撤回した。**それが measurement と guess の差**」
 
 私からの転送を待たずに動いている。cluster 分離が機能している。
+
+### 02:56 operator の問いが 1 つ立て直された — overlay は隠しもすれば発明もする
+
+zc-coord が自分のパケット記述を訂正し、私の #13 の問いの立て方も直った。2 方向の乖離が揃ったため:
+
+| | overlay (chat) | website |
+|---|---|---|
+| 隆鼻術 / jalupro の 4 行 | **出している** | **出していない** |
+| ジュブゼン 新宿モニター 99,000 | **出していない** | **出している** |
+
+同じ overlay が、片方では website にある価格を患者から隠し、もう片方では website にない価格を chat だけに出している。
+
+**したがって operator への問いは「掲載を続けるか取り下げるか」ではない。「chat だけが出しているこの価格は、そもそも提供しているものか」である。** website に無い以上、この 4 行は overlay が単独で生み出している主張で、その裏付けが先に要る。提供していないなら「掲載の取り下げ」ではなく **誤った主張の撤回**になる。
+
+独立した 2 系統が同じ結論に着いている (zs-orch = live HTTP、zc-review = 実 menu.json + overlay で 96 procedures load)。手法もデータソースも別。
+
+alar (#14) はこれとは別性質で、chat 内の label 統合により **存在しない提供物に価格が付く**話。混同しない。
+
+### 02:55 5 件目の operator 案件 — 本番 D1 が認証で読めない (zetith-site#67)
+
+SOPS の CF token が全て 7403、EmDash token は期限切れ。**稼働中の clinic site に対する独立した運用欠陥**で、価格判断とは別問題。
+
+見つかった経緯が良い。zs-orch が「不在」を報告しかけたとき、zc-coord が known-good な control query を先に流させ、**空配列でなく明示的な 7403 が返った**。空を不在と読ませなかった結果、副産物として認証欠陥が出た。zs-orch は経路と error code のみで起票 (値なし、修復も rotate もなし)。
+
+### 02:55 #6 の runbook に、実行前に読むべき欠陥
+
+zc-review2 の指摘:
+
+> Phase 6 PASS proves only that the staged string is rejected, **not that the LEAKED key was revoked** — a junk string returns PASS live.
+
+「旧鍵で 401 が返ること」の確認は **打ち間違えた文字列でも PASS する**。修正は **revoke 直前の陽性対照** — その鍵で 1 度 200 を確認してから revoke し、同じ文字列で 401 を見る。**200 → 401 の遷移**が証明で、片側だけでは証明にならない。#6 にコメント済み。
+
+**zc-coord の cutover 裁定と zc-review2 の BLOCK が、別々の理由で同じ step order の欠陥を指した** — 片方は不可逆性 (先に revoke すると失敗時に戻せない)、片方は bootstrap 依存 (Sync が呼ぶ remote updater は後段の deploy が置くまで caolila に存在しない)。独立な 2 視点が同じ 1 点に当たっている。
+
+### 02:56 朝の待ち行列 (最終)
+
+| # | issue | 決めること |
+|---|---|---|
+| 1 | backend#6 | rotate 実行可否 (手順の欠陥は上記のとおり指摘済) |
+| 2 | backend#13 | chat 単独の 4 価格 — **提供物として実在するか** |
+| 3 | backend#14 | alar label 統合 — 存在しない提供物への値付け |
+| 4 | zetith-site#60 / #61 / #63 | GA4 property / Ads 欠測 / tag 所有権 |
+| 5 | **zetith-site#67** | **本番 D1 が認証で読めない** |
+
+**不可逆操作はいずれも未実行。** 価格・医療表現・clinic data 削除・本番 deploy、すべてゼロ。
