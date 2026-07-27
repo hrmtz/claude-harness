@@ -93,10 +93,15 @@ registry_get() {
 # Read a pane user-option while preserving unset-vs-set for rollback.
 # Output: <0|1>|<value>
 pane_option_snapshot() {
-  local pane="$1" option="$2" line
+  local pane="$1" option="$2" line value
   line="$(tmux show-options -p -q -t "$pane" "$option" 2>/dev/null)" || return 1
   if [[ "$line" == "$option "* ]]; then
-    printf '1|%s\n' "${line#"$option "}"
+    # show-options' normal output is tmux syntax, so values that need quoting
+    # (including pane ids such as %209) are not safe to compare or restore
+    # verbatim. -v returns the decoded value without requiring eval.
+    value="$(tmux show-options -p -q -v -t "$pane" "$option" 2>/dev/null)" ||
+      return 1
+    printf '1|%s\n' "$value"
   else
     printf '0|\n'
   fi

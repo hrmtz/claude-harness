@@ -52,6 +52,7 @@ ps() {
 
 tmux() {
   local command="${1:-}" target="" option="" value="" unset_option=0
+  local value_only=0
   local read_count
   shift || true
   local -a args=("$@")
@@ -63,6 +64,7 @@ tmux() {
         target="${args[$i]}"
         ;;
       -u) unset_option=1 ;;
+      -v) value_only=1 ;;
       @*)
         option="${args[$i]}"
         if ((i + 1 < ${#args[@]})); then value="${args[$((i + 1))]}"; fi
@@ -112,7 +114,16 @@ tmux() {
     show-options)
       [[ "$target" != "$TMUX_DEAD_PANE" ]] || return 1
       if [[ -n "$option_file" && -f "$option_file" ]]; then
-        printf '%s %s\n' "$option" "$(cat "$option_file")"
+        value="$(cat "$option_file")"
+        if [[ "$value_only" == "1" ]]; then
+          printf '%s\n' "$value"
+        elif [[ "$value" == %* || "$value" == *[\ \;\"]* ]]; then
+          # Match the tmux syntax that exposed #216: ordinary show-options
+          # quotes values such as pane ids, while show-options -v is raw.
+          printf '%s "%s"\n' "$option" "${value//\\/\\\\}"
+        else
+          printf '%s %s\n' "$option" "$value"
+        fi
       fi
       ;;
     set-option)
