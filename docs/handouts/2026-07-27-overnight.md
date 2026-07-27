@@ -259,3 +259,23 @@ verifier には **この repo が本番のクリニック chat backend である
 review 観点として「rail が**実際に drift を検出するか** fixture で確認せよ (設計になっている、ではなく検出した、が要る)」「**false positive で本番 deploy を妨げないか** — この rail は緩すぎるより厳しすぎる方が実害が出る」を指定。
 
 **kimi の quota が 49% (5h rolling)** なので、無理なら断ってよいと伝えてある。詰まった reviewer が bottleneck になるより正直に断られる方が良い。
+
+### 01:41 私のミス (夜間 1 件目) — reviewer への重複依頼
+
+**hc-orch と私が、同じ PR #207 を別々の reviewer に振った。** hc-orch が verifier に、私が verifier2 に、ほぼ同時刻に依頼している。
+
+- 原因: **依頼を出す前に相手の未読を確認していない**。今日 reviewer への重複は 2 回目 (1 回目は verifier2 の重複起動そのもの)
+- 対処: verifier2 が #207 を担当、verifier は mafutsu PR #9 に集中。verifier には「seq 1280 は無視せよ」と伝達
+- 運用変更: **reviewer の割り当ては私が一元管理**する。orchestrator は reviewer を直接指名せず、私に「review 依頼あり」と上げる。理由は quota — kimi 49% (5h rolling) で、5 repo から依頼が集まると誰がどれだけ抱えているか orchestrator 側から見えない
+
+hc-orch が seq 1280 で書いた受入基準 (exact sha のみ / 類似推測なし / cap の read 前 precheck / symlink・race / two-file freeze journal / protocol mismatch fail-closed / hostile text scrub) は有用なので、verifier2 に渡してある。**書式は良いので、宛先を私にしてほしいだけ。**
+
+### 01:40 PRS-LLM を本筋から外した (user 指摘)
+
+user から「PRS-LLM 側の作業に取られてるな」と指摘。**その通りだった。**
+
+review 待ちが 3 本に増えたが、reviewer は kimi 2 体で quota 49%。PRS-LLM #414 は **stale test の整理で、止まっても誰も困らない**。一方 claude-harness #207 (Deja Review 配線) と mafutsu #9 (本番 host の drift rail) は本筋。
+
+pl-orch に「#414 は Draft のまま、review 不要で進む作業に切り替えろ」と指示。**1 分で #397 (critique/retriever の fail-open) の part 1 を実装、28/28 pass** に切り替わった。reviewer を消費せず価値のある作業へ回っている。
+
+あわせて pl-orch には非可逆クラスタ (#388/#402/#403/#407/#413/#386) に手を出さないことを再確認。**設計と rehearsal は自由、実行は ack 必須**、user 就寝中なので朝まで承認は出ない。
