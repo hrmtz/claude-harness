@@ -86,7 +86,7 @@ class SanadaRetentionTest(unittest.TestCase):
         log = (self.home / "retention.log").read_text()
         self.assertIn("complete mode=APPLY deleted_dirs=2", log)
 
-    def test_apply_handles_read_only_nested_directory(self) -> None:
+    def test_apply_skips_read_only_nested_directory_without_mutation(self) -> None:
         old_auto = self.make_dir("auto_read_only", 4)
         parent = old_auto / "parent"
         child = parent / "child"
@@ -95,8 +95,12 @@ class SanadaRetentionTest(unittest.TestCase):
 
         result = self.run_retention("--apply")
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(old_auto.exists())
+        self.assertEqual(result.returncode, 4, result.stderr)
+        self.assertTrue(old_auto.exists())
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o500)
+        self.assertIn("skipped_dirs=1", result.stdout)
+        log = (self.home / "retention.log").read_text()
+        self.assertIn("skip not_owner_deletable=auto_read_only", log)
 
     def test_symlink_top_level_is_never_selected(self) -> None:
         outside = self.home / "outside"
