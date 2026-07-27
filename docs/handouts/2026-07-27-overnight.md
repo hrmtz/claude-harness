@@ -836,3 +836,39 @@ zc-review2 の指摘:
 | 5 | **zetith-site#67** | **本番 D1 が認証で読めない** |
 
 **不可逆操作はいずれも未実行。** 価格・医療表現・clinic data 削除・本番 deploy、すべてゼロ。
+
+### 03:00 未 push の branch を 1 本見つけた — 40 日分、local 1 箇所にしかなかった
+
+hc-orch の worktree を確認したついでに、19 本ある worktree のうち **remote に存在しない branch** を洗った。`--merged` では見えないので、**追加行が実際に dev に在るかを数えた**。
+
+| branch | dev への吸収 | 判定 |
+|---|---|---|
+| `fix/issue-121-live-fanout` | **99/100 行** | 実質吸収済 |
+| `fix/formation-codex-default-bypass` | **15/16 行** | 実質吸収済 |
+| **`feat/agy-migration`** | **12/562 行** | **未吸収** |
+
+`feat/agy-migration` は 2026-06-17 の作業。中身は security guard 群の移植:
+
+```
+plugins/harness-core/hooks/{bash_command_guard,branch_policy_guard,credential_file_read_guard}.sh
+plugins/harness-rails/hooks/{phase_review_gate,pipeline_preflight_gate}.sh
++ 各 agy 契約テスト 5 本 + 設計書
+```
+
+**remote branch が無く、local worktree 1 箇所にしか存在していなかった。** 今夜私は retention 掃除で 12,715 → 3,867 ディレクトリを削除している。この手のものを踏むまであと一歩だった。
+
+3 本とも bundle 化して `~/sanada_backup_persistent/orphan_branches_20260727_120052/` に保全。`git bundle verify` が "records a complete history" を返すので、**bundle 単体から復元できる** — ref 到達性ではなく実体の確認。
+
+**push はしていない。** `hrmtz/claude-harness` は **PUBLIC** で、この branch には guard 実装に加えて「out-of-band 強制が無ければ advisory-grade」という **自分の security guard の弱点を明示した設計書**が入っている。公開 repo への push は取り消せないので、私の判断で踏む線ではない。
+
+選択肢は 3 つ (bundle のまま / private repo か gist へ退避 / 内容を確認のうえ push)。**bundle が取れているので今すぐの危険はない。**
+
+### 03:00 #6 の runbook 欠陥に修正が入った (未確認)
+
+mz-orch が exact head `7b519d81` で対応を報告:
+
+> same retained SOPS value must be **VALID pre-revocation and REJECTED post-revocation**; tri-state-only output/distinct exits; ambiguous outcomes ERROR
+
+**200 → 401 の遷移**を要求する形。加えて **tri-state 出力と exit code の分離** — 「拒否された」と「確認できなかった」が同じ結果に潰れないようにしている。これも「片側だけでは証明にならない」への対処で、元の指摘と同じ性質。
+
+**ただし zc-review2 の再 review 待ちで、PASS はまだ出ていない。** #6 には「修正したと報告されている」と「独立に確認された」は別だと明記して追記した。前者を後者として読むのは、この issue の元の指摘 (拒否 ≠ revoke) と同じ誤りになる。
