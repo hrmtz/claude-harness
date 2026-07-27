@@ -513,3 +513,43 @@ routing 変更を ack したうえで、in flight の状態を明示:
 - #65 は read-only の 11-checkout inventory、**local-only commit 628674d を保全、削除ゼロ**
 
 私が本番タグの停止を承認しなかった判断 (#63) が守られている。
+
+### 02:13 PR #247 PASS — infra 側の残務が片付いた
+
+verifier2 が再 review で PASS (exact head `e83bef6b`)。**私が追加要求した `telemetry_excluded` 自体の数値再現**も実行されている:
+
+```
+P1 (live のみ)         excluded 0/0
+P2 (act=50 を delete)  excluded 1/50、live 0/0/0.0
+P3 (mixed)             excluded 2/70、live 14.0、by_scope が全 live 行をカバー
+orphan                 FK が拒否 → 防御分岐は死にコードでなく保険
+```
+
+**canonical には一切触れずに検証**している (disposable な loopback pg16 + 043 までの真の migration chain のみ)。
+
+これで **#235 (activation 飢餓) の before snapshot が固定できる**。043 は canonical 適用済みなので、rust-crane が観測を開始できる。ただし「観測窓を開ける前に before を確定させろ」という条件は維持していて、seq 1178 の基準線 (telemetry 52 行 / activation 19.2 / 他 4 項すべて 0.0 / ghost_evidence 空) と突き合わせてから開始させる。
+
+### 02:12 reviewer 増設を承認した — CLI は私が指定した
+
+zc-coord が「reviewer 1 体に PR 4 本」で詰まり、pane 増設を ask。**承認したが kimi ではなく claude を指定**した。
+
+```
+kimi   57.1% / headroom 0.43 / window 300m (5h rolling)  ← 2 体目を足すと窓内で枯れる
+claude 38.0% / headroom 0.62 / window 10080m (weekly)    ← 余裕あり、codex 実装に対し cross-family
+codex  19.0%                                              ← 実装者と同族なので reviewer に使えない
+```
+
+kimi を足していれば**両方止まって zc-review 単体より悪化**していた。副次的に、cluster 全体として 2 family の目が入る形にもなる。
+
+spawn 時の注意も添えた: **relay が DEAD で起動する事象が今夜 5 回**発生している (gh #211)。放置すると mail が一切届かない worker が出来上がり、外からは正常に見える。
+
+### 02:12 朝の議題が 1 件増えた (zc-coord から)
+
+**rhinoplasty と jalupro の掲載価格**。zc-coord の前提整理が的確:
+
+> **この 2 件の価格は、今この瞬間も overlay 経由で患者に表示されている。** operator が決めるのは「新しく足すか」ではなく、**「既に掲載しているものが正しいか」**。
+
+- **rhinoplasty**: 汎用プロテーゼ通常 121,000 円 — D1 に意味的対応なし (D1 の単独通常は 242,000 円で、121,000 円は「他施術との併用時のみ」の条件付き)。他院プロテーゼ抜去 通常 132,000 円 — **D1 に完全に不在**
+- **jalupro**: super-hydro face-or-neck 70 と D1 one-session 70 は**同じ数字で違う商品**
+
+どちらも「overlay を消せば掲載価格が消える」が「D1 に寄せれば別物に置き換わる」という状態。**operator にしか決められない。**
