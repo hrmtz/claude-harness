@@ -338,3 +338,34 @@ FORMATION_PARENT=zc-coord FORMATION_PARENT_PANE=%368 formation ask ...
 peer として立てた判断が効いた例。私が leaf として扱っていたら、この穴は朝まで残っていた。
 
 **これは #202 (送信成功でも到達しない) の変種**として記録する価値がある。あちらは「相手が読まない」、#211 は「badge が立たない」、これは「**宛先が古いまま固定されている**」。3 つとも送信側は成功する。
+
+### 01:57 私のミス (夜間 2 件目) — 監視の死角「読了したが着手していない」
+
+**verifier2 が最優先案件 (PR #207) を読んだまま、verdict を出さずに 37 分止まっていた。** 私が起こした直後に PASS WITH NOTE が出たので、**能力ではなく起床の問題**だった。
+
+私の stall watcher はこれを検出できない。未読 badge がゼロ (= 読了済み) なので、設計上「仕事がなくて静か」と同じ扱いになる。badge ベースに改良した際、**第 3 の状態を考慮していなかった**。
+
+今日ここまでで沈黙の形が 4 つ出揃った:
+
+| 形 | 検出できるか |
+|---|---|
+| idle で未読あり | ✅ stall watcher |
+| relay 死亡で badge が立たない | ✅ spawn 時の warn (gh #211) |
+| 宛先が古いまま固定 (`FORMATION_PARENT`) | zc-coord が発見、私は気付かず |
+| **読了したが着手していない** | **❌ 誰も検出できない** |
+
+4 つ目は **mailbox の状態だけでは原理的に区別できない**。読了と完了が同じ signal になるため。検出するには「依頼に対する応答が返ったか」を追う必要がある — 依頼 ID と verdict の対応を見る形。
+
+これは #208 で実装した「試行なし / 試行したが無効果」の区別の**さらに上位**にあたる。あちらは nudge の話、こちらは**依頼そのもの**の話。
+
+私が「未読ゼロ = 作業中」と解釈したのが誤りで、今日 7 回目の「自分の計器を疑わなかった」に当たる。
+
+### 01:57 PR #207 (Deja Review 配線) が PASS WITH NOTE
+
+user 指定の優先順序「#249 → 配線 → その後」の本筋。verifier2 が exact head `16e8367e` に束縛して verdict。
+
+自分で再実行して確認された項目:
+- **scope**: 差分は `plugins/harness-magi-codex` + 新規 doc 2 本のみ。Slice-0 の record/manifest/validator、DEJA_REVIEW doc、hippocampus はいずれも未変更
+- **eligibility**: exact `reviewed_artifact_sha` のみを adversarial に検証
+
+これが merge されれば、**過去の review 知見が magi の設計段階で注入される**ようになる。今朝私が同じ helper を再発明した時、advisor は 1 度も提示しなかった — その構造的な穴の片側が塞がる。
