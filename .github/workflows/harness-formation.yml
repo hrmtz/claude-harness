@@ -80,6 +80,10 @@ jobs:
         env:
           HARNESS_TEST_REQUIRE_TMUX: "1"
         run: bash plugins/harness-core/tests/test_hook_dispatch_chassis.sh
+      - name: Test parent route repair (real tmux quoting)
+        run: |
+          bash plugins/harness-formation/tests/test_parent_route_repair.sh
+          bash plugins/harness-formation/tests/test_parent_route_repair_real_tmux.sh
       - name: Check documented CLI dispatch
         run: python3 plugins/harness-formation/tests/test_docs_match_dispatch.py
       - name: Test integration audit
