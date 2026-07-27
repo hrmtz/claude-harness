@@ -397,3 +397,55 @@ verifier2 が PR #207 の review 中に発見。**PR の欠陥ではなく既存
 
 1. **reason=nonexclusive は fleet 全体に効く。** 全 pane が `--exclusive-input` なしで spawn されているため、**helper は誰にも nudge を撃てない**。alert を出すだけ。つまり mail 滞留の自動解消は現状機能しておらず、「alert → 人間か統括が起こす」経路だけが生きている。安全側ではあるが、期待した自動化ではない
 2. **alert の宛先も spawn 時固定**。product cluster の worker (pl-orch / zc-review) の alert が私に届く。zc-coord が発見した `FORMATION_PARENT` 焼き込み問題の alert 経路版で、worker 側の env 前置では直らない (helper が pane option を読むため)。zc-coord に転送する運用にした
+
+---
+
+## 8. 02:05 時点のまとめ — 朝いちで読むならここだけ
+
+### user が指定した優先順序は完走した
+
+```
+#249  deja-code の索引死角     → 完了。untracked が doctor で可視化される
+配線  #206 live wiring 監査    → 未配線 0 を実測 (git/hooks/cron/CLI/process 全数)
+#204  Deja Review の magi 配線 → merge 済み (exact reviewed head 16e8367e)
+```
+
+**今朝の私の再発明が、構造として閉じた。** `formation-mail-nudge` を再実装した時に advisor が 1 度も提示しなかった原因は 2 つあり、両方塞がった — 索引が untracked を見ていなかった (#249)、過去の review 知見が次の round に運ばれていなかった (#204)。
+
+### 私の担当 (infra) の残務は 2 件
+
+- **PR #247** (hippocampus) — rust-crane が BLOCK 2 件を修正して push (head `e83bef6`)。verifier2 に再 review を回すよう hx-orch に指示済み。**#235 観測窓の before を固定する snapshot** なので、これが通れば観測を開始できる
+- **#212** (claude-harness) — age 秘密鍵の scrub 漏れ。**#207 が merge されたことで優先度が上がった** (findings が次の round に運ばれるようになったため)
+
+### product cluster は zc-coord が完全に自走している
+
+私は横断裁定と canonical 承認だけ。夜間に zc-coord が下した判断で特筆すべきは、overlay を D1 単一権威に寄せる設計に **blocking precondition** を課したこと — 「7 施術それぞれで『overlay が供給する tier を D1 が既に持つ』証明を先に出せ」。
+
+結果、**rhinoplasty と jalupro が STOP になった**。証明を要求していなければ、この 2 件で患者向け掲載価格が silent に消えていた。
+
+価格に触れない部分だけを切り出した PR #11 (presentation-only の重複ヘッダ修正) が別途進行中。
+
+### 今夜、私は 3 回間違えた
+
+1. **reviewer への重複依頼** — 相手の未読を確認せずに割り当てた。hc-orch と同じ PR を別 reviewer に振った
+2. **「未読ゼロ = 作業中」と誤認** — verifier2 が最優先案件を読了したまま 37 分止まっていたのを検出できなかった。読了と完了が同じ signal になるため、mailbox の状態だけでは原理的に区別できない
+3. **verdict を受け取って無言だった** — reviewer が「配送事故か」と疑って再送してきた。事故ではなく私の無応答。**worker に「黙って止まるな」と要求しながら、自分が沈黙した側になっていた**
+
+3 つとも同じ根を持つ: **自分の観測と自分の応答を、他人に要求する基準で見ていない。**
+
+### 「送信成功 ≠ 到達」の変種が 4 つ揃った
+
+| 形 | 検出 |
+|---|---|
+| 相手が idle で読まない | gh #202 / stall watcher |
+| relay が死んで badge が立たない | gh #211 / spawn 時 warn |
+| `FORMATION_PARENT` 固定で宛先が古い | zc-coord が発見。**helper の alert 経路は env 前置では直らない** |
+| **読了したが着手していない** | **未検出**。依頼 ID と応答の対応を追う必要がある |
+
+4 つ目は今夜私が踏んだもので、まだ仕組みがない。
+
+### 新 mail-nudge について 1 つ注意
+
+`reason=nonexclusive` が全 pane で出る。**全 worker が `--exclusive-input` なしで spawn されているため、helper は誰にも nudge を撃てない**。alert を出すだけ。
+
+つまり mail 滞留の自動解消は**現状機能していない**。「alert → 人間か統括が起こす」経路だけが生きている。安全側ではあるが、期待した自動化ではない。#168 の landing は「検出できるようになった」までで、「自動で解消する」には至っていない。
