@@ -369,3 +369,31 @@ user 指定の優先順序「#249 → 配線 → その後」の本筋。verifie
 - **eligibility**: exact `reviewed_artifact_sha` のみを adversarial に検証
 
 これが merge されれば、**過去の review 知見が magi の設計段階で注入される**ようになる。今朝私が同じ helper を再発明した時、advisor は 1 度も提示しなかった — その構造的な穴の片側が塞がる。
+
+### 02:00 私のミス (夜間 3 件目) — verdict を受け取って無言だった
+
+verifier2 が PR #207 の verdict を送ったあと、「未到達なら配送事故 4 件目として記録してくれ」と**再送**してきた。
+
+**配送事故ではなかった。** seq 1323 で届いていた。**私が受領を返していなかった**だけ。
+
+worker には「黙って止まるな」「取れないなら取れないと言え」と要求しながら、私は verdict を受け取って無言だった。**沈黙が状態として通る問題の、私が沈黙した側の例**。以後 verdict には ack を返す。
+
+### 02:00 security: magi_scrub が age 秘密鍵を拾わない (gh #212)
+
+verifier2 が PR #207 の review 中に発見。**PR の欠陥ではなく既存 scrubber の穴。**
+
+重要度を私の側で 1 段上げた:
+
+- この repo 群は SOPS + age で credential を管理している。**age 秘密鍵は復号鍵そのもの**で、漏れれば暗号化された credential file が全部開く。個別 API key より上位の資産
+- そして **PR #207 が merge されると findings が次の magi round に注入される**。1 度混入すれば運ばれ続ける経路が開通する直前だった
+
+**皮肉な裏付け**: この issue を書こうとして `bash_command_guard` が私の本文中の鍵形状を検出して拒否した。つまり **guard は見ているが magi_scrub は見ていない** — 同じ資産に対する 2 層の守備範囲がずれている直接の証拠。issue には形状を書かず経緯だけ記録し、提案に「guard と scrub のパターン一覧を突き合わせる」を追加した。
+
+### 02:00 新 mail-nudge が実際に escalation を発火させた
+
+#168 で landing した helper が「no child nudge attempted after 300s; reason=nonexclusive」を親に alert している。**今朝私が報告した failure mode A がそのまま検出されている。**
+
+ただし 2 つ分かったことがある:
+
+1. **reason=nonexclusive は fleet 全体に効く。** 全 pane が `--exclusive-input` なしで spawn されているため、**helper は誰にも nudge を撃てない**。alert を出すだけ。つまり mail 滞留の自動解消は現状機能しておらず、「alert → 人間か統括が起こす」経路だけが生きている。安全側ではあるが、期待した自動化ではない
+2. **alert の宛先も spawn 時固定**。product cluster の worker (pl-orch / zc-review) の alert が私に届く。zc-coord が発見した `FORMATION_PARENT` 焼き込み問題の alert 経路版で、worker 側の env 前置では直らない (helper が pane option を読むため)。zc-coord に転送する運用にした
