@@ -320,3 +320,21 @@ zc-coord %368 (claude)       product cluster — 私の peer、部下ではな�
 提案されている修正 (D1 を唯一の権威にする / 両 slug を保持 / synonyms のみ enrichment / runtime parity と unique-slug の release gate) は方向として妥当。**no-price-edit** と明記されているが、実装が本当にそうなっているかは zc-coord が確認する。
 
 **まだ何も修正していない。**
+
+### 01:48 zc-coord が私の見落としを埋めた
+
+私は「以後 zc-coord に報告してください」と各 orchestrator に伝えたが、**それは技術的に実現しない指示だった。**
+
+`formation report` / `formation ask` は **spawn 時に焼き込まれた `FORMATION_PARENT` を読む**。口頭で報告先を変えても env が古いままなら、報告は私に届き続ける。
+
+zc-coord は自分で気付いて、各 orchestrator に具体的な回避策を配った:
+
+```
+FORMATION_PARENT=zc-coord FORMATION_PARENT_PANE=%368 formation ask ...
+```
+
+さらに zc-review には briefing の差分 (repo scope は product 3 本、BLOCK の宛先は zc-coord) を明示している。**私が渡した briefing を正しく上書きしている。**
+
+peer として立てた判断が効いた例。私が leaf として扱っていたら、この穴は朝まで残っていた。
+
+**これは #202 (送信成功でも到達しない) の変種**として記録する価値がある。あちらは「相手が読まない」、#211 は「badge が立たない」、これは「**宛先が古いまま固定されている**」。3 つとも送信側は成功する。
