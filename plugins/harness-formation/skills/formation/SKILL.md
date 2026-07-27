@@ -231,6 +231,31 @@ formation resolve <request-id> "<summary>"
 formation reap <id>       # stop relay daemon, close pane, drop registry row
 ```
 
+### Optional mail nudge and window-list presentation
+
+The normal mailbox signal remains badge-only and sends zero prompt
+keystrokes. `formation-mail-nudge` is an exceptional opt-in sweep/watcher for
+spawned workers whose latest registry row **and** live pane both carry the
+`--exclusive-input` contract. After the configured stale and snapshot-idle
+periods it calls the shared `mailbox_inject_nudge` / `tmux_send_submit` path
+once for that sequence and reports `receipt unconfirmed`; it never injects the
+mailbox body or retries the child prompt. Only a badge clear/advance or a later
+durable row from the canonical worker counts as effect; a pane repaint does
+not. If neither is observable after the verification interval, it appends one
+fixed-metadata alert to the recorded parent and uses the existing zero-keystroke signal path.
+A missing/mismatched legacy parent route is visible and never guessed.
+
+Use `formation-mail-nudge --dry-run` before a one-shot run or `--watch`.
+Neither plugin install nor spawn starts it. Persistent operation requires an
+explicit `install-formation-mail-nudge-service install`; its uninstall command
+archives the namespaced unit/state. The service installer resolves the
+canonical checkout and never records a disposable worktree.
+
+`formation-window-status status` is read-only. Its explicit `apply` journals
+the same tmux server's exact global-format and changed-pane preimages;
+`--arrange` is separately opt-in. `revert` restores the journal when safe.
+Neither helper is invoked automatically.
+
 Whenever you return to idle in the lead pane, call `formation inbox` before
 continuing — the worker may have asked a question or reported completion.
 

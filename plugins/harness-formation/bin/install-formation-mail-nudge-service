@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Explicit installer for the optional Formation mail-nudge user service.
+set -euo pipefail
+
+usage() {
+  echo "usage: install-formation-mail-nudge-service [--dry-run] install|uninstall|status" >&2
+  exit 64
+}
+
+dry_run=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  dry_run=1
+  shift
+fi
+[[ $# -eq 1 ]] || usage
+action="$1"
+[[ "$action" =~ ^(install|uninstall|status)$ ]] || usage
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+INVOKED_REPO="$(git -C "$(dirname "$SELF")" rev-parse --show-toplevel 2>/dev/null)" ||
+  { echo "install-formation-mail-nudge-service: not inside a git worktree" >&2; exit 70; }
+CANONICAL_REPO="$(
+  git -C "$INVOKED_REPO" worktree list --porcelain |
+    awk '$1 == "worktree" { print substr($0, 10); exit }'
+)"
+[[ -n "$CANONICAL_REPO" && -d "$CANONICAL_REPO/.git" ]] ||
+  { echo "install-formation-mail-nudge-service: canonical checkout does not resolve" >&2; exit 70; }
+
+HELPER_REL="plugins/harness-formation/bin/formation-mail-nudge"
+HELPER="$CANONICAL_REPO/$HELPER_REL"
+UNIT_NAME="formation-mail-nudge.service"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="$UNIT_DIR/$UNIT_NAME"
+STATE="${FORMATION_HOME:-$HOME/.formation}/state/mail-nudge"
+
+tracked_helper() {
+  [[ -x "$HELPER" ]] &&
+    git -C "$CANONICAL_REPO" ls-files --error-unmatch "$HELPER_REL" >/dev/null 2>&1
+}
+
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 &&
+    systemctl --user show-environment >/dev/null 2>&1
+}
+
+unit_text() {
+  cat <<EOF
+[Unit]
+Description=Formation ignored-mail badge nudge watcher
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=$HELPER --watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+backup_dir() {
+  mkdir -p "$HOME/sanada_backup_persistent"
+  mktemp -d "$HOME/sanada_backup_persistent/formation_mail_nudge_service_$(date +%Y%m%d_%H%M%S).XXXXXX"
+}
+
+case "$action" in
+  status)
+    systemd_available ||
+      { echo "install-formation-mail-nudge-service: user systemd unavailable" >&2; exit 69; }
+    exec systemctl --user status "$UNIT_NAME"
+    ;;
+  install)
+    tracked_helper ||
+      { echo "install-formation-mail-nudge-service: canonical helper must be tracked and executable: $HELPER" >&2; exit 66; }
+    if [[ "$dry_run" == "1" ]]; then
+      echo "would install $UNIT_NAME with canonical ExecStart=$HELPER --watch"
+      [[ -e "$UNIT" ]] && echo "would back up existing unit $UNIT"
+      exit 0
+    fi
+    systemd_available ||
+      { echo "install-formation-mail-nudge-service: user systemd unavailable; no cron fallback" >&2; exit 69; }
+    bk=""
+    if [[ -e "$UNIT" ]]; then
+      bk="$(backup_dir)"
+      cp -a "$UNIT" "$bk/"
+    fi
+    mkdir -p "$UNIT_DIR"
+    tmp="$UNIT_DIR/.$UNIT_NAME.$$.tmp"
+    unit_text >"$tmp"
+    chmod 0644 "$tmp"
+    mv "$tmp" "$UNIT"
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$UNIT_NAME"
+    echo "installed $UNIT_NAME (canonical helper=$HELPER${bk:+ backup=$bk})"
+    ;;
+  uninstall)
+    if [[ -e "$UNIT" ]] && ! grep -Fqx "ExecStart=$HELPER --watch" "$UNIT"; then
+      echo "install-formation-mail-nudge-service: refusing unrecognized unit $UNIT" >&2
+      exit 65
+    fi
+    if [[ "$dry_run" == "1" ]]; then
+      echo "would disable and stop exact unit $UNIT_NAME"
+      [[ -e "$UNIT" ]] && echo "would archive $UNIT"
+      [[ -d "$STATE" ]] && echo "would archive namespaced state $STATE"
+      exit 0
+    fi
+    systemd_available ||
+      { echo "install-formation-mail-nudge-service: user systemd unavailable" >&2; exit 69; }
+    systemctl --user disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
+    bk=""
+    if [[ -e "$UNIT" || -d "$STATE" ]]; then
+      bk="$(backup_dir)"
+      [[ ! -e "$UNIT" ]] || mv "$UNIT" "$bk/"
+      [[ ! -d "$STATE" ]] || mv "$STATE" "$bk/mail-nudge-state"
+    fi
+    systemctl --user daemon-reload
+    echo "uninstalled $UNIT_NAME${bk:+ archived=$bk}"
+    ;;
+esac

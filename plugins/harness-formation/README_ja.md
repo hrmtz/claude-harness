@@ -16,6 +16,9 @@
 
 - `bin/formation` ── worker lifecycle / mailbox / durable request を束ねる CLI:
   `spawn | msg | status | inbox | reap | report | done | ask | ack | resolve | remote-check`
+- `bin/formation-mail-nudge` ── 無視された badge 用の任意 one-shot / watcher。自動起動しない
+- `bin/install-formation-mail-nudge-service` ── 任意 watcher の明示的 systemd user service install / uninstall
+- `bin/formation-window-status` ── journal 付き tmux window list の明示的 apply / status / revert
 - `lib/mailbox.sh` ── jsonl append-only の pane 間メッセージバス。recipient 毎カーソル、flock で書き込みガード
 - `lib/mailbox_delivery.sh` ── `formation msg` / `mailbox-send` 共通の宛先・送信者解決、relay 委譲、exclusive inject policy
 - `lib/mailbox_notify.sh` / `lib/mailbox_relay.sh` ── prompt に触れない signal primitive と worker 毎の relay daemon
@@ -88,6 +91,42 @@ formation msg refactor-1 "approach B に切り替えて"
 
 # 畳む
 formation reap refactor-1
+```
+
+### 任意の ignored-badge escalation / window status
+
+mailbox は既定で badge-only、prompt keystroke はゼロ。`formation-mail-nudge`
+は `--exclusive-input` で spawn した worker に限る例外で、最新 registry と
+live pane の両方の exclusive 宣言、古い badge、一定時間不変の pane snapshot
+をすべて要求する。送るのは短い `formation inbox` pull 指示だけで、mailbox
+本文ではない。同じ seq の child 注入は一度だけで `receipt unconfirmed`。
+成功根拠は badge の clear/advance または canonical worker からの新しい durable
+row だけで、pane repaint は成功扱いしない。検証時間後もこの効果がなければ、
+spawn 時に記録した parent へ固定 metadata の durable alert を一度 append し、parent prompt には触れず
+zero-keystroke signal する。legacy / 不一致 parent route は可視化し、推測しない。
+
+```bash
+formation-mail-nudge --dry-run
+formation-mail-nudge                 # one-shot
+formation-mail-nudge --watch         # foreground
+install-formation-mail-nudge-service --dry-run install
+install-formation-mail-nudge-service install
+install-formation-mail-nudge-service uninstall
+```
+
+plugin install / `formation spawn` は watcher を起動しない。常駐は明示的な
+systemd user service 選択で、installer は disposable caller worktree ではなく
+canonical checkout を解決する。
+
+`formation-window-status` も自動実行しない。`apply` は server-global format の
+正確な preimage を journal し、`--arrange` は別 opt-in。`revert` は同じ tmux
+server の journal を復元し、`status` は read-only:
+
+```bash
+formation-window-status status
+formation-window-status apply --lead "$TMUX_PANE" --task "review"
+formation-window-status apply --arrange --dry-run
+formation-window-status revert
 ```
 
 ### 3. worker 側 (worker の agent が Bash tool から叩く — claude/codex 共通)

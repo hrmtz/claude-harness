@@ -125,6 +125,7 @@ Use one strict JSON file per pane under the namespaced state directory:
   "attempt_result": "",
   "attempted_at": 0,
   "attempt_snapshot_crc": "",
+  "attempt_mailbox_seq": 0,
   "effect": "",
   "parent_alerted": false
 }
@@ -182,7 +183,10 @@ The helper records only a durable observable effect:
 
 - the pending badge cleared or advanced, proving the inbox was pulled; or
 - the mailbox gained a new row whose canonical `from` is the target worker and
-  whose timestamp/sequence is later than the attempt.
+  whose sequence is greater than the bounded durable-log high-water captured
+  immediately before the attempt. Its timestamp must not predate
+  `attempted_at`, but timestamp is only a secondary sanity check because it has
+  insufficient resolution to order same-second events.
 
 A pane snapshot change is not success evidence: a spinner, startup dialog, or
 human navigation can repaint without the worker reading or acting on mail.

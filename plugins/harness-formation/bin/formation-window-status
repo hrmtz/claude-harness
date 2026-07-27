@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""Explicit, journaled Formation tmux window-list presentation."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import unicodedata
+from pathlib import Path
+
+GLOBAL_OPTIONS = (
+    "window-status-format",
+    "window-status-current-format",
+    "window-status-separator",
+)
+PANE_OPTIONS = ("@harness_role", "@harness_task")
+PANE_RE = re.compile(r"^%[0-9]{1,10}$")
+WINDOW_RE = re.compile(r"^@[0-9]{1,10}$")
+
+CHASSIS = "#{?#{@harness_chassis},#{@harness_chassis},#{?#{@formation_cli},#{@formation_cli},#{s/-.*$//:window_name}}}"
+SHORTNAME = "#{s/^(claude|codex|kimi|grok)-//:window_name}"
+TASK = "#{?#{@harness_task},#{@harness_task},#{@formation_task}}"
+COLOUR = (
+    f"#{{?#{{==:{CHASSIS},claude}},#[fg=colour39],"
+    f"#{{?#{{==:{CHASSIS},codex}},#[fg=colour208],"
+    f"#{{?#{{==:{CHASSIS},kimi}},#[fg=colour135],"
+    f"#{{?#{{==:{CHASSIS},grok}},#[fg=colour48],#[fg=colour244]}}}}}}}}"
+)
+BODY = (
+    f"{COLOUR}"
+    "#{?#{==:#{@harness_role},lead},#[bold]◆ ,}"
+    f"#{{window_index}}:{SHORTNAME}#{{window_flags}}"
+    f"#{{?{TASK},#[fg=colour245] · {TASK},}}"
+    "#{?#{@formation_mail_pending},#[fg=colour220] ✉,}#[default]"
+)
+FORMATS = {
+    "window-status-format": f" {BODY} ",
+    "window-status-current-format": f" #[reverse]{BODY}#[noreverse] ",
+    "window-status-separator": "",
+}
+
+
+class UsageParser(argparse.ArgumentParser):
+    def error(self, message: str) -> "NoReturn":
+        self.print_usage(sys.stderr)
+        print(f"formation-window-status: error: {message}", file=sys.stderr)
+        raise SystemExit(64)
+
+
+def tmux(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(["tmux", *args], text=True, capture_output=True, check=False)
+    if check and result.returncode:
+        detail = result.stderr.strip() or "tmux command failed"
+        raise RuntimeError(f"{' '.join(args)}: {detail}")
+    return result
+
+
+def option(scope: str, name: str, target: str | None = None) -> dict[str, object]:
+    args = ["show-options", "-qv"]
+    args.insert(1, "-g" if scope == "global" else "-p")
+    if target:
+        args.extend(["-t", target])
+    args.append(name)
+    result = tmux(*args, check=False)
+    return {"present": result.returncode == 0, "value": result.stdout.rstrip("\n")}
+
+
+def atomic_json(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary.open("x", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def server_pid() -> int:
+    result = tmux("display-message", "-p", "#{pid}")
+    value = result.stdout.strip()
+    if not value.isdigit() or int(value) <= 1:
+        raise RuntimeError("tmux returned an invalid server pid")
+    return int(value)
+
+
+def journal_path() -> tuple[int, Path]:
+    pid = server_pid()
+    home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    return pid, home / "state" / "window-status" / f"{pid}.json"
+
+
+def new_journal(pid: int) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "server_pid": pid,
+        "global_options": {name: option("global", name) for name in GLOBAL_OPTIONS},
+        "pane_options": {},
+        "arrangement": None,
+    }
+
+
+def load_journal(path: Path, pid: int) -> dict[str, object] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"invalid journal {path}: {exc}") from exc
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != 1
+        or value.get("server_pid") != pid
+        or set(value) != {
+            "schema_version",
+            "server_pid",
+            "global_options",
+            "pane_options",
+            "arrangement",
+        }
+    ):
+        raise RuntimeError(f"journal does not match tmux server {pid}")
+    return value
+
+
+def remember_pane(journal: dict[str, object], pane: str, name: str) -> None:
+    panes = journal["pane_options"]
+    assert isinstance(panes, dict)
+    entry = panes.setdefault(pane, {})
+    if name not in entry:
+        entry[name] = option("pane", name, pane)
+
+
+def sanitize_task(text: str) -> str:
+    clean = "".join(char for char in text if not unicodedata.category(char).startswith("C"))
+    if len(clean) > 160:
+        raise ValueError("--task is limited to 160 characters")
+    return clean
+
+
+def window_rows() -> list[dict[str, object]]:
+    result = tmux(
+        "list-windows",
+        "-a",
+        "-F",
+        "#{window_id}|#{session_name}|#{window_index}|#{@formation_task}",
+    )
+    rows = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 3)
+        if (
+            len(parts) == 4
+            and WINDOW_RE.fullmatch(parts[0])
+            and re.fullmatch(r"[0-9]+", parts[2])
+        ):
+            rows.append(
+                {
+                    "window_id": parts[0],
+                    "session": parts[1],
+                    "index": int(parts[2]),
+                    "worker": bool(parts[3]),
+                }
+            )
+    return rows
+
+
+def arrangement_plan(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    plan = []
+    sessions = sorted({str(row["session"]) for row in rows})
+    for session in sessions:
+        current = sorted(
+            (row for row in rows if row["session"] == session),
+            key=lambda row: int(row["index"]),
+        )
+        desired = [row for row in current if not row["worker"]] + [
+            row for row in current if row["worker"]
+        ]
+        targets = sorted(int(row["index"]) for row in current)
+        for row, target in zip(desired, targets):
+            plan.append({**row, "target_index": target})
+    return plan
+
+
+def move_plan(plan: list[dict[str, object]], target_key: str) -> None:
+    sessions = sorted({str(row["session"]) for row in plan})
+    for session in sessions:
+        group = [row for row in plan if row["session"] == session]
+        park = max(int(row["index"]) for row in group) + 1000
+        for offset, row in enumerate(group):
+            tmux(
+                "move-window",
+                "-d",
+                "-s",
+                str(row["window_id"]),
+                "-t",
+                f"{session}:{park + offset}",
+            )
+        for row in sorted(group, key=lambda item: int(item[target_key])):
+            tmux(
+                "move-window",
+                "-d",
+                "-s",
+                str(row["window_id"]),
+                "-t",
+                f"{session}:{row[target_key]}",
+            )
+
+
+def apply(args: argparse.Namespace, pid: int, path: Path) -> None:
+    journal = load_journal(path, pid) or new_journal(pid)
+    mutations: list[tuple[str, str, str]] = []
+
+    if args.lead:
+        if not PANE_RE.fullmatch(args.lead):
+            raise ValueError("--lead must be a pane id such as %42")
+        resolved = tmux("display-message", "-p", "-t", args.lead, "#{pane_id}", check=False)
+        if resolved.returncode or resolved.stdout.strip() != args.lead:
+            raise ValueError(f"pane {args.lead} does not resolve")
+        session = tmux("display-message", "-p", "-t", args.lead, "#{session_name}").stdout.strip()
+        existing = tmux(
+            "list-panes", "-a", "-F", "#{pane_id}|#{session_name}|#{@harness_role}"
+        ).stdout.splitlines()
+        for line in existing:
+            pane, pane_session, role = (line.split("|", 2) + ["", ""])[:3]
+            if pane_session == session and role == "lead" and pane != args.lead:
+                remember_pane(journal, pane, "@harness_role")
+                mutations.append(("unset", pane, "@harness_role"))
+        remember_pane(journal, args.lead, "@harness_role")
+        mutations.append(("set", args.lead, "@harness_role=lead"))
+
+    if args.task is not None:
+        pane = args.pane or os.getenv("TMUX_PANE", "")
+        if not PANE_RE.fullmatch(pane):
+            raise ValueError("--task needs --pane (or a valid TMUX_PANE)")
+        task = sanitize_task(args.task)
+        remember_pane(journal, pane, "@harness_task")
+        mutations.append(("set" if task else "unset", pane, f"@harness_task={task}"))
+
+    plan = arrangement_plan(window_rows()) if args.arrange else []
+    if args.arrange and journal["arrangement"] is None:
+        journal["arrangement"] = [
+            {
+                "window_id": row["window_id"],
+                "session": row["session"],
+                "index": row["index"],
+            }
+            for row in plan
+        ]
+
+    print("formation-window-status: apply plan")
+    for name in GLOBAL_OPTIONS:
+        print(f"  set global {name}")
+    for action, pane, value in mutations:
+        print(f"  {action} pane={pane} {value}")
+    for row in plan:
+        if row["index"] != row["target_index"]:
+            print(
+                f"  move {row['window_id']} session={row['session']} "
+                f"{row['index']}->{row['target_index']}"
+            )
+    if args.dry_run:
+        return
+
+    # The journal preimage is durable before the first tmux mutation.
+    atomic_json(path, journal)
+    for name, value in FORMATS.items():
+        tmux("set-option", "-g", name, value)
+    for action, pane, value in mutations:
+        name, _, option_value = value.partition("=")
+        if action == "unset":
+            tmux("set-option", "-pu", "-t", pane, name)
+        else:
+            tmux("set-option", "-p", "-t", pane, name, option_value)
+    if args.arrange and any(row["index"] != row["target_index"] for row in plan):
+        move_plan(plan, "target_index")
+    tmux("refresh-client", "-S", check=False)
+
+
+def restore_option(scope: str, target: str | None, name: str, saved: dict[str, object]) -> None:
+    if saved["present"]:
+        args = ["set-option", "-g" if scope == "global" else "-p"]
+        if target:
+            args.extend(["-t", target])
+        args.extend([name, str(saved["value"])])
+        tmux(*args)
+    else:
+        args = ["set-option", "-gu" if scope == "global" else "-pu"]
+        if target:
+            args.extend(["-t", target])
+        args.append(name)
+        tmux(*args)
+
+
+def revert(args: argparse.Namespace, pid: int, path: Path) -> None:
+    journal = load_journal(path, pid)
+    if journal is None:
+        print("formation-window-status: no active journal; nothing to revert")
+        return
+    arrangement = journal["arrangement"]
+    layout_safe = True
+    if arrangement is not None:
+        expected = {row["window_id"] for row in arrangement}
+        actual = {row["window_id"] for row in window_rows()}
+        layout_safe = expected == actual
+
+    print("formation-window-status: revert plan")
+    for name in GLOBAL_OPTIONS:
+        print(f"  restore global {name}")
+    for pane, options in journal["pane_options"].items():
+        for name in options:
+            print(f"  restore pane={pane} {name}")
+    if arrangement is not None:
+        print("  restore layout" if layout_safe else "  refuse layout restore: window-id set drift")
+    if args.dry_run:
+        return
+
+    for name, saved in journal["global_options"].items():
+        restore_option("global", None, name, saved)
+    for pane, options in journal["pane_options"].items():
+        if tmux("display-message", "-p", "-t", pane, "#{pane_id}", check=False).returncode:
+            print(f"formation-window-status: pane {pane} disappeared; option restore unresolved", file=sys.stderr)
+            continue
+        for name, saved in options.items():
+            restore_option("pane", pane, name, saved)
+    if arrangement is not None and layout_safe:
+        current = {row["window_id"]: row for row in window_rows()}
+        restore = [
+            {**current[row["window_id"]], "original_index": row["index"]}
+            for row in arrangement
+        ]
+        move_plan(restore, "original_index")
+    elif arrangement is not None:
+        print("formation-window-status: layout drift; indices left unchanged", file=sys.stderr)
+
+    history = path.parent / "history"
+    history.mkdir(parents=True, exist_ok=True)
+    destination = history / f"{pid}-{int(time.time())}-{os.getpid()}.json"
+    os.replace(path, destination)
+    tmux("refresh-client", "-S", check=False)
+
+
+def status(pid: int, path: Path) -> None:
+    journal = load_journal(path, pid)
+    if journal is None:
+        print(f"formation-window-status: inactive server_pid={pid}")
+    else:
+        panes = len(journal["pane_options"])
+        arranged = journal["arrangement"] is not None
+        print(
+            f"formation-window-status: active server_pid={pid} "
+            f"journal={path} panes={panes} arrangement={str(arranged).lower()}"
+        )
+
+
+def main() -> None:
+    parser = UsageParser(prog="formation-window-status")
+    subparsers = parser.add_subparsers(dest="command")
+    apply_parser = subparsers.add_parser("apply")
+    apply_parser.add_argument("--lead")
+    apply_parser.add_argument("--task")
+    apply_parser.add_argument("--pane")
+    apply_parser.add_argument("--arrange", action="store_true")
+    apply_parser.add_argument("--dry-run", action="store_true")
+    revert_parser = subparsers.add_parser("revert")
+    revert_parser.add_argument("--dry-run", action="store_true")
+    subparsers.add_parser("status")
+    args = parser.parse_args()
+    if args.command is None:
+        parser.print_usage(sys.stderr)
+        raise SystemExit(64)
+    try:
+        pid, path = journal_path()
+        if args.command == "apply":
+            apply(args, pid, path)
+        elif args.command == "revert":
+            revert(args, pid, path)
+        else:
+            status(pid, path)
+    except (RuntimeError, ValueError) as exc:
+        print(f"formation-window-status: {exc}", file=sys.stderr)
+        raise SystemExit(70) from None
+
+
+if __name__ == "__main__":
+    main()

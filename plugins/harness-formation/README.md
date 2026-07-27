@@ -10,6 +10,9 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
+| `bin/formation-mail-nudge` | Optional one-shot/watching escalation for ignored badges; never starts automatically |
+| `bin/install-formation-mail-nudge-service` | Explicit systemd user-service install/uninstall for the optional watcher |
+| `bin/formation-window-status` | Explicit journaled tmux window-list apply/status/revert tool |
 | `lib/mailbox.sh` | Durable JSONL storage, locking, sequence allocation, and read cursors |
 | `lib/mailbox_delivery.sh` | Shared recipient/sender resolution, relay delegation, and exclusive-injection policy |
 | `lib/mailbox_notify.sh`, `lib/mailbox_relay.sh` | Zero-keystroke pane signaling primitives and the per-worker signal daemon |
@@ -88,6 +91,45 @@ truly has no concurrent human input, create it with
 registry and `@formation_exclusive_input`. Only then may
 `formation msg --inject <worker> ...` or `mailbox-send ... --inject` send a
 short pull nudge. The durable body always remains in the mailbox.
+Every injection remains `receipt unconfirmed` and uses the shared delayed-submit
+primitive.
+
+### Optional ignored-badge escalation
+
+`formation-mail-nudge` is exceptional, opt-in automation for an exclusive
+spawned worker. It requires both the latest registry row and the live pane to
+declare `--exclusive-input`, plus an old badge and a stable pane snapshot. It
+then sends exactly one short `formation inbox` pull nudge, never the mailbox
+body and never a retry. A later badge clear/advance or durable row from that
+canonical worker is the only success evidence; a pane repaint is not. If
+neither appears through the verification interval, it appends one fixed-metadata
+alert to the spawn-time parent and signals that parent with zero prompt keystrokes. Legacy or
+mismatched parent routes are reported visibly and are never guessed.
+
+```bash
+formation-mail-nudge --dry-run
+formation-mail-nudge                 # one sweep
+formation-mail-nudge --watch         # foreground watcher
+install-formation-mail-nudge-service --dry-run install
+install-formation-mail-nudge-service install
+install-formation-mail-nudge-service uninstall
+```
+
+Neither plugin install nor `formation spawn` starts the watcher. Persistent
+operation is an explicit systemd user-service choice; the installer resolves
+the canonical checkout rather than persisting a caller worktree.
+
+`formation-window-status` is likewise explicit. `apply` changes server-global
+window formats and journals their exact preimage; `--arrange` is separately
+opt-in. `revert` restores that journal for the same tmux server, and `status`
+is read-only:
+
+```bash
+formation-window-status status
+formation-window-status apply --lead "$TMUX_PANE" --task "review"
+formation-window-status apply --arrange --dry-run
+formation-window-status revert
+```
 
 ASKs are durable semantic state, stored separately from mailbox transport.
 `formation ask` returns a request id and makes the worker `WAITING_PARENT`;
