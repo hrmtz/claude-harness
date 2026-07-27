@@ -56,16 +56,20 @@ self_id() {
 
 registry_add() {
   local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}" task="${7:-}" goal="${8:-}" exclusive_input="${9:-0}"
+  local parent_id="${10:-}" parent_pane="${11:-}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
          --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
          --arg sid "$session_id" --arg cli "$cli" \
          --arg task "$task" --arg goal "$goal" --arg exclusive "$exclusive_input" \
+         --arg parent_id "$parent_id" --arg parent_pane "$parent_pane" \
     '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
       session_id: (if $sid == "" then null else $sid end), cli: $cli,
       task: (if $task == "" then null else $task end),
       goal: (if $goal == "" then null else $goal end),
-      exclusive_input: ($exclusive == "1")}' \
+      exclusive_input: ($exclusive == "1"),
+      parent_id: (if $parent_id == "" then null else $parent_id end),
+      parent_pane: (if $parent_pane == "" then null else $parent_pane end)}' \
     >> "$REGISTRY"
 }
 
@@ -441,6 +445,8 @@ cmd_spawn() {
   tmux set-option -p -t "$pane_id" @formation_cli "$cli" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_bypass "$bypass" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_exclusive_input "$exclusive_input" >/dev/null
+  tmux set-option -p -t "$pane_id" @formation_parent_id "$parent_id" >/dev/null
+  tmux set-option -p -t "$pane_id" @formation_parent_pane "$parent_pane" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_status "spawned" >/dev/null
   tmux select-pane -t "$pane_id" -T "$name: $task_label"
   # Always-on label strip: window-scoped so every pane in the worker's window
@@ -544,7 +550,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     tmux_send_submit "$pane_id" "$seed"
   fi
 
-  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli" "$task_label" "$goal" "$exclusive_input"
+  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli" "$task_label" "$goal" "$exclusive_input" "$parent_id" "$parent_pane"
 
   # Auto-start mailbox relay daemon: inotifywait on mailbox and signal messages
   # addressed to this worker without touching its TUI prompt. The worker pulls

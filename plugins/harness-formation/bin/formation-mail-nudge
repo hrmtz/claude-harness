@@ -1,0 +1,685 @@
+#!/usr/bin/env python3
+"""Escalate an old Formation mail badge into one short, gated pull nudge."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+SCHEMA_VERSION = 1
+PANE_RE = re.compile(r"^%[0-9]{1,10}$")
+IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+RESULTS = {"", "attempted-unconfirmed", "refused", "failed"}
+EFFECTS = {"", "badge-cleared-or-advanced", "durable-worker-row", "no-effect", "parent-route-unavailable"}
+RECEIPTS = {
+    "not-attempted",
+    "attempted-unconfirmed",
+    "effective",
+    "parent-alerted-no-attempt",
+    "parent-alerted-no-effect",
+}
+NO_ATTEMPT_REASONS = {"", "idle-never-stable", "nonexclusive", "registry-route-invalid"}
+MAX_INTERVAL = 86400
+STOP = False
+
+
+def die(message: str, code: int = 64) -> "NoReturn":
+    print(f"formation-mail-nudge: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer") from None
+    if not 1 <= parsed <= MAX_INTERVAL:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {MAX_INTERVAL}")
+    return parsed
+
+
+def run_tmux(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["tmux", *args],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def pane_rows() -> list[dict[str, str]]:
+    fmt = (
+        "#{pane_id}|#{@formation_mail_pending}|#{@formation_exclusive_input}|"
+        "#{@formation_task}|#{@harness_role}|"
+        "#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|"
+        "#{@formation_parent_id}|#{@formation_parent_pane}"
+    )
+    result = run_tmux("list-panes", "-a", "-F", fmt)
+    if result.returncode:
+        die("cannot list tmux panes", 70)
+    rows = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|", 7)
+        if len(parts) == 8:
+            rows.append(
+                dict(
+                    zip(
+                        (
+                            "pane",
+                            "seq",
+                            "exclusive",
+                            "task",
+                            "role",
+                            "worker",
+                            "parent_id",
+                            "parent_pane",
+                        ),
+                        parts,
+                    )
+                )
+            )
+    return rows
+
+
+def valid_target(row: dict[str, str]) -> bool:
+    return (
+        bool(PANE_RE.fullmatch(row["pane"]))
+        and row["seq"].isdigit()
+        and 0 < int(row["seq"]) <= 2**63 - 1
+        and bool(row["task"])
+        and row["role"] != "lead"
+        and bool(IDENTITY_RE.fullmatch(row["worker"]))
+    )
+
+
+def registry_row(registry: Path, worker: str) -> dict[str, object] | None:
+    latest = None
+    try:
+        with registry.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    value = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(value, dict) and value.get("id") == worker:
+                    latest = value
+    except FileNotFoundError:
+        return None
+    return latest
+
+
+def registry_match(registry: Path, worker: str, pane: str) -> bool:
+    latest = registry_row(registry, worker)
+    return bool(latest and latest.get("pane_id") == pane and latest.get("exclusive_input") is True)
+
+
+def snapshot_crc(pane: str) -> str | None:
+    result = run_tmux("capture-pane", "-p", "-S", "-40", "-t", pane)
+    if result.returncode:
+        return None
+    return hashlib.sha256(result.stdout.encode()).hexdigest()
+
+
+def state_path(state_dir: Path, pane: str) -> Path:
+    return state_dir / f"pane-{pane[1:]}.json"
+
+
+def new_state(row: dict[str, str], now: int, checksum: str) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "pane_id": row["pane"],
+        "worker_id": row["worker"],
+        "pending_seq": int(row["seq"]),
+        "first_seen_at": now,
+        "snapshot_crc": checksum,
+        "snapshot_since": now,
+        "attempted": False,
+        "attempt_result": "",
+        "attempted_at": 0,
+        "attempt_snapshot_crc": "",
+        "attempt_mailbox_seq": 0,
+        "effect": "",
+        "parent_alerted": False,
+        "receipt": "not-attempted",
+        "no_attempt_reason": "",
+    }
+
+
+def load_state(path: Path, row: dict[str, str]) -> dict[str, object] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    expected = {
+        "schema_version",
+        "pane_id",
+        "worker_id",
+        "pending_seq",
+        "first_seen_at",
+        "snapshot_crc",
+        "snapshot_since",
+        "attempted",
+        "attempt_result",
+        "attempted_at",
+        "attempt_snapshot_crc",
+        "attempt_mailbox_seq",
+        "effect",
+        "parent_alerted",
+        "receipt",
+        "no_attempt_reason",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        return None
+    if (
+        value["schema_version"] != SCHEMA_VERSION
+        or value["pane_id"] != row["pane"]
+        or value["worker_id"] != row["worker"]
+        or not isinstance(value["pending_seq"], int)
+        or not isinstance(value["first_seen_at"], int)
+        or not 0 <= value["first_seen_at"] <= 2**63 - 1
+        or not isinstance(value["snapshot_since"], int)
+        or not 0 <= value["snapshot_since"] <= 2**63 - 1
+        or not isinstance(value["snapshot_crc"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value["snapshot_crc"])
+        or not isinstance(value["attempted"], bool)
+        or value["attempt_result"] not in RESULTS
+        or not isinstance(value["attempted_at"], int)
+        or not 0 <= value["attempted_at"] <= 2**63 - 1
+        or not isinstance(value["attempt_snapshot_crc"], str)
+        or (
+            value["attempt_snapshot_crc"]
+            and not re.fullmatch(r"[0-9a-f]{64}", value["attempt_snapshot_crc"])
+        )
+        or not isinstance(value["attempt_mailbox_seq"], int)
+        or not 0 <= value["attempt_mailbox_seq"] <= 2**63 - 1
+        or value["effect"] not in EFFECTS
+        or not isinstance(value["parent_alerted"], bool)
+        or value["receipt"] not in RECEIPTS
+        or value["no_attempt_reason"] not in NO_ATTEMPT_REASONS
+    ):
+        return None
+    return value
+
+
+def atomic_json(path: Path, value: dict[str, object]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary.open("x", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def recheck(row: dict[str, str], registry: Path) -> str:
+    current = {item["pane"]: item for item in pane_rows()}.get(row["pane"])
+    if current is None or not valid_target(current):
+        return "live-pane-ineligible"
+    if (
+        current["worker"] != row["worker"]
+        or current["seq"] != row["seq"]
+    ):
+        return "live-pane-drift"
+    if current["exclusive"] != "1":
+        return "live-nonexclusive"
+    if not registry_match(registry, row["worker"], row["pane"]):
+        return "registry-refused"
+    return ""
+
+
+def inject(script_dir: Path, pane: str, seq: int) -> int:
+    library = script_dir.parent / "lib" / "mailbox_delivery.sh"
+    command = 'source "$1"; mailbox_inject_nudge "$2" "$3" mail-nudge 1'
+    return subprocess.run(
+        ["bash", "-c", command, "_", str(library), pane, str(seq)],
+        check=False,
+    ).returncode
+
+
+def parent_route(row: dict[str, str], registry: Path) -> tuple[str, str] | None:
+    current = {item["pane"]: item for item in pane_rows()}.get(row["pane"])
+    if (
+        current is None
+        or current["worker"] != row["worker"]
+        or current["seq"] != row["seq"]
+        or current["parent_id"] != row["parent_id"]
+        or current["parent_pane"] != row["parent_pane"]
+    ):
+        return None
+    latest = registry_row(registry, row["worker"])
+    if not latest:
+        return None
+    parent_id = latest.get("parent_id")
+    parent_pane = latest.get("parent_pane")
+    if (
+        not isinstance(parent_id, str)
+        or not IDENTITY_RE.fullmatch(parent_id)
+        or not isinstance(parent_pane, str)
+        or not PANE_RE.fullmatch(parent_pane)
+        or row["parent_id"] != parent_id
+        or row["parent_pane"] != parent_pane
+    ):
+        return None
+    return parent_id, parent_pane
+
+
+def alert_parent(
+    script_dir: Path,
+    row: dict[str, str],
+    seq: int,
+    verify_seconds: int,
+    parent_id: str,
+    parent_pane: str,
+    no_attempt_reason: str = "",
+) -> int:
+    mailbox = script_dir.parent / "lib" / "mailbox.sh"
+    delivery = script_dir.parent / "lib" / "mailbox_delivery.sh"
+    if no_attempt_reason:
+        body = (
+            f"mail-nudge escalation: worker={row['worker']} pane={row['pane']} seq={seq}\n"
+            f"no child nudge attempted after {verify_seconds}s; "
+            f"reason={no_attempt_reason}; operator/orchestrator inspection required"
+        )
+    else:
+        body = (
+            f"mail-nudge escalation: worker={row['worker']} pane={row['pane']} seq={seq}\n"
+            f"attempt remained unconfirmed after {verify_seconds}s; "
+            "operator/orchestrator inspection required"
+        )
+    command = (
+        'source "$1"; source "$2"; '
+        'alert_seq="$(mailbox_append mail-nudge "$3" "$5")" || exit $?; '
+        'mailbox_signal_durable_row "$3" "$4" "$alert_seq" mail-nudge '
+        '"${FORMATION_HOME:-$HOME/.formation}/formation"'
+    )
+    return subprocess.run(
+        ["bash", "-c", command, "_", str(mailbox), str(delivery), parent_id, parent_pane, body],
+        check=False,
+    ).returncode
+
+
+def mailbox_highwater(worker: str) -> int:
+    formation_home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    mailbox = Path(os.getenv("FORMATION_MAILBOX", formation_home / "mailbox" / "log.jsonl"))
+    highwater = 0
+    try:
+        with mailbox.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                seq = row.get("seq") if isinstance(row, dict) else None
+                if (
+                    row.get("from") == worker
+                    and isinstance(seq, int)
+                    and not isinstance(seq, bool)
+                    and 0 < seq <= 2**63 - 1
+                ):
+                    highwater = max(highwater, seq)
+    except FileNotFoundError:
+        pass
+    return highwater
+
+
+def durable_worker_effect(worker: str, after_seq: int, attempted_at: int) -> bool:
+    formation_home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    mailbox = Path(os.getenv("FORMATION_MAILBOX", formation_home / "mailbox" / "log.jsonl"))
+    try:
+        with mailbox.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(row, dict) or row.get("from") != worker:
+                    continue
+                seq, timestamp = row.get("seq"), row.get("ts")
+                if (
+                    not isinstance(seq, int)
+                    or isinstance(seq, bool)
+                    or not after_seq < seq <= 2**63 - 1
+                    or not isinstance(timestamp, str)
+                ):
+                    continue
+                try:
+                    observed_at = int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    continue
+                if observed_at >= attempted_at:
+                    return True
+    except FileNotFoundError:
+        pass
+    return False
+
+
+def no_attempt_reason(
+    row: dict[str, str],
+    registry: Path,
+    age: int,
+    stale_required: int,
+    idle: int,
+    idle_required: int,
+) -> str:
+    latest = registry_row(registry, row["worker"])
+    if latest is None or latest.get("pane_id") != row["pane"]:
+        return "registry-route-invalid"
+    if latest.get("exclusive_input") is not True or row["exclusive"] != "1":
+        return "nonexclusive"
+    if age < stale_required or idle < idle_required:
+        return "idle-never-stable"
+    return ""
+
+
+def escalate_without_attempt(
+    args: argparse.Namespace,
+    script_dir: Path,
+    registry: Path,
+    path: Path,
+    row: dict[str, str],
+    state: dict[str, object],
+    reason: str,
+) -> None:
+    state["attempt_result"] = ""
+    state["no_attempt_reason"] = reason
+    state["parent_alerted"] = True
+    state["receipt"] = "parent-alerted-no-attempt"
+    route = parent_route(row, registry)
+    if route is None:
+        state["effect"] = "parent-route-unavailable"
+        atomic_json(path, state)
+        message = (
+            f"parent-route-unavailable worker={row['worker']} pane={row['pane']} "
+            f"seq={row['seq']} receipt=not-attempted reason={reason}"
+        )
+        run_tmux("set-option", "-g", "@formation_mail_nudge_alert", message)
+        print(message)
+        return
+    atomic_json(path, state)
+    print(
+        f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+        f"receipt=parent-alerted-no-attempt reason={reason} parent={route[0]}",
+        flush=True,
+    )
+    rc = alert_parent(
+        script_dir,
+        row,
+        int(row["seq"]),
+        args.no_attempt_alert,
+        route[0],
+        route[1],
+        reason,
+    )
+    print(f"parent={route[0]} no_attempt_alert_signal_rc={rc}", flush=True)
+
+
+def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry: Path) -> None:
+    now = int(time.time())
+    rows = pane_rows()
+    live_panes = {row["pane"] for row in rows if PANE_RE.fullmatch(row["pane"])}
+
+    if not args.dry_run:
+        for path in state_dir.glob("pane-*.json"):
+            match = re.fullmatch(r"pane-([0-9]{1,10})\.json", path.name)
+            if match and f"%{match.group(1)}" not in live_panes:
+                path.unlink(missing_ok=True)
+
+    for row in rows:
+        if PANE_RE.fullmatch(row["pane"]) and not row["seq"].isdigit():
+            path = state_path(state_dir, row["pane"])
+            cleared = load_state(path, row)
+            if cleared is not None and cleared["attempted"]:
+                print(
+                    f"{row['pane']} worker={row['worker']} old_seq={cleared['pending_seq']} "
+                    "receipt=effective effect=badge-cleared-or-advanced"
+                )
+            if path.exists() and not args.dry_run:
+                path.unlink(missing_ok=True)
+            continue
+        if not valid_target(row):
+            continue
+        path = state_path(state_dir, row["pane"])
+        checksum = snapshot_crc(row["pane"])
+        if checksum is None:
+            continue
+        state = load_state(path, row)
+        if state is not None and state["pending_seq"] != int(row["seq"]):
+            if state["attempted"]:
+                print(
+                    f"{row['pane']} worker={row['worker']} old_seq={state['pending_seq']} "
+                    "receipt=effective effect=badge-cleared-or-advanced"
+                )
+        if state is None or state["pending_seq"] != int(row["seq"]):
+            print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=would-observe")
+            if not args.dry_run:
+                atomic_json(path, new_state(row, now, checksum))
+            continue
+        if state["attempted"]:
+            attempted_at = int(state["attempted_at"])
+            if state["effect"]:
+                continue
+            if durable_worker_effect(
+                row["worker"], state["attempt_mailbox_seq"], attempted_at
+            ):
+                print(
+                    f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                    "receipt=effective effect=durable-worker-row"
+                )
+                if not args.dry_run:
+                    state["effect"] = "durable-worker-row"
+                    state["receipt"] = "effective"
+                    atomic_json(path, state)
+                continue
+            if now - attempted_at < args.verify:
+                continue
+            if args.dry_run:
+                route = parent_route(row, registry)
+                result = "would-alert-parent" if route else "would-report-parent-route-unavailable"
+                print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result={result}")
+                continue
+            state["parent_alerted"] = True
+            state["receipt"] = "parent-alerted-no-effect"
+            route = parent_route(row, registry)
+            if route is None:
+                state["effect"] = "parent-route-unavailable"
+                atomic_json(path, state)
+                message = (
+                    f"parent-route-unavailable worker={row['worker']} "
+                    f"pane={row['pane']} seq={row['seq']}"
+                )
+                run_tmux("set-option", "-g", "@formation_mail_nudge_alert", message)
+                print(message)
+                continue
+            state["effect"] = "no-effect"
+            atomic_json(path, state)
+            print(
+                f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                f"receipt=parent-alerted-no-effect effect=no-effect "
+                f"parent={route[0]} alert=attempted",
+                flush=True,
+            )
+            rc = alert_parent(
+                script_dir,
+                row,
+                int(row["seq"]),
+                args.verify,
+                route[0],
+                route[1],
+            )
+            print(f"parent={route[0]} alert_signal_rc={rc}", flush=True)
+            continue
+        if state["receipt"] == "parent-alerted-no-attempt":
+            continue
+        if state["snapshot_crc"] != checksum:
+            print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=snapshot-changed")
+            if not args.dry_run:
+                state["snapshot_crc"] = checksum
+                state["snapshot_since"] = now
+                atomic_json(path, state)
+        age = max(0, now - int(state["first_seen_at"]))
+        idle = max(0, now - int(state["snapshot_since"]))
+        reason = no_attempt_reason(
+            row, registry, age, args.stale, idle, args.idle
+        )
+        if age >= args.no_attempt_alert and reason:
+            if args.dry_run:
+                print(
+                    f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                    f"result=would-alert-parent-no-attempt reason={reason}"
+                )
+            else:
+                escalate_without_attempt(
+                    args, script_dir, registry, path, row, state, reason
+                )
+            continue
+        if state["snapshot_crc"] != checksum:
+            continue
+        if age < args.stale or idle < args.idle:
+            continue
+        if row["exclusive"] != "1" or not registry_match(registry, row["worker"], row["pane"]):
+            continue
+        if args.dry_run:
+            print(
+                f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                f"age={age}s idle={idle}s result=would-nudge"
+            )
+            continue
+
+        refusal = recheck(row, registry)
+        if refusal:
+            state["attempt_result"] = ""
+            state["receipt"] = "not-attempted"
+            state["no_attempt_reason"] = (
+                "nonexclusive" if refusal == "live-nonexclusive" else "registry-route-invalid"
+            )
+            atomic_json(path, state)
+            print(
+                f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+                f"age={age}s result=refused reason={refusal}"
+            )
+            continue
+
+        # Persist the attempt before crossing the prompt-writing boundary.
+        state["attempted"] = True
+        state["attempt_result"] = "attempted-unconfirmed"
+        state["receipt"] = "attempted-unconfirmed"
+        state["no_attempt_reason"] = ""
+        state["attempted_at"] = now
+        state["attempt_snapshot_crc"] = checksum
+        state["attempt_mailbox_seq"] = mailbox_highwater(row["worker"])
+        atomic_json(path, state)
+        result = inject(script_dir, row["pane"], int(row["seq"]))
+        if result not in (0, 4):
+            state["attempt_result"] = "failed"
+            atomic_json(path, state)
+            outcome = "failed"
+        else:
+            outcome = "attempted-unconfirmed"
+        print(
+            f"{row['pane']} worker={row['worker']} seq={row['seq']} "
+            f"age={age}s result={outcome} receipt=unconfirmed "
+            "state_receipt=attempted-unconfirmed"
+        )
+
+
+def process_identity(pid: int, script: Path) -> bool:
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    decoded = [part.decode(errors="replace") for part in cmdline if part]
+    return "--watch" in decoded and str(script.resolve()) in decoded
+
+
+def watch(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry: Path) -> None:
+    lock_path = state_dir / "watch.lock"
+    pid_path = state_dir / "watch.pid.json"
+    lock = lock_path.open("a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            record = json.loads(pid_path.read_text())
+            pid = record["pid"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            die("watch lock is held by an unidentified process", 75)
+        if isinstance(pid, int) and process_identity(pid, Path(sys.argv[0])):
+            print(f"formation-mail-nudge: already watching (pid {pid})")
+            return
+        die("watch lock is held but its PID identity is stale", 75)
+
+    atomic_json(
+        pid_path,
+        {"pid": os.getpid(), "script": str(Path(sys.argv[0]).resolve()), "watch": True},
+    )
+
+    def stop(_signum: int, _frame: object) -> None:
+        global STOP
+        STOP = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        while not STOP:
+            sweep(args, script_dir, state_dir, registry)
+            deadline = time.monotonic() + args.interval
+            while not STOP and time.monotonic() < deadline:
+                time.sleep(min(0.2, deadline - time.monotonic()))
+    finally:
+        with contextlib.suppress(OSError):
+            if json.loads(pid_path.read_text()).get("pid") == os.getpid():
+                pid_path.unlink()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="formation-mail-nudge")
+    parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--interval", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_INTERVAL", "30"))
+    parser.add_argument("--stale", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_STALE", "120"))
+    parser.add_argument("--idle", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_IDLE", "25"))
+    parser.add_argument("--verify", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_VERIFY", "30"))
+    parser.add_argument(
+        "--no-attempt-alert",
+        type=positive_int,
+        default=os.getenv("FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT", "300"),
+    )
+    args = parser.parse_args()
+    if args.watch and args.dry_run:
+        die("--watch and --dry-run cannot be combined")
+    if not shutil.which("tmux"):
+        die("tmux not found", 70)
+
+    script_dir = Path(__file__).resolve().parent
+    formation_home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    state_dir = formation_home / "state" / "mail-nudge"
+    registry = formation_home / "formation" / "registry.jsonl"
+    if args.dry_run:
+        sweep(args, script_dir, state_dir, registry)
+        return
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = state_dir / "state.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.watch:
+            watch(args, script_dir, state_dir, registry)
+        else:
+            sweep(args, script_dir, state_dir, registry)
+
+
+if __name__ == "__main__":
+    import shutil
+
+    main()
