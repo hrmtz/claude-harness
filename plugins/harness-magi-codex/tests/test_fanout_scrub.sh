@@ -7,7 +7,8 @@ unset TMUX
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FANOUT="$HERE/../scripts/magi_fanout_codex.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/bin" "$TMP/out"
+mkdir -p "$TMP/bin" "$TMP/out" "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 DOC="$TMP/design.md"; printf '%s\n' 'a test design' > "$DOC"
 
 cat > "$TMP/bin/codex" <<'STUB'

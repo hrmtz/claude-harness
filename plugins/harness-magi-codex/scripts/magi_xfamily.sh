@@ -18,6 +18,7 @@ SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
 PROTOCOL="$SELF_DIR/magi_protocol.py"
+DEJA="$SELF_DIR/magi_deja_context.py"
 VERIFY_XFAMILY="$SELF_DIR/magi_verify_xfamily_artifacts.py"
 CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
 if [ -z "$CROSS_CLI_GUARD" ]; then
@@ -136,6 +137,7 @@ STAGING_META=""
 SNAPSHOT_ROOT=""
 SNAPSHOT_DOC=""
 SNAPSHOT_PRIOR=""
+DEJA_BLOCK=""
 PUBLISHED=()
 PROVIDER_PID=""
 CLAIM_ID=""
@@ -171,6 +173,7 @@ _cleanup() {
     if [ -n "$SNAPSHOT_DOC" ] && ! rm -f "$SNAPSHOT_DOC"; then cleanup_failed=1; fi
     if [ -n "$SNAPSHOT_PRIOR" ] && [ "$SNAPSHOT_PRIOR" != "-" ] \
             && ! rm -f "$SNAPSHOT_PRIOR"; then cleanup_failed=1; fi
+    if [ -n "$DEJA_BLOCK" ] && ! rm -f "$DEJA_BLOCK"; then cleanup_failed=1; fi
     if [ -n "$SNAPSHOT_ROOT" ] && ! rm -rf "$SNAPSHOT_ROOT"; then cleanup_failed=1; fi
     [ "$cleanup_failed" -eq 0 ] || {
         echo "magi-xfamily: ERROR: cleanup was incomplete for claim ${CLAIM_ID:-unclaimed}" >&2
@@ -317,6 +320,7 @@ SCRUB="$SNAPSHOT_PLUGIN/scripts/magi_scrub.py"
 GUARD="$SNAPSHOT_PLUGIN/scripts/magi_campaign_guard.py"
 VALIDATOR="$SNAPSHOT_PLUGIN/scripts/magi_validate_findings.py"
 VERIFY_XFAMILY="$SNAPSHOT_PLUGIN/scripts/magi_verify_xfamily_artifacts.py"
+DEJA="$SNAPSHOT_PLUGIN/scripts/magi_deja_context.py"
 python3 - "$DOC_PATH" "${STAGING_PREFIX}.document" "$ARTIFACT_SHA" <<'PY'
 import hashlib, pathlib, sys
 source, target = map(pathlib.Path, sys.argv[1:3])
@@ -337,6 +341,14 @@ if [ "$PRIOR" != "-" ]; then
         _fail_closed "prior synthesis changed after preflight validation"
     }
 fi
+
+DEJA_BLOCK="${STAGING_PREFIX}.deja-block"
+python3 "$DEJA" render \
+    --target "$DOC_PATH" --magi-state "$STATE_DIR" \
+    --target-path-id "$DOC_LOCK_ID" --target-sha "$ARTIFACT_SHA" \
+    --protocol-sha "$CLAIM_PROTOCOL_SHA" --output "$DEJA_BLOCK" || {
+    _fail_closed "frozen Deja context identity/render validation failed"
+}
 
 PROMPT_FILE="$(mktemp)"
 {
@@ -378,10 +390,24 @@ HDR
         printf '\nPRIOR FINDINGS (check resolution, do not merely repeat):\n'
         python3 "$SCRUB" < "$SNAPSHOT_PRIOR"
     fi
+    if [ -s "$DEJA_BLOCK" ]; then
+        printf '\n'
+        cat "$DEJA_BLOCK"
+    fi
     printf '\nDOCUMENT CONTENT:\n---\n'
     cat "$SNAPSHOT_DOC"
     printf '\n---\n'
 } > "$PROMPT_FILE"
+
+# Receipt publication is the launch boundary: a provider must not run if exact prompt
+# consumption cannot be proven.
+python3 "$DEJA" consume \
+    --target "$DOC_PATH" --magi-state "$STATE_DIR" \
+    --target-path-id "$DOC_LOCK_ID" --target-sha "$ARTIFACT_SHA" \
+    --protocol-sha "$CLAIM_PROTOCOL_SHA" --phase xfamily --round "$ROUND" \
+    --block "$DEJA_BLOCK" --provider "$REVIEWER" --prompt "$PROMPT_FILE" || {
+    _fail_closed "Deja prompt-consumption receipt publication failed"
+}
 
 RAW_FILE="$(mktemp)"
 # The Claude CLI has no cwd flag: its reviewer grounding IS the process working directory, so
@@ -646,10 +672,20 @@ if ! python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null; then
 fi
 CLAIM_FINISHED=1
 PUBLISHED=()
+
+# Capture only the validated, authoritative finding artifact. Capture remains best-effort.
+python3 "$DEJA" capture \
+    --target "$DOC_PATH" --magi-state "$STATE_DIR" \
+    --phase xfamily --round "$ROUND" --source "$FINDINGS_OUT" >/dev/null || {
+    echo "magi-xfamily[$REVIEWER]: warning: Deja capture diagnostics could not be published" >&2
+}
+
 rm -f "$SNAPSHOT_DOC"
 [ "$SNAPSHOT_PRIOR" = "-" ] || rm -f "$SNAPSHOT_PRIOR"
 SNAPSHOT_DOC=""
 SNAPSHOT_PRIOR=""
+rm -f "$DEJA_BLOCK"
+DEJA_BLOCK=""
 rm -rf "$SNAPSHOT_ROOT"
 SNAPSHOT_ROOT=""
 rm -f "$FAILED_OUT"

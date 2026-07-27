@@ -14,6 +14,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
 GUARD="$HERE/../scripts/magi_campaign_guard.py"
+DEJA="$HERE/../scripts/magi_deja_context.py"
+PROTOCOL="$HERE/../scripts/magi_protocol.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
@@ -24,7 +26,8 @@ DOC="$TMP/design.md"; printf 'a grounded design\n' > "$DOC"
 DOC_SHA="$(sha256sum "$DOC" | cut -d' ' -f1)"
 DOC_ID="$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -c1-16)"
 MARKER_DIR="$TMP/.dual-magi"
-STATE="$TMP/state"; mkdir -p "$STATE" "$TMP/bin" "$TMP/home"
+STATE="$TMP/state"; mkdir -p "$STATE" "$TMP/bin" "$TMP/home" "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 SOURCE="$STATE/round_1_source.json"
 printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
   "$DOC_ID" "$DOC_SHA" > "$SOURCE"
@@ -101,7 +104,10 @@ seed_campaign() {
     local claim_line claim_id
     claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || return 1
     claim_id="${claim_line##*CLAIM_ID=}"
-    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null
+    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || return 1
+    python3 "$DEJA" select --target "$DOC" --magi-state "$STATE" \
+        --target-path-id "$DOC_ID" --target-sha "$DOC_SHA" \
+        --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null
 }
 
 seed_campaign || exit 1
@@ -186,6 +192,9 @@ for transcript_bytes in 1048576 1048577; do
   bound_claim="$(python3 "$GUARD" claim "$BOUND_DOC" 1 fanout "$BOUND_STATE")" || exit 1
   bound_claim_id="${bound_claim##*CLAIM_ID=}"
   python3 "$GUARD" finish "$BOUND_DOC" "$bound_claim_id" success >/dev/null || exit 1
+  python3 "$DEJA" select --target "$BOUND_DOC" --magi-state "$BOUND_STATE" \
+      --target-path-id "$BOUND_ID" --target-sha "$BOUND_SHA" \
+      --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null || exit 1
   bounded_prefix="$BOUND_STATE/round_8_claude_line_$transcript_bytes"
   PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_TRANSCRIPT_BYTES="$transcript_bytes" \
       STUB_DOC_ID="$BOUND_ID" STUB_DOC_SHA="$BOUND_SHA" \
@@ -207,6 +216,9 @@ for transcript_kind in symlink fifo; do
   bound_claim="$(python3 "$GUARD" claim "$BOUND_DOC" 1 fanout "$BOUND_STATE")" || exit 1
   bound_claim_id="${bound_claim##*CLAIM_ID=}"
   python3 "$GUARD" finish "$BOUND_DOC" "$bound_claim_id" success >/dev/null || exit 1
+  python3 "$DEJA" select --target "$BOUND_DOC" --magi-state "$BOUND_STATE" \
+      --target-path-id "$BOUND_ID" --target-sha "$BOUND_SHA" \
+      --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null || exit 1
   bounded_prefix="$BOUND_STATE/round_8_claude_$transcript_kind"
   PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_TRANSCRIPT_KIND="$transcript_kind" \
       STUB_DOC_ID="$BOUND_ID" STUB_DOC_SHA="$BOUND_SHA" \
@@ -320,6 +332,9 @@ printf '{"reviewer":"SYNTHESIS","round":1,"artifact_id":"%s","artifact_sha":"%s"
 cancel_seed="$(python3 "$GUARD" claim "$CANCEL_DOC" 1 fanout "$CANCEL_STATE")" || exit 1
 cancel_seed_id="${cancel_seed##*CLAIM_ID=}"
 python3 "$GUARD" finish "$CANCEL_DOC" "$cancel_seed_id" success >/dev/null || exit 1
+python3 "$DEJA" select --target "$CANCEL_DOC" --magi-state "$CANCEL_STATE" \
+    --target-path-id "$CANCEL_ID" --target-sha "$CANCEL_SHA" \
+    --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null || exit 1
 CANCELLED="$CANCEL_STATE/round_8_cancelled"
 READY="$TMP/cancel-provider-ready"
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" STUB_HANG=1 STUB_READY="$READY" \

@@ -17,6 +17,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily.sh"
 PREFLIGHT="$HERE/../scripts/magi_preflight_codex.sh"
 GUARD="$HERE/../scripts/magi_campaign_guard.py"
+DEJA="$HERE/../scripts/magi_deja_context.py"
+PROTOCOL="$HERE/../scripts/magi_protocol.py"
 TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "$TMP"' EXIT
 
 pass=0; fail=0
@@ -27,7 +29,8 @@ bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 # fix that stops at the document's directory is distinguishable from one that reaches the
 # repository top-level.
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/codex-state" "$TMP/repoA" "$TMP/repoB/docs" \
-    "$TMP/repoB/state"
+    "$TMP/repoB/state" "$TMP/repoB/state2" "$TMP/repoB/state3" "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 git init -q "$TMP/repoA"
 git init -q "$TMP/repoB"
 printf 'a design owned by repo B\n' > "$TMP/repoB/docs/design.md"
@@ -123,7 +126,10 @@ seed_round_1() {
     local claim_line claim_id
     claim_line="$(python3 "$GUARD" claim "$doc" 1 fanout "$state")" || return 1
     claim_id="${claim_line##*CLAIM_ID=}"
-    python3 "$GUARD" finish "$doc" "$claim_id" success >/dev/null
+    python3 "$GUARD" finish "$doc" "$claim_id" success >/dev/null || return 1
+    python3 "$DEJA" select --target "$doc" --magi-state "$state" \
+        --target-path-id "$doc_id" --target-sha "$doc_sha" \
+        --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null
 }
 
 # Run the adapter from repo A with RELATIVE repo-B paths, exactly as a caller in another
@@ -163,9 +169,9 @@ fi
     || bad "findings/meta pair missing from the repo B state dir"
 
 # --- 2. Claude arm with an inherited GIT_DIR/GIT_WORK_TREE ------------------------------------
-seed_round_1 "$TMP/repoB/docs/design2.md" "$TMP/repoB/state" || exit 1
+seed_round_1 "$TMP/repoB/docs/design2.md" "$TMP/repoB/state2" || exit 1
 run_adapter_from_repoA "$TMP/cwd.log" claude ../repoB/docs/design2.md \
-    ../repoB/state/round_1_codex.json ../repoB/state/round_2_leak \
+    ../repoB/state2/round_1_codex.json ../repoB/state2/round_2_leak \
     GIT_DIR="$TMP/repoA/.git" GIT_WORK_TREE="$TMP/repoA" >/dev/null 2>&1
 rc=$?
 if [ $rc -eq 0 ] && [ "$(sort -u "$TMP/cwd.log")" = "$TMP/repoB" ]; then
@@ -175,9 +181,9 @@ else
 fi
 
 # --- 3. Grok fallback arm --------------------------------------------------------------------
-seed_round_1 "$TMP/repoB/docs/design3.md" "$TMP/repoB/state" || exit 1
+seed_round_1 "$TMP/repoB/docs/design3.md" "$TMP/repoB/state3" || exit 1
 run_adapter_from_repoA "$TMP/cwd.log" grok ../repoB/docs/design3.md \
-    ../repoB/state/round_1_codex.json ../repoB/state/round_2_grok >/dev/null 2>&1
+    ../repoB/state3/round_1_codex.json ../repoB/state3/round_2_grok >/dev/null 2>&1
 rc=$?
 [ $rc -eq 0 ] && ok "relative cross-repo Grok round completes" || bad "Grok adapter rc=$rc"
 if [ "$(sort -u "$TMP/cwd.log")" = "$TMP/repoB" ]; then

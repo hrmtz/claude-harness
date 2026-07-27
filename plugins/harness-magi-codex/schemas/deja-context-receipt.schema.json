@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Magi Deja Review selection receipt",
+  "type": "object",
+  "properties": {
+    "schema_version": {"const": "magi-deja-context-receipt/v1"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "target_path_id": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
+    "target_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "protocol_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "status": {
+      "type": "string",
+      "enum": ["injected-candidate", "absent", "unavailable"]
+    },
+    "selection_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "rendered_block_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "inspected_campaign_count": {"type": "integer", "minimum": 0, "maximum": 256},
+    "valid_campaign_count": {"type": "integer", "minimum": 0, "maximum": 256},
+    "invalid_campaign_count": {"type": "integer", "minimum": 0, "maximum": 256},
+    "candidate_finding_count": {"type": "integer", "minimum": 0},
+    "selected_finding_count": {"type": "integer", "minimum": 0, "maximum": 8},
+    "deduplicated_finding_count": {"type": "integer", "minimum": 0},
+    "truncated_finding_count": {"type": "integer", "minimum": 0},
+    "selected_occurrence_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    },
+    "selected_sources": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "source_path": {"type": "string", "minLength": 1}
+        },
+        "required": ["source_sha256", "source_path"],
+        "additionalProperties": false
+      }
+    },
+    "errors": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "maxLength": 128}
+    }
+  },
+  "required": [
+    "schema_version",
+    "created_at",
+    "target_path_id",
+    "target_sha",
+    "protocol_sha",
+    "status",
+    "selection_sha256",
+    "rendered_block_sha256",
+    "inspected_campaign_count",
+    "valid_campaign_count",
+    "invalid_campaign_count",
+    "candidate_finding_count",
+    "selected_finding_count",
+    "deduplicated_finding_count",
+    "truncated_finding_count",
+    "selected_occurrence_ids",
+    "selected_sources",
+    "errors"
+  ],
+  "additionalProperties": false
+}

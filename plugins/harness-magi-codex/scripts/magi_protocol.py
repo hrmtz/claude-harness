@@ -24,6 +24,11 @@ from pathlib import PurePosixPath
 
 
 RUNTIME_FILES = (
+    "schemas/deja-consumption-receipt.schema.json",
+    "schemas/deja-context-receipt.schema.json",
+    "schemas/deja-context.schema.json",
+    "schemas/deja-review-slice0-manifest.schema.json",
+    "schemas/deja-review-slice0-record.schema.json",
     "schemas/finding.codex.schema.json",
     "schemas/finding.schema.json",
     "schemas/implementation-convergence.schema.json",
@@ -35,6 +40,8 @@ RUNTIME_FILES = (
     "scripts/magi_convergence_gate.py",
     "scripts/magi_convergence_kernel.py",
     "scripts/magi_design_convergence_gate.py",
+    "scripts/deja_review_slice0.py",
+    "scripts/magi_deja_context.py",
     "scripts/magi_fanout_codex.sh",
     "scripts/magi_git.py",
     "scripts/magi_lock.sh",
