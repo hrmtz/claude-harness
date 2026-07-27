@@ -36,16 +36,20 @@ is a separate post-merge operator action.
 3. `formation-mail-nudge` must call the shared
    `mailbox_inject_nudge` primitive. It may not grow a second prompt injection
    implementation.
-4. `--watch` is never started by plugin install, `formation spawn`, a hook, or
+4. An unconfirmed nudge is never retried automatically. If it produces no
+   observable effect within a bounded verification interval, append one
+   durable alert to the worker's recorded parent and signal that parent with
+   the existing zero-keystroke path.
+5. `--watch` is never started by plugin install, `formation spawn`, a hook, or
    a default command.
-5. Persistent operation uses an explicit opt-in systemd user service installer,
+6. Persistent operation uses an explicit opt-in systemd user service installer,
    not cron. systemd owns process restart and shutdown; its unit points at the
    canonical checkout by absolute path.
-6. `formation-window-status` is an explicit, reversible presentation tool. It
+7. `formation-window-status` is an explicit, reversible presentation tool. It
    is never run by spawn or install. Global tmux formats and any requested
    window rearrangement are journaled before mutation and restored only against
    the same tmux server.
-7. Existing Kimi/Codex mailbox-first instruction surfaces and their regression
+8. Existing Kimi/Codex mailbox-first instruction surfaces and their regression
    tests must remain mutually consistent in the same PR. If current `dev`
    already satisfies the contract, no cosmetic rewrite is required.
 
@@ -118,7 +122,11 @@ Use one strict JSON file per pane under the namespaced state directory:
   "snapshot_crc": "12345",
   "snapshot_since": 0,
   "attempted": false,
-  "attempt_result": ""
+  "attempt_result": "",
+  "attempted_at": 0,
+  "attempt_snapshot_crc": "",
+  "effect": "",
+  "parent_alerted": false
 }
 ```
 
@@ -160,7 +168,44 @@ unconfirmed paste or process crash cannot cause automatic retry. Persist one of
 The command output names pane, worker, sequence, age, and result, but contains
 no captured text or mailbox body.
 
-### 4.6 Dry run
+### 4.6 Effect verification and parent escalation
+
+One field observation showed why `receipt unconfirmed` must lead somewhere:
+the watcher attempted a nudge against verifier `%340`, reported the attempt,
+and the pane remained idle with the same unread sequence until a human
+intervened.
+
+After an attempted nudge, wait
+`FORMATION_MAIL_NUDGE_VERIFY` seconds (bounded positive integer; default 30).
+Success is not inferred from provider output. The helper records only an
+observable effect:
+
+- the pending badge cleared or advanced; or
+- the pane snapshot checksum changed.
+
+If neither happens, do not retry the prompt injection. Append exactly one
+durable mailbox alert containing fixed metadata:
+
+```text
+mail-nudge escalation: worker=<id> pane=<pane> seq=<seq>
+attempt remained unconfirmed after <N>s; operator/orchestrator inspection required
+```
+
+To make this routable, `formation spawn` additively records `parent_id` and
+`parent_pane` in the worker registry row and matching immutable pane options.
+The watcher requires those values to agree with the live pane before using
+them. It appends through `mailbox_append` and signals through
+`mailbox_signal_durable_row`; it never injects into the parent prompt.
+
+If a legacy worker has no trustworthy parent route, emit one bounded
+`parent-route-unavailable` alert to watcher stdout/state and set a visible
+tmux server option. Do not guess a recipient or retry the child.
+
+State marks `parent_alerted=true` before signaling, so a crash or unconfirmed
+parent signal cannot duplicate durable alerts. A later new pending sequence
+gets fresh state.
+
+### 4.7 Dry run
 
 `--dry-run` performs selection against existing state but does not create,
 update, or clear observation state. For a never-observed sequence it reports
@@ -168,7 +213,7 @@ update, or clear observation state. For a never-observed sequence it reports
 mock log before and after and requires byte identity plus zero paste/load/send
 operations.
 
-### 4.7 Watch mode
+### 4.8 Watch mode
 
 `--watch` uses a namespaced lock plus a PID identity record. A numeric live PID
 alone is not sufficient; reject PID reuse by verifying the executable/argv
@@ -312,6 +357,11 @@ Mail nudge:
 - stable snapshot younger than idle does not nudge;
 - stale plus idle plus both exclusive gates -> exactly one short shared nudge;
 - same sequence never retries, including unconfirmed result;
+- an attempted nudge followed by badge clear or snapshot change emits no parent
+  alert;
+- an attempted nudge with no effect emits exactly one durable parent alert and
+  uses zero parent prompt keystrokes;
+- missing/mismatched legacy parent routes are visible and never guessed;
 - new sequence gets a fresh timer;
 - dry run is byte-for-byte side-effect free;
 - PID reuse does not block startup or kill an unrelated process;
@@ -353,17 +403,20 @@ test_wake_submit.sh
 3. Every nonexclusive/mismatched path is proven zero-keystroke.
 4. The sole eligible path uses the shared nudge primitive exactly once and
    reports receipt unconfirmed.
-5. Dry-run for both helpers and service management is proven side-effect free.
-6. Service unit path is the canonical checkout and install remains explicit.
-7. Service uninstall leaves no verified daemon or live namespaced state.
-8. Window formatting/arrangement is explicit and journal-reversible.
-9. README/SKILL discovery prevents another reimplementation caused by an
+5. No-effect verification produces one durable parent alert and never a second
+   child prompt attempt.
+6. Dry-run for both helpers and service management is proven side-effect free.
+7. Service unit path is the canonical checkout and install remains explicit.
+8. Service uninstall leaves no verified daemon or live namespaced state.
+9. Window formatting/arrangement is explicit and journal-reversible.
+10. README/SKILL discovery prevents another reimplementation caused by an
    invisible file.
-10. Kimi/Codex rail surfaces and tests pass together.
-11. A real tmux smoke test demonstrates: nonexclusive badge remains
+11. Kimi/Codex rail surfaces and tests pass together.
+12. A real tmux smoke test demonstrates: nonexclusive badge remains
     zero-keystroke; an exclusive idle fixture receives one short pull nudge; a
-    second sweep sends none; window apply/revert restores the original format.
-12. Independent Kimi reviewer returns PASS or PASS WITH NOTE before merge.
+    second sweep sends none; a no-effect attempt alerts its parent exactly once;
+    window apply/revert restores the original format.
+13. Independent Kimi reviewer returns PASS or PASS WITH NOTE before merge.
     BLOCK prevents merge or service activation.
 
 ## 10. Ownership and activation
@@ -376,4 +429,3 @@ The implementer may not stop/restart the live primary watcher, install the
 systemd service, change global tmux status, merge, or close #168. After merge,
 hc-orch verifies the canonical checkout and asks the operator before replacing
 the manually running watcher with the reviewed service.
-
