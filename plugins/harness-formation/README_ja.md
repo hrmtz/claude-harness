@@ -150,10 +150,23 @@ spawn は semantic parent identity と parent pane route を分離して worker
 append を先に確定し、同じ zero-keystroke の relay-or-direct signal policy
 を通る。relay が死んでいても badge の direct fallback が働き、本文を
 prompt へ注入しない。
-parent pane は `TMUX_PANE` を信用せず process ancestry から解決する。
-stale/inherited な sibling id は無視し、実 parent pane も明示
-`FORMATION_SELF` も証明できなければ、返信不能 worker を作らないよう spawn
-を fail-closed にする。
+parent pane は `TMUX_PANE` を信用せず process ancestry から解決し、wrapper
+で root PID chain が切れる場合だけ caller の controlling TTY と
+`pane_tty` の一意一致を安全な fallback として使う。stale/inherited な
+sibling id と mutable window name は無視し、valid な locked/legacy identity
+を持つ実 parent pane も明示 `FORMATION_SELF` も証明できなければ、返信不能
+worker を作らないよう spawn を fail-closed にする。
+`formation status` は欠落/不正 route を registry を変更せず
+`parent=UNROUTABLE` と表示する。意図した parent pane 内の operator は
+`formation repair-parent <worker_id>` で一つの曖昧でない legacy row だけを
+修復できる。parent は現在 pane と locked identity から導出し、target child
+pane が live で worker の locked/legacy identity を保持することも検証する。
+child pane の parent option 2個と registry row を registry lock 下で同期し、
+変更前に registry/target-row/pane-option の preimage を
+`~/sanada_backup_persistent/`（`FORMATION_PARENT_REPAIR_BACKUP_ROOT` で変更可）
+へ保存して recovery path を表示する。set-option / registry 失敗時は pane
+option を rollback し、closed/recycled child pane と異なる non-null route は
+拒否する。pane と row が既に一致する再実行は byte-for-byte no-op になる。
 既知 pane の signal に失敗した場合、row/state は durable のまま exit `4`
 を返す。この code で `report` / `done` を自動 retry すると重複 row を作る
 ため再送しない。pane route が欠落または検証不能なら pull-only の exit `0`

@@ -290,9 +290,18 @@ Drop these patterns into the briefing so the worker knows its own protocol:
 - On completion:
   `formation done "<summary>"` — durable mailbox append plus the same
   zero-keystroke parent signal. `formation report` uses this route too.
-  Spawn resolves the parent pane from process ancestry, not by trusting a
-  possibly inherited `TMUX_PANE`; without a proven pane or an explicit
-  `FORMATION_SELF`, it refuses to create an unaddressable worker.
+  Spawn resolves the parent pane from process ancestry, with a unique
+  controlling-TTY / `pane_tty` match as the wrapper-safe fallback; it never
+  trusts a possibly inherited `TMUX_PANE`. Without a proven pane carrying a
+  valid locked/legacy identity or an explicit `FORMATION_SELF`, it refuses to
+  create an unaddressable worker. `formation status` shows legacy missing
+  routes as `parent=UNROUTABLE`; from the intended parent pane,
+  `formation repair-parent <worker_id>` repairs one unambiguous null row
+  only when the target child pane is live and still owns that worker identity.
+  It synchronizes the child pane's parent options and the registry row, writes
+  persistent Sanada preimages first, rolls pane options back on failure, and
+  prints the recovery path. Closed/recycled panes and mismatched non-null
+  routes are refused; an already exact pane+row pair is a no-op.
   If `report` / `done` / `ask` / `ack` / `resolve` exits `4`, its row or
   semantic transition is already durable but a known pane could not be
   signaled. Do not automatically resend `report` or `done` (that would append
