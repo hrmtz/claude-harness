@@ -471,3 +471,45 @@ user がやるのは Anthropic Console での rotate だけ。その後の反映
 - 7 施術のうち 5 件は D1 単一権威で no-loss 証明済み、**rhinoplasty と jalupro は STOP** (D1 に対応する tier がない)
 - 実害は極小 (1 ヶ月で chat 問い合わせ 1 件、うち価格提示 0 件)
 - **価格に触れない部分だけ** PR #11 として先行中 (presentation-only の重複ヘッダ修正)
+
+### 02:11 私の watcher の 2 つ目の死角 — 発言せずに稼働している agent を誤報する
+
+zc-coord に対して「unread seq 1343、17 分沈黙」と STALL を出したが、**pane を見たら稼働中だった** (shell command 実行中、1m45s 経過)。
+
+原因: 私の stall watcher は **mailbox の最終発言時刻**で沈黙を測っている。orchestrator は頻繁に報告するので機能するが、**coordinator は考える時間が長く、発言せずに作業する**。稼働中でも「沈黙」に見える。
+
+これで watcher の死角が 2 つ:
+
+| 死角 | 症状 |
+|---|---|
+| 読了したが着手していない | **検出できない** (未読ゼロ = 完了と同じ signal) |
+| 発言せずに稼働している | **誤報を出す** (mailbox の沈黙 ≠ 停止) |
+
+**盲目的に起こす前に pane を見たので、今回は誤って割り込まずに済んだ。** 今日 7 回踏んだ「計器を疑わず対象を断罪する」を、8 回目の直前で止めた形。
+
+正しい判定には mailbox だけでは足りず、**pane の活動状態**を併せて見る必要がある。既存の `formation-mail-nudge` は `pane_snapshot` の変化を見ているので、その情報を私の watcher にも取り込むのが筋。ただし kimi の TUI が常時再描画する問題 (gh #208 で `idle-never-stable` として named reason 化された) があるので、単純な snapshot 比較では足りない。
+
+**今夜は誤報 1 件で済んでいるので、watcher の改修は朝以降にする。** 誤報が増えるようなら本物を見逃す方向に慣れるため、放置はしない。
+
+### 02:11 zc-coord の裁定に決定的な発見 — 金額一致は同一性の証明にならない
+
+overlay の no-loss 証明について、zc-coord が mz-orch の手法を評価した中身が重要:
+
+> jalupro の super-hydro face-or-neck **70** と D1 の one-session **70** は、**同じ数字で違う商品**。金額だけで比較していれば PASS が返り、片方をもう片方で silent に置き換えていた。
+
+mz-orch は **row + tier の意味論**で証明しており、金額一致では照合していない。だから jalupro が STOP になった。
+
+**これは価格データの照合として一般化できる教訓。** 同じ金額の別商品は普通に存在する (施術の組み合わせ、部位違い、回数違い)。金額を key にした dedupe や照合は、医療価格のような領域では危険。
+
+私が「no-price-edit と明記されていても実装がそうとは限らない」と指示した以上に踏み込んだ検証で、実際にそれが 1 件を救っている。
+
+### 02:11 zs-orch の状態報告 — read-only を守り切っている
+
+routing 変更を ack したうえで、in flight の状態を明示:
+
+- mutation ゼロ、active subagent ゼロ
+- #60 unverifiable / read-only caveat 付き、#61 operator-blocked、**#63 は pause せず**、#64 は design のみ
+- #59 / #62 は partial live evidence を投稿
+- #65 は read-only の 11-checkout inventory、**local-only commit 628674d を保全、削除ゼロ**
+
+私が本番タグの停止を承認しなかった判断 (#63) が守られている。
