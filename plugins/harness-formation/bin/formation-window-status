@@ -319,11 +319,13 @@ def revert(args: argparse.Namespace, pid: int, path: Path) -> None:
     if args.dry_run:
         return
 
+    complete = layout_safe
     for name, saved in journal["global_options"].items():
         restore_option("global", None, name, saved)
     for pane, options in journal["pane_options"].items():
         if tmux("display-message", "-p", "-t", pane, "#{pane_id}", check=False).returncode:
             print(f"formation-window-status: pane {pane} disappeared; option restore unresolved", file=sys.stderr)
+            complete = False
             continue
         for name, saved in options.items():
             restore_option("pane", pane, name, saved)
@@ -337,10 +339,16 @@ def revert(args: argparse.Namespace, pid: int, path: Path) -> None:
     elif arrangement is not None:
         print("formation-window-status: layout drift; indices left unchanged", file=sys.stderr)
 
-    history = path.parent / "history"
-    history.mkdir(parents=True, exist_ok=True)
-    destination = history / f"{pid}-{int(time.time())}-{os.getpid()}.json"
-    os.replace(path, destination)
+    if complete:
+        history = path.parent / "history"
+        history.mkdir(parents=True, exist_ok=True)
+        destination = history / f"{pid}-{int(time.time())}-{os.getpid()}.json"
+        os.replace(path, destination)
+    else:
+        print(
+            f"formation-window-status: restoration incomplete; journal retained at {path}",
+            file=sys.stderr,
+        )
     tmux("refresh-client", "-S", check=False)
 
 

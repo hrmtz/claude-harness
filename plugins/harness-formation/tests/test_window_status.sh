@@ -149,4 +149,22 @@ jq -e '
 ' "$STATE" >/dev/null
 "$HELPER" revert | grep -Fq 'nothing to revert'
 
+# Window-ID drift restores independent options, refuses every index move, and
+# retains the active journal so a later correction can complete recovery.
+"$HELPER" apply --arrange >/dev/null
+jq '.windows += [{id:"@3",session:"s",index:2,worker:false}]' "$STATE" >"$STATE.tmp"
+mv "$STATE.tmp" "$STATE"
+: >"$LOG"
+before_indices="$(jq -c '[.windows[] | {id,index}]' "$STATE")"
+"$HELPER" revert >"$TMP/drift.out" 2>"$TMP/drift.err"
+grep -Fq 'layout drift; indices left unchanged' "$TMP/drift.err"
+grep -Fq 'journal retained' "$TMP/drift.err"
+[[ -e "$JOURNAL" ]]
+[[ "$before_indices" == "$(jq -c '[.windows[] | {id,index}]' "$STATE")" ]]
+! grep -Fq 'move-window' "$LOG"
+jq '.windows |= map(select(.id != "@3"))' "$STATE" >"$STATE.tmp"
+mv "$STATE.tmp" "$STATE"
+"$HELPER" revert >/dev/null
+[[ ! -e "$JOURNAL" ]]
+
 echo "test_window_status: passed"
