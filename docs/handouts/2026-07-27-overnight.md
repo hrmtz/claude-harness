@@ -872,3 +872,57 @@ mz-orch が exact head `7b519d81` で対応を報告:
 **200 → 401 の遷移**を要求する形。加えて **tri-state 出力と exit code の分離** — 「拒否された」と「確認できなかった」が同じ結果に潰れないようにしている。これも「片側だけでは証明にならない」への対処で、元の指摘と同じ性質。
 
 **ただし zc-review2 の再 review 待ちで、PASS はまだ出ていない。** #6 には「修正したと報告されている」と「独立に確認された」は別だと明記して追記した。前者を後者として読むのは、この issue の元の指摘 (拒否 ≠ revoke) と同じ誤りになる。
+
+### 03:12 product cluster の PR が全部片付いた — 残りは operator 判断だけ
+
+| PR | 結果 |
+|---|---|
+| #9 caolila drift rail | PASS WITH NOTE → dev `7530ea2` |
+| #11 overlay header dedup | PASS WITH NOTE → dev `afe5387` |
+| #12 #6 rotate 準備 | **round-1 BLOCK → round-2 NOTE → round-3 PASS** → dev `a082d94` |
+| #15 承認済 4 施術の authority 移行 | PASS WITH NOTE → dev `bd22996` |
+| #415 retrieval fail-closed (PRS-LLM) | PASS WITH NOTE → dev `e8645c1d` |
+
+merge 後の統合テスト 65 passed。**凍結 3 施術 (alar / rhinoplasty / jalupro) は untouched のまま**で、#5 / #6 も operator 実行まで open に保たれている。**本番 deploy・SOPS 編集・鍵 rotate・Docker/SSH・価格 data 変更、いずれもゼロ。**
+
+PR #12 の review が特に良い形だった。round-3 で:
+
+> Both core scripts changed this round so I **carried nothing over** and re-ran the whole battery.
+
+前ラウンドの PASS を引き継がず、変更されたスクリプトに全項目を再実行している。**前回通ったから今回も通るだろう、をしていない。**
+
+### 03:10 #216 — 私の主力 2 体を含む 5 体で escalation が黙って落ちていた
+
+nudge が hc-orch について `parent-route-unavailable` を出したので追った。稼働中 10 体のうち **5 体が `parent_id: null`**、境界は 07-27 01:21:55Z で、それ以前に spawn したものが全部該当した。bin/formation にその窓の commit は無いので、コード変更ではない。
+
+切り分けた結果:
+
+| 経路 | 状態 |
+|---|---|
+| **worker → 私** (`ask` / `report` / `done`) | **生きている。** pane env に `FORMATION_PARENT=indigo-lantern` が全 5 体入っている |
+| **nudge → 親** (registry 参照) | **死んでいる。** `parent_id=null` で宛先が無く drop |
+
+**自分から声を上げる worker は届き、黙り込んだ worker についての通知だけが消える。** escalation が最も要る場面で効かない。
+
+原因は親同定に 2 経路あり、片方しか pane 変数を読まないこと:
+
+```bash
+if [[ -n "$parent_pane" ]]; then                     # ancestry 解決 成功
+  parent_id="$(TMUX_PANE="$parent_pane" self_id)"    # ← pane 変数を読む。正しい
+else                                                  # 失敗
+  parent_id="$FORMATION_SELF"                         # ← env のみ
+fi
+```
+
+**lead pane には `FORMATION_*` env が 1 つも無い** (実測済)。`FORMATION_SELF` は spawn された worker にだけ export される。lead 自身は spawn されていないので env は空で、identity は tmux pane 変数 `@formation_identity_locked` にある。fallback は**目の前に正解があるのに env を見て空を書いている**。
+
+`registry_add` が空文字を null に落とすので、行は `parent_id: null` で durable になる。line 417 の warning は stderr に出るが、読むのは spawn を叩いた者だけで registry にも status にも残らない — **#211 と同じ形**。
+
+**応急修理は見送った。** `registry_get` は `tail -n1` なので追記だけで直せるが、#216 の修正がまさにその経路を書き換えるので、10 体稼働中に live state を手で patch すると実装と競合する。その間 escalation が効かないのは事実だが、pane を直接見る運用でカバーできている (今夜これで 3 回 idle の worker を拾った)。
+
+### 03:12 infra 側の残り
+
+- **hc-orch**: #211 実装完了 (`104dbdc`、A+B lifecycle/state/status、full safe Formation suites PASS)。ただし **origin に branch も PR も無く local のみ**だったので、push → PR → exact head 報告を要求した。今夜 `feat/agy-migration` を見つけた直後なので、この形は放置しない
+- **hx-orch**: #253 (symlink follow、security 優先) と #254+#257 (test 隔離) を 2 worktree に分離して着手
+- **#216**: #211 の review 通過後に hc-orch へ渡す (同じファイルなので並行させない)
+- reviewer 枠 (verifier / verifier2、kimi) は温存。実装が codex なので cross-family 成立
