@@ -243,6 +243,37 @@ timeout 2 env FORMATION_HOME="$home" "$HELPER" --watch --interval 1 --stale 1 --
 kill -0 "$$"
 [[ ! -e "$home/state/mail-nudge/watch.pid.json" ]]
 
+# --quiet drops the routine lines and keeps every line that needs a human.
+# Both halves matter: a filter that also swallows escalations is worse than the
+# noise it removes, because the reader now trusts a stream that omits the alert.
+home="$TMP/quiet"
+write_fixture "$home" 1 1
+FORMATION_HOME="$home" "$HELPER" --quiet --stale 1 --idle 1 --verify 1 >"$TMP/quiet-observe.out"
+[[ ! -s "$TMP/quiet-observe.out" ]]
+# State is still written, so suppression is presentation-only.
+[[ -e "$home/state/mail-nudge/pane-42.json" ]]
+age_state "$home/state/mail-nudge/pane-42.json"
+jq '.pane.snapshot="changed"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+FORMATION_HOME="$home" "$HELPER" --quiet --stale 1 --idle 1 --verify 1 >"$TMP/quiet-change.out"
+[[ ! -s "$TMP/quiet-change.out" ]]
+# Without --quiet the same two sweeps are what floods a nine-pane fleet.
+home="$TMP/loud"
+write_fixture "$home" 1 1
+FORMATION_HOME="$home" "$HELPER" --stale 1 --idle 1 --verify 1 >"$TMP/loud-observe.out"
+grep -Fq 'result=would-observe' "$TMP/loud-observe.out"
+# Actionable output survives --quiet: attempt receipt, then the parent alert.
+home="$TMP/quiet-actionable"
+write_fixture "$home" 1 1
+FORMATION_HOME="$home" "$HELPER" --quiet --stale 1 --idle 1 --verify 1 >/dev/null
+age_state "$home/state/mail-nudge/pane-42.json"
+FORMATION_HOME="$home" "$HELPER" --quiet --stale 1 --idle 1 --verify 1 >"$TMP/quiet-nudge.out"
+grep -Fq 'receipt=unconfirmed' "$TMP/quiet-nudge.out"
+quiet_state="$home/state/mail-nudge/pane-42.json"
+jq '.attempted_at=0' "$quiet_state" >"$quiet_state.tmp" && mv "$quiet_state.tmp" "$quiet_state"
+jq '.pane.snapshot="post-attempt repaint"' "$CFG" >"$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+FORMATION_HOME="$home" "$HELPER" --quiet --stale 1 --idle 1 --verify 1 >/dev/null
+[[ "$(grep -c 'mail-nudge escalation:' "$home/mailbox/log.jsonl")" -eq 1 ]]
+
 # Discovery is additive only: no spawn/install/hook path auto-starts watcher.
 ! rg -n 'formation-mail-nudge[[:space:]]+--watch' \
   "$HERE/../bin/formation" "$HERE/../hooks" "$HERE/../../../scripts" >/dev/null
