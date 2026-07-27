@@ -213,6 +213,23 @@ State marks `parent_alerted=true` before signaling, so a crash or unconfirmed
 parent signal cannot duplicate durable alerts. A later new pending sequence
 gets fresh state.
 
+The watcher also has a bounded no-attempt ceiling,
+`FORMATION_MAIL_NUDGE_NO_ATTEMPT_ALERT` (default 300 seconds). If one pending
+sequence remains unchanged beyond that ceiling but no injection was attempted
+because the pane never satisfied the idle heuristic or an exclusive-input gate,
+send the same at-most-once parent alert with a distinct reason:
+`idle-never-stable`, `nonexclusive`, or `registry-route-invalid`. This alert
+does not authorize a child prompt write. It prevents “never attempted” from
+being silently conflated with “attempted but ineffective”.
+
+Receipts and state therefore distinguish:
+
+- `not-attempted`: no child prompt write occurred, with a bounded reason;
+- `attempted-unconfirmed`: one shared child nudge was attempted;
+- `effective`: durable worker activity or badge progress followed;
+- `parent-alerted-no-attempt`;
+- `parent-alerted-no-effect`.
+
 ### 4.7 Dry run
 
 `--dry-run` performs selection against existing state but does not create,
@@ -370,6 +387,9 @@ Mail nudge:
   alert;
 - an attempted nudge with no effect emits exactly one durable parent alert and
   uses zero parent prompt keystrokes;
+- a stale sequence that never becomes eligible for an attempt emits exactly one
+  distinct no-attempt parent alert and uses zero child/parent prompt
+  keystrokes;
 - missing/mismatched legacy parent routes are visible and never guessed;
 - new sequence gets a fresh timer;
 - dry run is byte-for-byte side-effect free;
