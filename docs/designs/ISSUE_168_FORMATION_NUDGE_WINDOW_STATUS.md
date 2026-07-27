@@ -177,11 +177,15 @@ intervened.
 
 After an attempted nudge, wait
 `FORMATION_MAIL_NUDGE_VERIFY` seconds (bounded positive integer; default 30).
-Success is not inferred from provider output. The helper records only an
-observable effect:
+Success is not inferred from `receipt unconfirmed` or from a repainting pane.
+The helper records only a durable observable effect:
 
-- the pending badge cleared or advanced; or
-- the pane snapshot checksum changed.
+- the pending badge cleared or advanced, proving the inbox was pulled; or
+- the mailbox gained a new row whose canonical `from` is the target worker and
+  whose timestamp/sequence is later than the attempt.
+
+A pane snapshot change is not success evidence: a spinner, startup dialog, or
+human navigation can repaint without the worker reading or acting on mail.
 
 If neither happens, do not retry the prompt injection. Append exactly one
 durable mailbox alert containing fixed metadata:
@@ -357,7 +361,8 @@ Mail nudge:
 - stable snapshot younger than idle does not nudge;
 - stale plus idle plus both exclusive gates -> exactly one short shared nudge;
 - same sequence never retries, including unconfirmed result;
-- an attempted nudge followed by badge clear or snapshot change emits no parent
+- an attempted nudge followed by badge clear/advance or a durable worker report
+  emits no parent
   alert;
 - an attempted nudge with no effect emits exactly one durable parent alert and
   uses zero parent prompt keystrokes;
