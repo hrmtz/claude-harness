@@ -33,15 +33,36 @@ AGENT="${1:?agent name required (msg 'to' field value)}"
 PANE="${2:?tmux session/pane target}"
 MAILBOX="${MAILBOX:-$MAILBOX_LOG}"
 RELAY_READY_FILE="${FORMATION_RELAY_READY_FILE:-}"
+RELAY_PID_FILE="${FORMATION_RELAY_PID_FILE:-}"
+RELAY_STARTING_PID_FILE="${FORMATION_RELAY_STARTING_PID_FILE:-}"
 POLL_INTERVAL="${FORMATION_RELAY_POLL_INTERVAL:-1}"
 LOG_PREFIX="[formation-relay:$AGENT→$PANE]"
 
-relay_ready_cleanup() {
-  [[ -n "$RELAY_READY_FILE" && -f "$RELAY_READY_FILE" ]] || return 0
-  [[ "$(cat "$RELAY_READY_FILE" 2>/dev/null || true)" == "$$" ]] &&
-    rm -f "$RELAY_READY_FILE"
+relay_owned_file_cleanup() {
+  local file
+  for file in "$RELAY_READY_FILE" "$RELAY_PID_FILE" "$RELAY_STARTING_PID_FILE"; do
+    [[ -n "$file" && -f "$file" ]] || continue
+    [[ "$(cat "$file" 2>/dev/null || true)" == "$$" ]] && rm -f "$file"
+  done
 }
-trap relay_ready_cleanup EXIT
+trap relay_owned_file_cleanup EXIT
+
+relay_publish_pid() {
+  local file="$1" tmp
+  [[ -n "$file" ]] || return 0
+  mkdir -p "$(dirname "$file")" || return
+  tmp="${file}.$$"
+  printf '%s\n' "$$" > "$tmp" || return
+  mv "$tmp" "$file"
+}
+
+# Private lifecycle ownership is visible to `formation reap` immediately, but
+# senders still ignore this file. The public relay pidfile is published only
+# after the mailbox high-water is anchored below.
+if ! relay_publish_pid "$RELAY_STARTING_PID_FILE"; then
+  echo "$LOG_PREFIX cannot publish starting PID ownership" >&2
+  exit 70
+fi
 
 # Track the mailbox sequence high-water, not a physical line offset. Retention
 # and recovery may replace/truncate the file; seq remains monotonic in
@@ -53,10 +74,18 @@ fi
 LAST_SEQ="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
 echo "$LOG_PREFIX start, agent=$AGENT pane=$PANE mailbox=$MAILBOX last_seq=$LAST_SEQ"
 if [[ -n "$RELAY_READY_FILE" ]]; then
-  mkdir -p "$(dirname "$RELAY_READY_FILE")"
-  ready_tmp="${RELAY_READY_FILE}.$$"
-  printf '%s\n' "$$" > "$ready_tmp"
-  mv "$ready_tmp" "$RELAY_READY_FILE"
+  relay_publish_pid "$RELAY_READY_FILE" || {
+    echo "$LOG_PREFIX cannot publish ready marker" >&2
+    exit 70
+  }
+fi
+if ! relay_publish_pid "$RELAY_PID_FILE"; then
+  echo "$LOG_PREFIX cannot publish ready relay PID" >&2
+  exit 70
+fi
+if [[ -n "$RELAY_STARTING_PID_FILE" &&
+      "$(cat "$RELAY_STARTING_PID_FILE" 2>/dev/null || true)" == "$$" ]]; then
+  rm -f "$RELAY_STARTING_PID_FILE"
 fi
 
 process_new_lines() {
