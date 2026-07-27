@@ -321,6 +321,61 @@ codex_cache_preflight() {
   CODEX_LAUNCH_BIN="$safe_launcher"
 }
 
+start_mailbox_relay() {
+  local name="$1" pane_id="$2" session_name="$3" cli="$4"
+  local relay_log_dir="${FORMATION_RELAY_LOG_DIR:-/tmp}"
+  local relay_log="$relay_log_dir/formation_relay_${name}.log"
+  local relay_pid_file="$FORMATION_DIR/$name.relay_pid"
+  local relay_ready_file="$FORMATION_DIR/$name.relay_ready"
+  local relay_starting_pid_file="$FORMATION_DIR/$name.relay_starting_pid"
+  local ready_attempts="${FORMATION_RELAY_READY_ATTEMPTS:-40}"
+  local ready_sleep="${FORMATION_RELAY_READY_SLEEP:-0.05}"
+  local relay_ready=0 i relay_pid
+
+  mkdir -p "$relay_log_dir"
+  rm -f "$relay_pid_file" "$relay_ready_file" "$relay_starting_pid_file"
+  FORMATION_RELAY_READY_FILE="$relay_ready_file" \
+    FORMATION_RELAY_PID_FILE="$relay_pid_file" \
+    FORMATION_RELAY_STARTING_PID_FILE="$relay_starting_pid_file" \
+    nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
+    > "$relay_log" 2>&1 &
+  relay_pid=$!
+
+  # Do not publish a relay PID until the daemon has anchored its mailbox
+  # high-water and is ready to observe later appends. Publishing the PID first
+  # creates a startup race where senders defer signaling to a live-but-unready
+  # relay and that relay then anchors past their row.
+  for i in $(seq 1 "$ready_attempts"); do
+    if [[ "$(cat "$relay_ready_file" 2>/dev/null || true)" == "$relay_pid" &&
+          "$(cat "$relay_pid_file" 2>/dev/null || true)" == "$relay_pid" ]] &&
+       mailbox_relay_alive "$relay_pid" "$name"; then
+      relay_ready=1
+      break
+    fi
+    kill -0 "$relay_pid" 2>/dev/null || break
+    sleep "$ready_sleep"
+  done
+  if [[ "$relay_ready" -eq 1 ]]; then
+    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay_pid=$relay_pid log=$relay_log"
+    return 0
+  fi
+
+  if mailbox_relay_alive "$relay_pid" "$name"; then
+    # A slow high-water read is not daemon death. The relay owns its private
+    # starting pidfile and will atomically publish the sender-visible pidfile
+    # itself after it becomes ready. Reap can stop either lifecycle state.
+    echo "warn: relay daemon for $name is alive but still starting; PID remains unpublished until ready; tail $relay_log" >&2
+    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=PENDING log=$relay_log"
+    return 0
+  fi
+
+  wait "$relay_pid" 2>/dev/null || true
+  rm -f "$relay_pid_file" "$relay_ready_file" "$relay_starting_pid_file"
+  echo "warn: relay daemon for $name exited before ready; tail $relay_log" >&2
+  echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=DEAD log=$relay_log"
+  return 1
+}
+
 cmd_spawn() {
   # placement default = new-window (= 2026-05-25 ember-tanuki incident: split-window
   # で worker の SessionStart hook が tmux rename-window 走らせると parent pane の
@@ -555,40 +610,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   # Auto-start mailbox relay daemon: inotifywait on mailbox and signal messages
   # addressed to this worker without touching its TUI prompt. The worker pulls
   # the durable body with `formation inbox`.
-  local relay_log="/tmp/formation_relay_${name}.log"
-  local relay_pid_file="$FORMATION_DIR/$name.relay_pid"
-  local relay_ready_file="$FORMATION_DIR/$name.relay_ready"
-  rm -f "$relay_pid_file" "$relay_ready_file"
-  FORMATION_RELAY_READY_FILE="$relay_ready_file" \
-    nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
-    > "$relay_log" 2>&1 &
-  local relay_pid=$!
-
-  # Do not publish a relay PID until the daemon has anchored its mailbox
-  # high-water and is ready to observe later appends. Publishing the PID first
-  # creates a startup race where senders defer signaling to a live-but-unready
-  # relay and that relay then anchors past their row.
-  local relay_ready=0 i
-  for i in $(seq 1 40); do
-    if [[ "$(cat "$relay_ready_file" 2>/dev/null || true)" == "$relay_pid" ]] &&
-       mailbox_relay_alive "$relay_pid" "$name"; then
-      relay_ready=1
-      break
-    fi
-    kill -0 "$relay_pid" 2>/dev/null || break
-    sleep 0.05
-  done
-  if [[ "$relay_ready" -ne 1 ]]; then
-    echo "warn: relay daemon for $name did not become ready; tail $relay_log" >&2
-    kill "$relay_pid" 2>/dev/null || true
-    wait "$relay_pid" 2>/dev/null || true
-    rm -f "$relay_pid_file" "$relay_ready_file"
-    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=DEAD log=$relay_log"
-    return 1
-  fi
-  printf '%s\n' "$relay_pid" > "$relay_pid_file"
-
-  echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay_pid=$relay_pid log=$relay_log"
+  start_mailbox_relay "$name" "$pane_id" "$session_name" "$cli"
 }
 
 cmd_msg() {
@@ -836,20 +858,26 @@ cmd_reap() {
   # pane that is about to die.
   local relay_pid_file="$FORMATION_DIR/$worker_id.relay_pid"
   local relay_ready_file="$FORMATION_DIR/$worker_id.relay_ready"
-  if [[ -f "$relay_pid_file" ]]; then
-    local rpid; rpid="$(cat "$relay_pid_file" 2>/dev/null || true)"
+  local relay_starting_pid_file="$FORMATION_DIR/$worker_id.relay_starting_pid"
+  local rpid=""
+  rpid="$(cat "$relay_pid_file" 2>/dev/null || true)"
+  [[ -n "$rpid" ]] ||
+    rpid="$(cat "$relay_starting_pid_file" 2>/dev/null || true)"
+  # Close the promotion race: if starting disappeared between reads, the
+  # ready relay pidfile must now be visible.
+  [[ -n "$rpid" ]] || rpid="$(cat "$relay_pid_file" 2>/dev/null || true)"
+  if [[ -n "$rpid" ]]; then
     if mailbox_relay_alive "$rpid" "$worker_id"; then
       # Order matters: kill the inotifywait child first while its parent
       # bash is still alive so pkill -P can find it. If we kill bash first,
       # inotifywait gets reparented to init and leaks past reap.
       pkill -P "$rpid" 2>/dev/null || true
       kill "$rpid" 2>/dev/null || true
-    elif [[ -n "$rpid" ]]; then
+    else
       echo "warn: stale relay pidfile for $worker_id points to non-relay pid $rpid; not killing it" >&2
     fi
-    rm -f "$relay_pid_file"
   fi
-  rm -f "$relay_ready_file"
+  rm -f "$relay_pid_file" "$relay_ready_file" "$relay_starting_pid_file"
 
   if [[ "$pane_id" =~ ^%[0-9]+$ ]]; then
     tmux kill-pane -t "$pane_id" 2>/dev/null || true
