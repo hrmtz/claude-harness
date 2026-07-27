@@ -109,6 +109,24 @@ def still_deletable(path: Path, root: Path, now: float) -> bool:
     return not contains_keep
 
 
+def make_tree_owner_deletable(path: Path) -> None:
+    """Add owner rwx to real directories so rmtree can unlink their children."""
+    owner_access = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+    for base, directories, _files in os.walk(path, topdown=True, followlinks=False):
+        base_path = Path(base)
+        base_mode = base_path.lstat().st_mode
+        if stat.S_ISDIR(base_mode):
+            os.chmod(base_path, base_mode | owner_access, follow_symlinks=False)
+        for name in directories:
+            child = base_path / name
+            try:
+                child_mode = child.lstat().st_mode
+            except FileNotFoundError:
+                continue
+            if stat.S_ISDIR(child_mode):
+                os.chmod(child, child_mode | owner_access, follow_symlinks=False)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -174,6 +192,19 @@ def main() -> int:
                 )
                 print(
                     f"error: candidate changed during scan; stopped before {path.name}",
+                    file=sys.stderr,
+                )
+                return 3
+            make_tree_owner_deletable(path)
+            if not still_deletable(path, root, args.now):
+                append_log(
+                    args.log.expanduser(),
+                    f"{stamp} abort post_permission_revalidation_failed={path.name} "
+                    f"deleted={deleted}",
+                )
+                print(
+                    f"error: candidate changed while preparing deletion; "
+                    f"stopped before {path.name}",
                     file=sys.stderr,
                 )
                 return 3
