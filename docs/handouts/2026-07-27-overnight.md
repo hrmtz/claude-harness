@@ -553,3 +553,42 @@ spawn 時の注意も添えた: **relay が DEAD で起動する事象が今夜 
 - **jalupro**: super-hydro face-or-neck 70 と D1 one-session 70 は**同じ数字で違う商品**
 
 どちらも「overlay を消せば掲載価格が消える」が「D1 に寄せれば別物に置き換わる」という状態。**operator にしか決められない。**
+
+### 02:20 infra 側 完了 — open PR ゼロ
+
+**PR #247 が merge された** (squash `7f719c925`)。これで私の 2 repo に open PR は無い。
+
+`#235` の観測窓を開ける条件が揃ったので rust-crane に中継した。**ただし before-gate を付けた**: merge された snapshot を seq 1178 の基準線 (telemetry 52 行 / activation 19.2 / 他 4 項 0.0 / ghost_evidence 空) と厳密に照合し、**差分があれば観測開始前に報告**。before が動いていたら測定全体が無効になる。
+
+中継が必要だったのは、**rust-crane が formation registry に居ない**から。user が直接立てた peer pane で `formation spawn` 経由ではないため、hx-orch から直接 msg が届かない。これも「経路が存在しない」形の一種で、hx-orch が正しく私に上げてきた。
+
+### 02:19 私が中継器になりかけたので、運用を zc-coord に投げた
+
+nudge の alert が `FORMATION_PARENT` 固定で私に届くため、**product cluster の滞留を私が毎回転送する形**になっていた。今夜だけで 6 回。
+
+構造的に良くない:
+- 私の側で 5 分おきに鳴る
+- **zc-coord が直接気付く経路がない**
+- 転送が遅れれば向こうが止まる
+
+当面の対処として「**あなた自身が配下の pending を定期的に見てほしい**」と依頼した (`tmux display-message -p -t <pane> '#{@formation_mail_pending}'` で取れる。私の watcher と同じ情報源)。私は転送を続けるが、待たない方が速い。
+
+### 02:19 私の記述を 1 つ訂正 (mz-orch の clarification)
+
+STOP 行について私は handout に「**今この瞬間も患者に表示されている**」と書いたが、正確には:
+
+> **chat 経由では到達可能。ただし public website / D1 には必ずしも存在しない。**
+
+operator の判断が「既に chat で publish されている overlay 行が今も有効か」であって「新しい価格を足すか」ではない、という整理は変わらない。
+
+### 02:20 良かった検証の形 (記録として)
+
+今夜、実装者と reviewer の双方に共通していた良い姿勢:
+
+- **rust-crane (#247)**: 修正量そのものを可視化する設計 (`telemetry_excluded`)。黙って直すのでなく「以前どれだけ混ざっていたか」を出した
+- **verifier2**: その excluded の数字自体を mixed fixture で独立再現。**canonical に一切触れずに**検証
+- **mz-orch (#5)**: 金額でなく row + tier の意味論で照合。だから「同じ 70 で違う商品」を捕まえた
+- **pl-orch (#415)**: 合成値でなく **vector 由来の cosine -1** を production 経路に通した。実際に起こりうる形で fail-closed を確認
+- **mz-orch (PR #11)**: 「実装が exact duplicate を collapse し、**test が multiplicity を捨てていた**」— test 自体が欠陥を隠していた形を自分で見つけた
+
+共通するのは **「通ったこと」でなく「通らないはずのものが通らないこと」を確かめている**点。
