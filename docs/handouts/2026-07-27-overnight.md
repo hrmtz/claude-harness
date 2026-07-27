@@ -592,3 +592,63 @@ operator の判断が「既に chat で publish されている overlay 行が�
 - **mz-orch (PR #11)**: 「実装が exact duplicate を collapse し、**test が multiplicity を捨てていた**」— test 自体が欠陥を隠していた形を自分で見つけた
 
 共通するのは **「通ったこと」でなく「通らないはずのものが通らないこと」を確かめている**点。
+
+### 02:27 #211 の根本原因が割れた — 「配線されているように見えて死んでいる」の正体
+
+今夜 6 回踏んだ relay=DEAD を、推測でなくコードで確定した。`bin/formation` の spawn 経路:
+
+```bash
+registry_add ...                    # line 553 ← 先に登録
+for i in $(seq 1 40); do            # line 572 ← 40 × 0.05s = 2.0 秒 固定
+  ... && break; sleep 0.05
+done
+if [[ "$relay_ready" -ne 1 ]]; then # line 581
+  kill "$relay_pid"                 #        ← relay を殺す
+  rm -f "$relay_pid_file" ...
+  return 1
+fi
+```
+
+**readiness 予算が 2.0 秒ハードコード。** relay は起動時に mailbox の high-water を anchor してから ready を宣言する (この順序自体は正しい。先に PID を publish すると送信側が「生きているがまだ観測していない relay」に signal を委ね、その relay が送信行を追い越して anchor する race になる)。だが agent が増えるほど anchor が遅れ、**後発 worker だけが 2 秒に収まらず落ちる**。初報で「先行 4 体は生存、後発 3 体だけ DEAD」と書いたのは worker 固有の問題ではなく、**負荷依存の timeout** だった。
+
+実害が大きいのは `registry_add` が **gate より前**にあるから:
+
+| | timeout 後の状態 |
+|---|---|
+| registry | **登録済み** → `formation status` に健全な worker として並ぶ |
+| pane | **生存** → 画面上も正常 |
+| relay | kill 済み、pid file も削除 |
+
+送信は成功し、badge は立たず、badge を見る nudge も発火しない。**外から正常と区別できない。** `return 1` を読むのは spawn を叩いた者だけで、以降どこにも残らない。
+
+**直し方は 2 つ必要で、優先順位が逆に見える。** 予算を 2 秒→10 秒に伸ばすのは最小の変更だが、「何秒なら十分か」に根拠がなく再発が遅れるだけ。本体は **timeout を registry に記録して `formation status` に出すこと**で、予算を伸ばしても失敗は残りうる以上、**失敗が可視であること**は独立に必要。今夜 6 回とも気付けたのは spawn 直後の stdout を読んでいたからで、cron や別 session からの spawn なら気付けなかった。
+
+**実装はしていない** (夜間、設計変更は保留)。#211 に記録済み。
+
+なお zc-coord が独立に同じ結論に到達している (「formation は daemon の起動を 2 秒しか待たない」)。私のコード読みと突き合わせて一致した。
+
+### 02:26 #235 の観測窓を開けた — rust-crane の 2 つの判断を承認
+
+before-gate の照合結果は **「差分あり、ただし判定を無効化しない」**。
+
+- **一致 (判定に効く側)**: prevention / endorsement / correction / pred_error は全部 0.0 のまま、ghost_evidence 空のまま、corpus.live 506 不変
+- **動いた側**: telemetry 52→56 行 / activation 寄与 19.2→20.4。原因は **07-27 00:19 UTC の実 search 1 件** (07-25 以来はじめて) が memory 4 件を bump したこと
+
+修正由来の drift ではない。rust-crane は contract 等価性も仮定でなく確認していて、「aggregate の変更は deleted_at join だけ、canonical では excluded = 0 行 → join が何も落とさないので算術的に同一」。verifier2 の P1 が統制下で同じ命題を示している。
+
+rust-crane 自身の判断 2 件を承認した:
+
+1. **baseline を 02:21 UTC の snapshot に張り替え**。数字は判定箇所で同一だが、**merged script で採取した方を before にする**ため。数字が同じでも採取器が違えば、差が出たとき「修正のせいか採取器のせいか」を切り分けられない。14 日窓のうち 3 時間が対価
+2. **受入基準 B を窓を開ける前に締め直し**。旧「activation 寄与の 20% (= 3.8)」固定 → 新「**after-snapshot 内で測った** activation 寄与の 20%」。固定値は activation が積み上がるほど相対的に緩くなる。**閾値が時間経過だけで甘くなるならそれは閾値ではない**
+
+2 が特に良い。**窓を開ける前にやった**のが決定的で、after を見てから閾値をいじれば正当な修正でも post-hoc と区別不能になる。今日私が #210 で『ラベルだけ足して close』を差し戻したのと同じ形を、自分で回避している。
+
+窓: **2026-07-27 02:21 UTC → 08-10 02:21 UTC**。canonical への書き込みゼロ。
+
+**14 日後の再測を誰がやるのか**を #235 に書き残すよう指示した。窓が閉じる 08-10 にこの session も pane も存在しない可能性が高く、**measurement を仕込んで観測者が消える**のが一番ありがちな失敗なので。
+
+### 02:27 watcher の誤報 2 件目 — また pane を見てから判断した
+
+zs-orch に STALL (unread seq 1356、16 分沈黙) が出たが、pane は **4 分 11 秒稼働中**だった。02:11 の zc-coord と同じ、「発言せずに稼働している agent を沈黙と誤認する」死角。
+
+**2 回とも起こす前に pane を見たので割り込んでいない。** ただし誤報が続くと本物を見逃す方向に慣れるので、watcher の改修は朝以降に回すという判断は維持する (放置ではない)。
