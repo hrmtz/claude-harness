@@ -718,3 +718,76 @@ sentinel 9 ケース × 47 派生形で leak 0 件、29 テスト再実行も PA
 **#6 の rotate 手順そのものなので、operator が承認した瞬間に踏む地雷だった。** 承認前に見つかったのが正しいタイミング。
 
 zc-review2 は verdict を出す前に **自分の検出器が hash-prefix leak を実際に捕まえるかの陽性対照**を通している。credential 検出器は「何も出ない」が正常値なので、対照なしの clean 判定は無意味。今夜 infra 側で私が踏んだ穴の正反対。
+
+### 02:53 8 回目の同じ失敗 — ただし今回は触る前に止まった
+
+zc-coord の pane にこう見えた:
+
+```
+──────────────────────────────────────────── formation-zc-coord ──
+❯ zs-orch の D1 照合結果が出たら教えてください
+───────────────────────────────────────────────────────────────────
+```
+
+入力枠の罫線に挟まれた文字列。**未送信の draft** と判断し、user にもそう報告した。SKILL が警告する「copy-mode に Enter を食われて未送信のまま残る」症状に一致して見えたため。Enter を 2 回送っても消えず、30 秒待っても不変。
+
+**ここで「詰まりを解消する」操作に入る前に、陽性対照を取った:**
+
+```bash
+tmux send-keys -t %368 -l "X"   # → 表示が「❯ X」だけになった
+tmux send-keys -t %368 BSpace   # → 元の日本語文が戻った
+```
+
+1 文字で表示全体が置き換わった。**追記されれば draft、置換されればゴースト。** box は空で、あれは直前入力の残像だった。submit 済み行を確認しても入ったのは私のメッセージのみで、連結も起きていない。Enter 2 回は空の box への操作で無害 (`wake.sh` のコメントに "harmless on an already-submitted (empty) prompt" と明記されている)。
+
+**今夜 8 回目の「計器を確かめずに対象を断じる」。** 実害が Enter 2 回で止まったのは、口に出した後・実際に触る前に対照を取ったから。7 回目までは対照を取らずに進んでいた。
+
+### 02:53 今夜起票した 3 件は同じ根だった
+
+私個人の不注意で片付けず、検出手段の欠陥として起票した。
+
+| issue | 形 | 中身 |
+|---|---|---|
+| **#211** | 壊れているのに**正常に見える** | relay=DEAD。registry 登録済・pane 生存・relay だけ死亡 |
+| **#214** | 正常なのに**失敗に見える** | `signal=pending` は relay 生存確認済の最良枝。zc-review がこれを配送失敗と読んで verdict を再送した |
+| **#215** | 空なのに**詰まって見える** | 上記のゴースト。判別法が破壊的 (1 文字打つ) しか無い |
+
+**pane / rail の状態を、外から正しく名付けられていない**という一つの問題に見える。
+
+#214 が特に分かりやすい。3 つの出力のうち:
+
+| 出力 | 実際 | どう読めるか |
+|---|---|---|
+| `signal=pending` | **最良** (relay が配送) | 「まだ届いてない…?」 |
+| `signaled ... directly because relay is unavailable` | 次善 | 普通 |
+| `WARN (exit 4): **row is durable**, but pane could not be signaled` | **失敗** | 「durable なら大丈夫か」 |
+
+**健全な方が不安な文言、失敗した方が安心な文言、という逆転**が起きている。zc-review の再送は責められない — seq 番号を添えて「既に届いていれば無視して」と明記しており、曖昧な出力への対処としては丁寧な方。直すべきは worker の判断ではなく出力の文言。
+
+### 02:52 #211 の実装を hc-orch に渡した — 設計と実装を分けた
+
+user の明示指示 (「オーケストレーターの仕事は設計。実装は下」) に従い、設計 3 点を渡して実装は subagent に振らせた。hc-orch の受領返信:
+
+> #211 design accepted; defining acceptance criteria and delegating implementation; will preserve live relays and require **slow-daemon regression plus broken-daemon positive control**
+
+受入基準に 2 つ入れさせた:
+
+1. **負荷下で実際に落ちることを先に再現してから直す。** 「2 秒では足りない」を仮定にしない
+2. **陽性対照** — 本当に壊れた daemon (lib 退避 / syntax error) で **DEAD が正しく出る**こと。(1) を入れると「何でも待つ」方向に倒れうるので、これが無いと逆向きに壊れる
+
+**窓を 10 秒に伸ばす案は採用しなかった。** 現状のコードが壊しているのは待ち時間ではなく **健全な daemon を kill していること** (line 583) で、kill を落とせば「何秒なら十分か」という答えのない問いが消える。a1a4836 が閉じた race は PID の publish を遅らせることで閉じており、kill は race 対策として必要ではなかった。
+
+### 02:52 hc-orch が私の checkout で作業していたので分離させた
+
+cwd が `~/projects/claude-harness` — 私が handout を commit し続けている primary checkout だった。index が競合する。**1 checkout 1 writer** の原則を伝え、実装 subagent には専用 worktree を切らせた。
+
+併せて今夜の事故も渡した: 一時 worktree のパスが codex hook config に 27 本 / kimi に 16 本焼き付き、**その worktree を消したら guard が fail open になる寸前**だった件。**worktree から hook installer を走らせるな**と明示。
+
+### 02:53 zc-coord が product cluster を自走させている
+
+私が起こした後、自分で配下を捌いている:
+
+- **pl-orch を起こした** — PR #415 の verdict を持ったまま idle だった件。verdict の中身 (95 tests 再現、#397 PoC 再攻撃、real-path の antiparallel cosine) を要約して渡し、gate が本物だったことを示している
+- **zs-orch を評価した** — 「control query が空配列でなく明示的な 7403 を返したので、absence query を走らせること自体を拒否し、先の結論を自主的に撤回した。**それが measurement と guess の差**」
+
+私からの転送を待たずに動いている。cluster 分離が機能している。
