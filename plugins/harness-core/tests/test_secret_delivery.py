@@ -57,6 +57,11 @@ class SecretDeliveryTest(unittest.TestCase):
         session: str = "session-108",
     ) -> subprocess.CompletedProcess[str]:
         event = {"prompt": prompt, session_key: session}
+        return self.run_hook_event(event)
+
+    def run_hook_event(
+        self, event: dict[str, object]
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["python3", str(PROMPT_HOOK)],
             input=json.dumps(event),
@@ -66,14 +71,20 @@ class SecretDeliveryTest(unittest.TestCase):
             check=False,
         )
 
+    def authorization_prompt(
+        self,
+        destination: str = "scp://deploy@taketsuru/srv/secrets/credentials.txt",
+    ) -> str:
+        return (
+            "AUTHORIZE_SECRET_DELIVERY "
+            f"source={self.source} destination={destination} representation=file"
+        )
+
     def authorize(
         self,
         destination: str = "scp://deploy@taketsuru/srv/secrets/credentials.txt",
     ) -> tuple[str, subprocess.CompletedProcess[str]]:
-        result = self.run_hook(
-            "AUTHORIZE_SECRET_DELIVERY "
-            f"source={self.source} destination={destination} representation=file"
-        )
+        result = self.run_hook(self.authorization_prompt(destination))
         match = RECEIPT_RE.search(result.stdout)
         self.assertIsNotNone(match, result.stdout)
         return match.group(1), result
@@ -183,6 +194,34 @@ class SecretDeliveryTest(unittest.TestCase):
         self.assertIn("SOURCE_NOT_CLASSIFIED", refused.stdout)
         receipts = self.home / ".claude" / "state" / "secret_delivery" / "receipts"
         self.assertFalse(receipts.exists())
+
+    def test_kimi_payload_without_supported_prompt_is_silent(self) -> None:
+        result = self.run_hook_event(
+            {
+                "hook_event_name": "UserPromptSubmit",
+                "messages": [{"role": "user"}],
+            }
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_matching_authorization_with_invalid_session_is_refused(self) -> None:
+        result = self.run_hook_event({"prompt": self.authorization_prompt()})
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("SECRET_DELIVERY_REFUSED reason=INVALID_SESSION", result.stdout)
+        self.assertNotIn("SECRET_DELIVERY_AUTHORIZED", result.stdout)
+
+    def test_claude_authorization_remains_authorized(self) -> None:
+        result = self.run_hook_event(
+            {
+                "prompt": self.authorization_prompt(),
+                "session_id": "claude-session",
+            }
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("SECRET_DELIVERY_AUTHORIZED", result.stdout)
+        self.assertNotIn("SECRET_DELIVERY_REFUSED", result.stdout)
 
     def test_session_mismatch_consumes_receipt_without_running_scp(self) -> None:
         receipt, _ = self.authorize()

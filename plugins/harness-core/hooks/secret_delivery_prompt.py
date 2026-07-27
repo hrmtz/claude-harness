@@ -219,9 +219,13 @@ def emit_context(content: str) -> None:
 def main() -> int:
     try:
         event = read_event()
-        prompt = unique_string(
-            event, ("prompt", "userPrompt", "user_prompt"), "INVALID_PROMPT"
-        )
+        prompt_names = ("prompt", "userPrompt", "user_prompt")
+        if not any(name in event for name in prompt_names):
+            # Kimi's UserPromptSubmit payload has no supported prompt field.
+            # Without a prompt we cannot identify an authorization request, so
+            # emitting REFUSED would be a false delivery decision.
+            return 0
+        prompt = unique_string(event, prompt_names, "INVALID_PROMPT")
         match = AUTH_RE.fullmatch(prompt)
         if match is None:
             return 0
