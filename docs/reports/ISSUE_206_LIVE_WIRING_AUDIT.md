@@ -4,6 +4,8 @@ Measurements concluded 2026-07-27T01:00:40Z
 (2026-07-27T10:00:40+09:00). Final process snapshot:
 2026-07-27T00:58:39Z (2026-07-27T09:58:39+09:00). Final Git snapshot:
 2026-07-27T01:00:40Z (2026-07-27T10:00:40+09:00).
+Post-#168 delta measured 2026-07-27T01:13:27Z
+(2026-07-27T10:13:27+09:00).
 
 This was a read-only audit of the primary checkout and live state. No installer,
 cron job, watcher activation, config edit, or deletion was run by the auditor.
@@ -11,14 +13,42 @@ No credential/config body or environment value was printed. Config inspection
 was restricted to marker counts, hook event/matcher structure, command paths,
 file metadata, and digests.
 
-## Result
+## Current conclusion after #168
+
+At 2026-07-27T01:13:27Z, after #168 merged:
+
+- primary HEAD and `origin/dev`:
+  `0de504352cc4f9ebb33536388e8816be6b420d30`
+- tracked modified: `0`
+- untracked regular files/directories/symlinks: `0/0/0`
+- `formation-mail-nudge`: tracked regular file, mode `0775`, 25,003 bytes,
+  SHA-256
+  `be310836b1677b8a240842436d09abc5d5523401920632056724d04e6ff5e30f`
+- `formation-window-status`: tracked regular file, mode `0775`, 14,400 bytes,
+  SHA-256
+  `d5502dfeb7b763ff7aaf8528607bf121b66f00be4fc2ecd4364ba8f9fc33e90c`
+- watcher PID file still names PID `2582701`; `/proc/2582701/cmdline` points
+  to the canonical primary `formation-mail-nudge` path, and
+  `git ls-files --error-unmatch` now succeeds for that exact path
+- the process denominator did not change: `ps` and `/proc` again agreed
+  `15/15`, with `9` canonical-primary, `0` disposable-worktree, and `6`
+  stable-local-or-scratch-only processes
+
+The dirty/untracked and live untracked-dependency exceptions owned by #168 are
+therefore resolved. The live surface is still not at `未配線 0`: #199 and #209
+remain owned exceptions. The watcher was not restarted by this audit; its PID
+predates the tracked replacement, so this delta proves current path ownership
+and argv canonicality, not that the long-running shell reloaded new file
+content.
+
+## Original 01:00 snapshot result
 
 The live surface is not at `未配線 0`.
 
 | Exception | Exact evidence | Classification / owner |
 |---|---|---|
-| Formation mail watcher depends on an untracked primary file | PIDs `2582674`, `2582701` use `plugins/harness-formation/bin/formation-mail-nudge`; PID file points to `2582701`; live SHA-256 `a7f5a31d…0276eed`; `git ls-files --error-unmatch` fails | owned remediation: #168 |
-| Window-status helper remains untracked | `plugins/harness-formation/bin/formation-window-status`, SHA-256 `91381c00…b4702`, no live argv reference | owned remediation: #168 |
+| Formation mail watcher depends on an untracked primary file | PIDs `2582674`, `2582701` use `plugins/harness-formation/bin/formation-mail-nudge`; PID file points to `2582701`; live SHA-256 `a7f5a31d…0276eed`; `git ls-files --error-unmatch` fails | resolved after this snapshot by #168 |
+| Window-status helper remains untracked | `plugins/harness-formation/bin/formation-window-status`, SHA-256 `91381c00…b4702`, no live argv reference | resolved after this snapshot by #168 |
 | Claude SessionStart command retains an unresolved plugin variable | argv0 is literal `${CLAUDE_PLUGIN_ROOT}/bin/install-cache-safe-entrypoints`; canonical executable exists, but the live global command is not a resolved path | owned remediation: #209 |
 | Kimi has legacy registrations outside its managed block | 16 outside entries: 15 structurally duplicate managed registrations and one distinct legacy `session_end_scrub.sh` | owned remediation: #199 |
 | Kimi credential guard is registered four times | two managed registrations plus two unmarked registrations, one path, two duplicated matchers | owned remediation: #199 |
@@ -350,8 +380,8 @@ Limitations:
 
 | Item | State at final snapshot | Owner |
 |---|---|---|
-| Track and replace live mail-nudge dependency | open; active untracked dependency remains | #168 |
-| Track/land window-status helper | open; untracked helper remains | #168 |
+| Track and replace live mail-nudge dependency | resolved post-snapshot; canonical path is tracked at `0de5043` | #168 |
+| Track/land window-status helper | resolved post-snapshot; helper is tracked at `0de5043` | #168 |
 | Remove unresolved Claude SessionStart plugin-root argv | open checker-blind wiring defect | #209 |
 | Migrate Kimi unmarked legacy registrations and extend checker | open; 15 duplicates remain | #199 |
 | Remove obsolete #189 WIP patch | path absent at final snapshot; no auditor action | completed concurrently, #189/#190 provenance |
