@@ -31,6 +31,7 @@ fi
 FORMATION_HOME="${FORMATION_HOME:-$HOME/.formation}"
 FORMATION_DIR="$FORMATION_HOME/formation"
 REGISTRY="$FORMATION_DIR/registry.jsonl"
+REGISTRY_LOCK="$FORMATION_DIR/registry.lock"
 
 # shellcheck source=/dev/null
 source "$LIB_DIR/mailbox.sh"
@@ -58,19 +59,24 @@ registry_add() {
   local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}" task="${7:-}" goal="${8:-}" exclusive_input="${9:-0}"
   local parent_id="${10:-}" parent_pane="${11:-}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
-         --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
-         --arg sid "$session_id" --arg cli "$cli" \
-         --arg task "$task" --arg goal "$goal" --arg exclusive "$exclusive_input" \
-         --arg parent_id "$parent_id" --arg parent_pane "$parent_pane" \
-    '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
-      session_id: (if $sid == "" then null else $sid end), cli: $cli,
-      task: (if $task == "" then null else $task end),
-      goal: (if $goal == "" then null else $goal end),
-      exclusive_input: ($exclusive == "1"),
-      parent_id: (if $parent_id == "" then null else $parent_id end),
-      parent_pane: (if $parent_pane == "" then null else $parent_pane end)}' \
-    >> "$REGISTRY"
+  (
+    flock -x 202
+    jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
+           --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
+           --arg sid "$session_id" --arg cli "$cli" \
+           --arg task "$task" --arg goal "$goal" --arg exclusive "$exclusive_input" \
+           --arg parent_id "$parent_id" --arg parent_pane "$parent_pane" \
+      '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
+        session_id: (if $sid == "" then null else $sid end), cli: $cli,
+        task: (if $task == "" then null else $task end),
+        goal: (if $goal == "" then null else $goal end),
+        exclusive_input: ($exclusive == "1"),
+        parent_id: (if $parent_id == "" then null else $parent_id end),
+        parent_pane: (if $parent_pane == "" then null else $parent_pane end),
+        relay_state: "STARTING", relay_pid: null, relay_reason: null,
+        relay_log: null, relay_updated: $ts}' \
+      >> "$REGISTRY"
+  ) 202>"$REGISTRY_LOCK"
 }
 
 registry_get() {
@@ -80,9 +86,117 @@ registry_get() {
 
 registry_remove() {
   local worker_id="$1"
-  local tmp="$REGISTRY.tmp"
-  jq -c --arg id "$worker_id" 'select(.id != $id)' "$REGISTRY" > "$tmp"
-  mv "$tmp" "$REGISTRY"
+  (
+    flock -x 202
+    local tmp
+    tmp="$(mktemp "$FORMATION_DIR/.registry.remove.XXXXXX")"
+    jq -c --arg id "$worker_id" 'select(.id != $id)' "$REGISTRY" > "$tmp"
+    mv "$tmp" "$REGISTRY"
+  ) 202>"$REGISTRY_LOCK"
+}
+
+# Persist relay state on the worker's registry row. The fields are additive so
+# rows written by older Formation versions remain readable. A unique temp file
+# avoids two status/spawn processes sharing the old fixed registry.tmp name.
+registry_set_relay_state() {
+  local worker_id="$1" state="$2" pid="${3:-}" reason="${4:-}" log="${5:-}"
+  [[ "$state" =~ ^(STARTING|READY|DEAD)$ ]] || {
+    echo "formation: invalid relay state: $state" >&2
+    return 2
+  }
+  local ts pid_json tmp
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then pid_json="$pid"; else pid_json=null; fi
+  (
+    flock -x 202
+    tmp="$(mktemp "$FORMATION_DIR/.registry.relay.XXXXXX")"
+    if ! jq -c --arg id "$worker_id" --arg state "$state" \
+        --argjson pid "$pid_json" --arg reason "$reason" --arg log "$log" \
+        --arg ts "$ts" '
+          if .id == $id then
+            . + {
+              relay_state: $state,
+              relay_pid: $pid,
+              relay_reason: (if $reason == "" then null else $reason end),
+              relay_log: (if $log == "" then null else $log end),
+              relay_updated: $ts
+            }
+          else . end
+        ' "$REGISTRY" > "$tmp"; then
+      rm -f "$tmp"
+      exit 1
+    fi
+    mv "$tmp" "$REGISTRY"
+  ) 202>"$REGISTRY_LOCK"
+}
+
+# A process that still has the exact relay argv shape missed the readiness
+# deadline; a vanished/non-relay PID is an abnormal daemon exit. Keep this
+# classification independent from the lifecycle response so timeout handling
+# can change without collapsing diagnostics back into one ambiguous DEAD.
+relay_start_failure_class() {
+  local pid="$1" worker_id="$2"
+  if mailbox_relay_alive "$pid" "$worker_id"; then
+    printf 'STARTING readiness_timeout\n'
+  else
+    printf 'DEAD daemon_exit\n'
+  fi
+}
+
+relay_start_failure_diagnostic() {
+  local worker_id="$1" state="$2" reason="$3" log="$4"
+  if [[ "$reason" == "readiness_timeout" ]]; then
+    echo "warn: relay daemon for $worker_id remains alive after readiness timeout; relay=STARTING log=$log" >&2
+  else
+    echo "warn: relay daemon for $worker_id exited before readiness; relay=DEAD log=$log" >&2
+  fi
+}
+
+# Compute delivery-visible relay health for status. Legacy registry rows have
+# no relay fields; their pidfile + exact argv shape remains the compatibility
+# source. READY is never trusted without a live published relay.
+relay_effective_state() {
+  local worker_id="$1" row="$2"
+  local stored pid_file starting_pid_file public_pid="" starting_pid=""
+  stored="$(printf '%s\n' "$row" | jq -r '.relay_state // "UNKNOWN"')"
+  pid_file="$FORMATION_DIR/$worker_id.relay_pid"
+  starting_pid_file="$FORMATION_DIR/$worker_id.relay_starting_pid"
+  [[ -f "$pid_file" ]] && public_pid="$(cat "$pid_file" 2>/dev/null || true)"
+
+  # The public pidfile is the delivery contract. It wins over stale registry
+  # state so a delayed self-publish or manual recovery becomes visibly READY.
+  if mailbox_relay_alive "$public_pid" "$worker_id"; then
+    printf 'READY\n'
+    return
+  fi
+
+  # Spawn owns this private pidfile until the relay publishes its public
+  # readiness pidfile. It makes the launch-to-publication gap observable
+  # without treating a live, slow daemon as DEAD.
+  [[ -f "$starting_pid_file" ]] &&
+    starting_pid="$(cat "$starting_pid_file" 2>/dev/null || true)"
+  if mailbox_relay_alive "$starting_pid" "$worker_id"; then
+    printf 'STARTING\n'
+    return
+  fi
+
+  case "$stored" in
+    DEAD)
+      printf 'DEAD\n'
+      ;;
+    STARTING)
+      starting_pid="$(printf '%s\n' "$row" | jq -r '.relay_pid // empty')"
+      if [[ -z "$starting_pid" ]] ||
+         mailbox_relay_alive "$starting_pid" "$worker_id"; then
+        printf 'STARTING\n'
+      else
+        printf 'DEAD\n'
+      fi
+      ;;
+    READY|UNKNOWN|*)
+      printf 'DEAD\n'
+      ;;
+  esac
 }
 
 # Short task label for the pane border. --task wins; else briefing basename
@@ -340,6 +454,7 @@ start_mailbox_relay() {
     nohup bash "$LIB_DIR/mailbox_relay.sh" "$name" "$pane_id" \
     > "$relay_log" 2>&1 &
   relay_pid=$!
+  registry_set_relay_state "$name" STARTING "$relay_pid" launching "$relay_log"
 
   # Do not publish a relay PID until the daemon has anchored its mailbox
   # high-water and is ready to observe later appends. Publishing the PID first
@@ -356,22 +471,29 @@ start_mailbox_relay() {
     sleep "$ready_sleep"
   done
   if [[ "$relay_ready" -eq 1 ]]; then
-    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay_pid=$relay_pid log=$relay_log"
+    registry_set_relay_state "$name" READY "$relay_pid" "" "$relay_log"
+    echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=READY relay_pid=$relay_pid log=$relay_log"
     return 0
   fi
 
-  if mailbox_relay_alive "$relay_pid" "$name"; then
+  local relay_failure_state relay_failure_reason
+  read -r relay_failure_state relay_failure_reason \
+    < <(relay_start_failure_class "$relay_pid" "$name")
+  registry_set_relay_state "$name" "$relay_failure_state" "$relay_pid" \
+    "$relay_failure_reason" "$relay_log"
+  relay_start_failure_diagnostic "$name" "$relay_failure_state" \
+    "$relay_failure_reason" "$relay_log"
+
+  if [[ "$relay_failure_state" == "STARTING" ]]; then
     # A slow high-water read is not daemon death. The relay owns its private
     # starting pidfile and will atomically publish the sender-visible pidfile
     # itself after it becomes ready. Reap can stop either lifecycle state.
-    echo "warn: relay daemon for $name is alive but still starting; PID remains unpublished until ready; tail $relay_log" >&2
     echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=PENDING log=$relay_log"
     return 0
   fi
 
   wait "$relay_pid" 2>/dev/null || true
   rm -f "$relay_pid_file" "$relay_ready_file" "$relay_starting_pid_file"
-  echo "warn: relay daemon for $name exited before ready; tail $relay_log" >&2
   echo "$name  pane=$pane_id  session=$session_name  cli=$cli  relay=DEAD log=$relay_log"
   return 1
 }
@@ -711,11 +833,13 @@ cmd_status() {
   fi
   while IFS= read -r row; do
     local id pane cli task spawned age last ask ask_id ask_ts ask_age ask_text ask_count ask_parent
+    local relay
     id="$(echo "$row" | jq -r '.id')"
     pane="$(echo "$row" | jq -r '.pane_id // empty')"
     cli="$(echo "$row" | jq -r '.cli // "claude"')"
     task="$(echo "$row" | jq -r '.task // "-"')"
     spawned="$(echo "$row" | jq -r '.spawned // empty')"
+    relay="$(relay_effective_state "$id" "$row")"
     age="?"
     if [[ -n "$spawned" ]]; then
       local then_s now_s
@@ -759,7 +883,8 @@ cmd_status() {
       last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1 || true)"
     fi
     last="${last:-(pane closed)}"
-    printf '%-16s %-6s %-7s %-28s %-5s %s\n' "$id" "$pane" "[$cli]" "$task" "$age" "$last"
+    printf '%-16s %-6s %-7s %-28s %-5s %-13s %s\n' \
+      "$id" "$pane" "[$cli]" "$task" "$age" "relay=$relay" "$last"
   done < "$REGISTRY"
 }
 

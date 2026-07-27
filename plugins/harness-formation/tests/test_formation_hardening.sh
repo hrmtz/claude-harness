@@ -121,6 +121,37 @@ if [[ "$REMOTE_RC" -eq 1 && "$REMOTE_STATUS" == *"unavailable"* ]]; then ok "rem
 echo "== mailbox-first formation msg (#166) =="
 : > "$REGISTRY"
 registry_add "worker-a" "%42" "formation-worker-a" "$TMPDIR_T/brief.md"
+if registry_get "worker-a" | jq -e \
+    '.relay_state == "STARTING" and .relay_pid == null' >/dev/null; then
+  ok "new registry rows persist backward-compatible STARTING relay state"
+else
+  bad "new registry row omitted initial relay state"
+fi
+# All registry writers share one lock: force an update and append to queue
+# behind the same held lock, then prove neither writer loses the other.
+exec 204>"$REGISTRY_LOCK"
+flock -x 204
+registry_set_relay_state "worker-a" STARTING "" lock_test "" &
+LOCKED_UPDATE_PID=$!
+registry_add "worker-lock" "%97" "formation-worker-lock" \
+  "$TMPDIR_T/brief.md" &
+LOCKED_ADD_PID=$!
+sleep 0.05
+flock -u 204
+wait "$LOCKED_UPDATE_PID"
+LOCKED_UPDATE_RC=$?
+wait "$LOCKED_ADD_PID"
+LOCKED_ADD_RC=$?
+exec 204>&-
+if [[ "$LOCKED_UPDATE_RC" -eq 0 && "$LOCKED_ADD_RC" -eq 0 ]] &&
+   registry_get "worker-a" | jq -e \
+    '.relay_state == "STARTING" and .relay_reason == "lock_test"' >/dev/null &&
+   registry_get "worker-lock" | jq -e \
+    '.relay_state == "STARTING"' >/dev/null; then
+  ok "shared registry lock preserves concurrent update and append"
+else
+  bad "registry writers lost a concurrent update or append"
+fi
 TMUX_TEST_LOG="$TMPDIR_T/msg-tmux.log"
 : > "$TMUX_TEST_LOG"
 RELAY_FAKE_BIN="$TMPDIR_T/relay-fake-bin"
@@ -147,6 +178,7 @@ done
 if [[ "$(cat "$RELAY_READY_FILE" 2>/dev/null || true)" == "$RELAY_PID" ]]; then
   ok "relay publishes readiness only after anchoring its mailbox high-water"
   echo "$RELAY_PID" > "$FORMATION_DIR/worker-a.relay_pid"
+  registry_set_relay_state "worker-a" READY "$RELAY_PID" "" "$TMPDIR_T/live-relay.log"
 else
   bad "relay did not publish readiness before its PID became discoverable"
 fi
@@ -156,6 +188,110 @@ else
   bad "relay fallback polling fixture did not enter polling mode"
 fi
 tmux() { printf '%s\n' "$*" >> "$TMUX_TEST_LOG"; }
+
+read -r LIVE_FAILURE_STATE LIVE_FAILURE_REASON \
+  < <(relay_start_failure_class "$RELAY_PID" "worker-a")
+if [[ "$LIVE_FAILURE_STATE" == "STARTING" &&
+      "$LIVE_FAILURE_REASON" == "readiness_timeout" ]]; then
+  ok "live exact relay PID classifies a missed deadline as transient STARTING"
+else
+  bad "live relay was misclassified [$LIVE_FAILURE_STATE $LIVE_FAILURE_REASON]"
+fi
+TIMEOUT_DIAG="$(relay_start_failure_diagnostic \
+  worker-a "$LIVE_FAILURE_STATE" "$LIVE_FAILURE_REASON" \
+  "$TMPDIR_T/live-relay.log" 2>&1)"
+if [[ "$TIMEOUT_DIAG" == *"readiness timeout"* &&
+      "$TIMEOUT_DIAG" == *"remains alive"* &&
+      "$TIMEOUT_DIAG" == *"relay=STARTING"* ]]; then
+  ok "timeout diagnostic is distinct from abnormal daemon exit"
+else
+  bad "timeout diagnostic collapsed failure classes [$TIMEOUT_DIAG]"
+fi
+mv "$FORMATION_DIR/worker-a.relay_pid" \
+  "$FORMATION_DIR/worker-a.relay_starting_pid"
+registry_set_relay_state "worker-a" STARTING "" \
+  "$LIVE_FAILURE_REASON" "$TMPDIR_T/live-relay.log"
+TIMEOUT_STATUS="$(cmd_status)"
+if printf '%s\n' "$TIMEOUT_STATUS" |
+    awk '$1 == "worker-a" && /relay=STARTING/ { found=1 } END { exit !found }'; then
+  ok "formation status recognizes private starting PID as nonterminal STARTING"
+else
+  bad "formation status hid relay timeout [$TIMEOUT_STATUS]"
+fi
+mv "$FORMATION_DIR/worker-a.relay_starting_pid" \
+  "$FORMATION_DIR/worker-a.relay_pid"
+DELAYED_READY_STATUS="$(cmd_status)"
+if printf '%s\n' "$DELAYED_READY_STATUS" |
+    awk '$1 == "worker-a" && /relay=READY/ { found=1 } END { exit !found }'; then
+  ok "delayed public pidfile takes STARTING worker to visible READY"
+else
+  bad "delayed public pidfile left worker stuck STARTING [$DELAYED_READY_STATUS]"
+fi
+registry_set_relay_state "worker-a" DEAD "$RELAY_PID" \
+  daemon_exit "$TMPDIR_T/live-relay.log"
+RECOVERED_STATUS="$(cmd_status)"
+if printf '%s\n' "$RECOVERED_STATUS" |
+    awk '$1 == "worker-a" && /relay=READY/ { found=1 } END { exit !found }'; then
+  ok "live exact public pidfile makes manually recovered relay visibly READY"
+else
+  bad "persisted DEAD masked a live recovered relay [$RECOVERED_STATUS]"
+fi
+registry_set_relay_state "worker-a" READY "$RELAY_PID" "" "$TMPDIR_T/live-relay.log"
+
+# Positive control: a daemon-shaped fixture that exits before readiness must
+# classify and remain visible as DEAD, not as a timeout or a healthy worker.
+BROKEN_RELAY_DIR="$TMPDIR_T/broken-relay"
+mkdir -p "$BROKEN_RELAY_DIR"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 23' \
+  > "$BROKEN_RELAY_DIR/mailbox_relay.sh"
+chmod +x "$BROKEN_RELAY_DIR/mailbox_relay.sh"
+bash "$BROKEN_RELAY_DIR/mailbox_relay.sh" worker-broken %99 &
+BROKEN_RELAY_PID=$!
+wait "$BROKEN_RELAY_PID"
+BROKEN_RELAY_RC=$?
+registry_add "worker-broken" "%99" "formation-worker-broken" \
+  "$TMPDIR_T/brief.md"
+read -r BROKEN_STATE BROKEN_REASON \
+  < <(relay_start_failure_class "$BROKEN_RELAY_PID" "worker-broken")
+registry_set_relay_state "worker-broken" "$BROKEN_STATE" \
+  "$BROKEN_RELAY_PID" "$BROKEN_REASON" "$TMPDIR_T/broken-relay.log"
+BROKEN_DIAG="$(relay_start_failure_diagnostic \
+  worker-broken "$BROKEN_STATE" "$BROKEN_REASON" \
+  "$TMPDIR_T/broken-relay.log" 2>&1)"
+BROKEN_STATUS="$(cmd_status)"
+if [[ "$BROKEN_RELAY_RC" -eq 23 && "$BROKEN_STATE" == "DEAD" &&
+      "$BROKEN_REASON" == "daemon_exit" &&
+      "$BROKEN_DIAG" == *"exited before readiness"* &&
+      "$BROKEN_DIAG" == *"relay=DEAD"* ]]; then
+  ok "broken daemon positive control classifies abnormal exit as DEAD"
+else
+  bad "broken daemon classification failed [rc=$BROKEN_RELAY_RC state=$BROKEN_STATE reason=$BROKEN_REASON diag=$BROKEN_DIAG]"
+fi
+if printf '%s\n' "$BROKEN_STATUS" |
+    awk '$1 == "worker-broken" && /relay=DEAD/ { found=1 } END { exit !found }'; then
+  ok "formation status makes a registered worker with dead relay visibly DEAD"
+else
+  bad "formation status presented broken relay as healthy [$BROKEN_STATUS]"
+fi
+
+# A pre-change row without relay fields must remain readable. Status derives
+# DEAD from the missing live relay without mutating the legacy row.
+jq -cn '{id:"worker-legacy", pane_id:"%98", session_name:"formation-worker-legacy",
+         briefing:"legacy.md", spawned:"2026-07-27T00:00:00Z", cli:"claude"}' \
+  >> "$REGISTRY"
+LEGACY_REGISTRY_BEFORE="$(sha256sum "$REGISTRY" | awk '{print $1}')"
+LEGACY_STATUS="$(cmd_status)"
+LEGACY_REGISTRY_AFTER="$(sha256sum "$REGISTRY" | awk '{print $1}')"
+if printf '%s\n' "$LEGACY_STATUS" |
+    awk '$1 == "worker-legacy" && /relay=DEAD/ { found=1 } END { exit !found }' &&
+   registry_get "worker-legacy" | jq -e \
+    'has("relay_state") | not' >/dev/null &&
+   [[ "$LEGACY_REGISTRY_BEFORE" == "$LEGACY_REGISTRY_AFTER" ]]; then
+  ok "legacy registry row remains readable while status stays read-only"
+else
+  bad "legacy registry compatibility/status reconciliation failed [$LEGACY_STATUS]"
+fi
+
 MSG_OUT="$(cmd_msg worker-a "mailbox first fixture")"
 if [[ "$MSG_OUT" == *"appended seq="* && "$MSG_OUT" == *"signal=pending"* ]]; then
   ok "formation msg reports durable append and relay-owned signal"

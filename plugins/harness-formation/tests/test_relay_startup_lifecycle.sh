@@ -28,7 +28,11 @@ mkdir -p "$FIXTURE/bin" "$FIXTURE/logs"
 REAL_JQ="$(command -v jq)"
 cat >"$FIXTURE/bin/jq" <<'EOF'
 #!/usr/bin/env bash
-if [[ ! -e "$RELAY_JQ_DELAY_MARKER" ]]; then
+delay=0
+for arg in "$@"; do
+  [[ "$arg" == "$RELAY_JQ_DELAY_TARGET" ]] && delay=1
+done
+if [[ "$delay" -eq 1 && ! -e "$RELAY_JQ_DELAY_MARKER" ]]; then
   : >"$RELAY_JQ_DELAY_MARKER"
   sleep "$RELAY_JQ_DELAY"
 fi
@@ -41,6 +45,7 @@ export RELAY_JQ_DELAY=0.35
 export FORMATION_RELAY_FORCE_POLL=1
 export FORMATION_RELAY_POLL_INTERVAL=0.05
 export FORMATION_MAILBOX="$FIXTURE/home/mailbox/log.jsonl"
+export RELAY_JQ_DELAY_TARGET="$FORMATION_MAILBOX"
 
 stop_owned_relay() {
   local pid="$1"
