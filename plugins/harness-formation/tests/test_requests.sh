@@ -99,7 +99,7 @@ printf '%s\n' "$RELAY_PID" >"$FORMATION_DIR/parent-a.relay_pid"
 : >"$TMUX_LOG"
 FORMATION_PARENT_PANE=%100 cmd_report 'relay owns lifecycle signal' \
   2>"$FIXTURE/relay-owned-report.err"
-grep -Fq 'signal=pending relay_pid=' "$FIXTURE/relay-owned-report.err"
+grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/relay-owned-report.err"
 if grep -Fq '@formation_mail_pending' "$TMUX_LOG"; then
   echo "FAIL: lifecycle sender duplicated a live relay's badge write" >&2
   exit 1
@@ -220,9 +220,9 @@ FORMATION_SELF=worker-a TMUX_FAIL_SET_OPTION=1 FORMATION_PARENT_PANE=%100 \
 ask_signal_rc=$?
 set -e
 [[ "$report_signal_rc" -eq 4 && "$done_signal_rc" -eq 4 && "$ask_signal_rc" -eq 4 ]]
-grep -Fq 'WARN (exit 4)' "$FIXTURE/report-signal-fail.out"
-grep -Fq 'WARN (exit 4)' "$FIXTURE/done-signal-fail.out"
-grep -Fq 'WARN (exit 4)' "$FIXTURE/ask-signal-fail.err"
+grep -Fq 'FAILED (exit 4)' "$FIXTURE/report-signal-fail.out"
+grep -Fq 'FAILED (exit 4)' "$FIXTURE/done-signal-fail.out"
+grep -Fq 'FAILED (exit 4)' "$FIXTURE/ask-signal-fail.err"
 failed_ask_id="$(cat "$FIXTURE/ask-signal-fail.out")"
 [[ "$failed_ask_id" == req-* ]]
 request_current_one "$failed_ask_id" | jq -e '.state == "WAITING_PARENT"' >/dev/null
@@ -245,7 +245,7 @@ ack_signal_rc=$?
 set -e
 [[ "$ack_signal_rc" -eq 4 ]]
 grep -Fq 'notified=true' "$FIXTURE/ack-signal-fail.out"
-grep -Fq 'WARN (exit 4)' "$FIXTURE/ack-signal-fail.err"
+grep -Fq 'FAILED (exit 4)' "$FIXTURE/ack-signal-fail.err"
 request_current_one "$ack_signal_id" | jq -e '.closed == true and .state == "RUNNING"' >/dev/null
 FORMATION_SELF=parent-a
 
