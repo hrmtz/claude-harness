@@ -109,6 +109,30 @@ def still_deletable(path: Path, root: Path, now: float) -> bool:
     return not contains_keep
 
 
+def tree_owner_deletable(path: Path) -> bool:
+    """Return whether every real directory permits owner unlink operations."""
+
+    def fail_on_walk_error(error: OSError) -> None:
+        raise error
+
+    try:
+        for base, _directories, _files in os.walk(
+            path,
+            topdown=True,
+            onerror=fail_on_walk_error,
+            followlinks=False,
+        ):
+            base_path = Path(base)
+            mode = base_path.lstat().st_mode
+            if not stat.S_ISDIR(mode):
+                return False
+            if mode & stat.S_IWUSR == 0 or mode & stat.S_IXUSR == 0:
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -166,6 +190,7 @@ def main() -> int:
 
         deleted = 0
         deleted_bytes = 0
+        skipped = 0
         for path, allocated in candidates:
             if not still_deletable(path, root, args.now):
                 append_log(
@@ -177,16 +202,37 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 3
+            if not tree_owner_deletable(path):
+                skipped += 1
+                append_log(
+                    args.log.expanduser(),
+                    f"{stamp} skip not_owner_deletable={path.name}",
+                )
+                print(f"skip: directory tree is not owner-deletable: {path.name}")
+                continue
+            if not still_deletable(path, root, args.now):
+                append_log(
+                    args.log.expanduser(),
+                    f"{stamp} abort post_permission_revalidation_failed={path.name} "
+                    f"deleted={deleted}",
+                )
+                print(
+                    f"error: candidate changed while preparing deletion; "
+                    f"stopped before {path.name}",
+                    file=sys.stderr,
+                )
+                return 3
             shutil.rmtree(path)
             deleted += 1
             deleted_bytes += allocated
         final = (
             f"mode=APPLY deleted_dirs={deleted} deleted_bytes={deleted_bytes} "
-            f"reclaimed={human_bytes(deleted_bytes)} keep_excluded={protected}"
+            f"reclaimed={human_bytes(deleted_bytes)} skipped_dirs={skipped} "
+            f"keep_excluded={protected}"
         )
         append_log(args.log.expanduser(), f"{stamp} complete {final}")
         print(final)
-        return 0
+        return 4 if skipped else 0
     finally:
         os.close(lock_fd)
 
