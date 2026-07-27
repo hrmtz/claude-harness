@@ -926,3 +926,81 @@ fi
 - **hx-orch**: #253 (symlink follow、security 優先) と #254+#257 (test 隔離) を 2 worktree に分離して着手
 - **#216**: #211 の review 通過後に hc-orch へ渡す (同じファイルなので並行させない)
 - reviewer 枠 (verifier / verifier2、kimi) は温存。実装が codex なので cross-family 成立
+
+### 03:45 トークン消費を実測し、統括の session を切る
+
+owner の「トークン消費量がやばい」を受けて実測。**推測で削らず、1 session を測ってから順位を付けた。**
+
+```
+assistant turns : 1,908
+cache_read      : 811,496,818   ← 支配的
+cache_creation  :   4,494,833
+output          :   1,666,911
+```
+
+**cache_read が 811M で他は誤差。** 費用は「何を書くか」でなく「何回 turn を回すか × その時点の context 量」で決まる。
+
+1 turn あたりの単価は session が進むほど上がる:
+
+| 区間 | 1 turn あたり |
+|---|---|
+| 0-189 | 118,082 |
+| 760-949 | 517,787 |
+| 1330-1519 | **833,378** (前半の 7 倍) |
+| 1520-1709 | **160,966** ← compaction で 5 分の 1 |
+
+決定的な数字:
+
+```
+tool 呼び出し 879 回 / tool を含む message 879 通 / 平均 1.00
+1 message に tool 2 個以上 : 0 件
+```
+
+**system prompt に明記されている「独立した呼び出しは束ねよ」を、879 回すべてで実行していなかった。**
+
+→ **#218** に起票。梃子は 3 つ (束ね / 出力を発生源で絞る / session 境界)。どれも「agent を減らす」ではない。
+
+### 03:45 「前回やめた理由」を引いたら、機構が別物だった
+
+owner が「njslyr をやめたのもトークンが爆発したから」と想起。当時の記録を引いた:
+
+> 2026-03-01「**コンテキストの長さ制限エラー**（131072 トークンの上限に対し 131450 が要求された）」
+> 2026-02-25「monitor ペインに表示されているのは**コンテキスト残量監視用の `monitor_context.sh`**」
+
+**当時の制約は window 131K で、統括が入り切らずに落ちていた。** 今は落ちない — 入り切るが高い。
+
+| | njslyr 期 | 今 |
+|---|---|---|
+| 制約 | context window 131K | cache_read 単価 × turn 数 |
+| 失敗 | 統括が**入り切らず落ちる** | 統括が**入り切るが高い** |
+| 梃子 | context を削る | **束ね** / 出力絞り / session 境界 |
+
+**worker は安い。811M は統括 1 人のもの** (codex 主導日は出力 2.2M、kimi 1M 前後)。よって**今回の爆発は multi-agent をやめずに直せる**。
+
+「やめる」は当時の制約への正しい対処であって、今の制約へのものではない。**制約が移ったら、旧時代の結論でなく旧時代の測定を引く。** owner の想起がなければ、当時の結論をそのまま今日に適用していた。
+
+### 03:45 リセットが安いのは、状態を外に出してあったから
+
+統括 session を切る。単価が序盤の 3 倍を超えたため。**リセットのコストがほぼゼロなのは、状態が全部 session の外にあるから:**
+
+| 状態 | 置き場所 |
+|---|---|
+| 何が終わり何が残るか | 本ファイル (push 済) |
+| 判断待ち + 技術的欠陥 | gh issue #211〜#218 / #258〜#260 / backend#6,13,14 / zetith-site#67 |
+| worker の配置 | `~/.formation/formation/registry.jsonl` + tmux pane |
+| 進行中 review | PR #258 / #259 に exact head 拘束で記録 |
+| 恒久的教訓 | memory files |
+
+**worker は私のリセットに影響されない。** 別 process で mailbox 経由。私が消えても走り続け、戻れば `formation inbox` で拾える。
+
+**今夜ずっと handout と issue を書いていたことが、リセットを安くしている。** 副産物でなく、これが本体だった。
+
+### 戻ったときに読むもの
+
+1. 本ファイルの末尾
+2. `formation inbox`
+3. gh: claude-harness #216 #218 / hippocampus #258 #259 #260
+
+**owner 判断待ち 5 件は動かしていない**: backend#6 (rotate) / #13 (chat 単独の 4 価格) / #14 (alar label) / zetith-site#60,61,63 (GA4) / #67 (本番 D1 が認証で読めない)。
+
+**私の未決 1 件**: `feat/agy-migration` (562 行、guard 移植) が local worktree 1 箇所にしかなく bundle 保全済。repo が PUBLIC で、branch に自分の guard の弱点を書いた設計書が含まれるため push は owner 判断。
