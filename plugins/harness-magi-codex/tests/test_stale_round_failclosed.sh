@@ -17,8 +17,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily_claude.sh"
 GATE="$HERE/../scripts/magi_plateau_gate.sh"
 GUARD="$HERE/../scripts/magi_campaign_guard.py"
+DEJA="$HERE/../scripts/magi_deja_context.py"
+PROTOCOL="$HERE/../scripts/magi_protocol.py"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
@@ -66,7 +70,10 @@ seed_campaign() {
     local claim_line claim_id
     claim_line="$(python3 "$GUARD" claim "$DOC" 1 fanout "$STATE")" || return 1
     claim_id="${claim_line##*CLAIM_ID=}"
-    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null
+    python3 "$GUARD" finish "$DOC" "$claim_id" success >/dev/null || return 1
+    python3 "$DEJA" select --target "$DOC" --magi-state "$STATE" \
+        --target-path-id "$DOC_ID" --target-sha "$DOC_SHA" \
+        --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null
 }
 seed_campaign || exit 1
 

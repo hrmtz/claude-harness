@@ -35,6 +35,7 @@ CLASSIFIER="$SELF_DIR/magi_classify_failure.py"
 CONVERGENCE_GATE="$SELF_DIR/magi_convergence_gate.py"
 VERIFY_CANON="$SELF_DIR/magi_verify_canonical_templates.py"
 PROTOCOL="$SELF_DIR/magi_protocol.py"
+DEJA="$SELF_DIR/magi_deja_context.py"
 CANON="${MAGI_CANONICAL_SKILLS_DIR:-$REPO_ROOT/plugins/harness-magi/skills}"
 CROSS_CLI_GUARD="${HARNESS_CROSS_CLI_GUARD:-}"
 if [ -z "$CROSS_CLI_GUARD" ]; then
@@ -283,7 +284,8 @@ _cleanup_stage() {
     if [ "$REVIEW_MODE" = "incremental" ] \
             && ! rm -f -- "$STAGE_DIR/round_${ROUND}_codex.json"; then failed=1; fi
     rm -rf -- "$STAGE_DIR/protocol" || failed=1
-    rm -f -- "$STAGE_DIR/review-artifact" "$STAGE_DIR/prior.json" || failed=1
+    rm -f -- "$STAGE_DIR/review-artifact" "$STAGE_DIR/prior.json" \
+        "$STAGE_DIR/deja-block" || failed=1
     rmdir -- "$STAGE_DIR" || failed=1
     return "$failed"
 }
@@ -396,6 +398,7 @@ SCRUB="$SNAPSHOT_PLUGIN/scripts/magi_scrub.py"
 GUARD="$SNAPSHOT_PLUGIN/scripts/magi_campaign_guard.py"
 VALIDATOR="$SNAPSHOT_PLUGIN/scripts/magi_validate_findings.py"
 CLASSIFIER="$SNAPSHOT_PLUGIN/scripts/magi_classify_failure.py"
+DEJA="$SNAPSHOT_PLUGIN/scripts/magi_deja_context.py"
 python3 - "$DOC_PATH" "$STAGE_DIR/review-artifact" "$ARTIFACT_SHA" <<'PY'
 import hashlib, pathlib, sys
 source, target = map(pathlib.Path, sys.argv[1:3])
@@ -419,10 +422,32 @@ if [ "$PRIOR" != "-" ]; then
     }
 fi
 
+# Round-1 fanout freezes one immutable historical selection for the whole campaign.
+# Later arms may only validate and render that exact selection.
+if [ "$ROUND" -eq 1 ] && [ "$PHASE" = "fanout" ]; then
+    python3 "$DEJA" select \
+        --target "$DOC_PATH" --magi-state "$OUT_DIR" \
+        --target-path-id "$ARTIFACT_ID" --target-sha "$ARTIFACT_SHA" \
+        --protocol-sha "$CLAIM_PROTOCOL_SHA" >/dev/null || {
+        echo "fanout: Deja selection publication failed" >&2
+        exit 1
+    }
+fi
+DEJA_BLOCK="$STAGE_DIR/deja-block"
+python3 "$DEJA" render \
+    --target "$DOC_PATH" --magi-state "$OUT_DIR" \
+    --target-path-id "$ARTIFACT_ID" --target-sha "$ARTIFACT_SHA" \
+    --protocol-sha "$CLAIM_PROTOCOL_SHA" --output "$DEJA_BLOCK" || {
+    echo "fanout: frozen Deja context validation/render failed" >&2
+    exit 1
+}
+
+declare -A PERSONA_PROMPTS
 for p in "${PERSONAS[@]}"; do
     tmpl="$TEMPLATE_DIR/${p}_prompt.md"
     prompt="$(mktemp)"
     PROMPTS+=("$prompt")
+    PERSONA_PROMPTS["$p"]="$prompt"
     {
         printf 'You are the %s reviewer in a Magi review. Stay strictly in your lane;\n' "${p^^}"
         printf 'do not cover the other reviewers'"'"' perspectives. You cannot see their output.\n\n'
@@ -476,12 +501,38 @@ for p in "${PERSONAS[@]}"; do
             )
             printf '\n---\n\n'
         fi
+        if [ -s "$DEJA_BLOCK" ]; then
+            cat "$DEJA_BLOCK"
+            printf '\n'
+        fi
         printf 'DOCUMENT:\n---\n'
         cat "$SNAPSHOT_DOC"
         printf '\n---\n\nReturn ONLY a JSON object conforming to the output schema. reviewer="%s", round=%s, artifact_id="%s", artifact_sha="%s".\n' \
             "${p^^}" "$ROUND" "$ARTIFACT_ID" "$ARTIFACT_SHA"
     } > "$prompt"
 
+done
+
+# Prove every complete provider prompt consumed byte-identical historical evidence before
+# launching any provider. An absent selection leaves prompt bytes unchanged.
+deja_consume_args=(
+    consume --target "$DOC_PATH" --magi-state "$OUT_DIR"
+    --target-path-id "$ARTIFACT_ID" --target-sha "$ARTIFACT_SHA"
+    --protocol-sha "$CLAIM_PROTOCOL_SHA" --phase fanout --round "$ROUND"
+    --block "$DEJA_BLOCK"
+)
+for p in "${PERSONAS[@]}"; do
+    deja_consume_args+=(
+        --provider "codex:${p^^}" --prompt "${PERSONA_PROMPTS[$p]}"
+    )
+done
+python3 "$DEJA" "${deja_consume_args[@]}" || {
+    echo "fanout: Deja prompt-consumption receipt publication failed" >&2
+    exit 1
+}
+
+for p in "${PERSONAS[@]}"; do
+    prompt="${PERSONA_PROMPTS[$p]}"
     # All three launch before any output is read (INV-3).
     # `|| s=$?` so a codex failure does not abort the subshell under the inherited `set -e`
     # (which would skip the rm), while still propagating the real status to `wait`.
@@ -707,6 +758,20 @@ fi
 python3 "$GUARD" finish "$DOC_PATH" "$CLAIM_ID" success >/dev/null
 CLAIM_FINISHED=1
 PUBLISHED=()
+
+# Historical capture is best-effort and happens only after the normal Magi arm is durable.
+deja_capture_args=(
+    capture --target "$DOC_PATH" --magi-state "$OUT_DIR"
+    --phase fanout --round "$ROUND"
+)
+for p in "${PERSONAS[@]}"; do
+    label="$(artifact_label "$p")"
+    deja_capture_args+=(--source "$OUT_DIR/round_${ROUND}_${label}.json")
+done
+python3 "$DEJA" "${deja_capture_args[@]}" >/dev/null || {
+    echo "fanout: warning: Deja capture diagnostics could not be published" >&2
+}
+
 if ! _cleanup_stage; then
     echo "fanout: ERROR: final staging cleanup failed for claim $CLAIM_ID" >&2
     exit 1

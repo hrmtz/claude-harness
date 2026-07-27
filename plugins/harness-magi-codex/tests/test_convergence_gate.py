@@ -22,6 +22,7 @@ PLUGIN = HERE.parent
 SCRIPT = PLUGIN / "scripts" / "magi_convergence_gate.py"
 PACKET = PLUGIN / "scripts" / "magi_review_packet.py"
 FANOUT = PLUGIN / "scripts" / "magi_fanout_codex.sh"
+DEJA = PLUGIN / "scripts" / "magi_deja_context.py"
 VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 sys.path.insert(0, str(PLUGIN / "scripts"))
 import magi_campaign_guard as guard  # noqa: E402
@@ -290,6 +291,17 @@ class ConvergenceGateTest(unittest.TestCase):
             "scripts/magi_xfamily_claude.sh",
         }
         self.assertEqual(set(guard.PROTOCOL_FILES), expected)
+        self.assertTrue(
+            {
+                "schemas/deja-consumption-receipt.schema.json",
+                "schemas/deja-context-receipt.schema.json",
+                "schemas/deja-context.schema.json",
+                "schemas/deja-review-slice0-manifest.schema.json",
+                "schemas/deja-review-slice0-record.schema.json",
+                "scripts/deja_review_slice0.py",
+                "scripts/magi_deja_context.py",
+            }.issubset(set(magi_protocol.RUNTIME_FILES))
+        )
 
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -900,6 +912,30 @@ print("incremental fixture")
         )
         codex.chmod(0o755)
         output_state = self.repo / "incremental-state"
+        output_state.mkdir()
+        deja_root = Path(self.temp.name) / "deja-root"
+        deja_root.mkdir()
+        target_path_id = hashlib.sha256(
+            str(self.manifest.resolve()).encode()
+        ).hexdigest()[:16]
+        selected = run(
+            "python3",
+            str(DEJA),
+            "select",
+            "--target",
+            str(self.manifest),
+            "--magi-state",
+            str(output_state),
+            "--target-path-id",
+            target_path_id,
+            "--target-sha",
+            file_sha(self.manifest),
+            "--protocol-sha",
+            magi_protocol.protocol_sha(),
+            "--state-root",
+            str(deja_root),
+        )
+        self.assertEqual(selected.returncode, 0, selected.stderr)
 
         result = run(
             str(FANOUT),
@@ -913,6 +949,7 @@ print("incremental fixture")
             env={
                 "PATH": f"{stub_bin}:{os.environ['PATH']}",
                 "HOME": str(self.fake_home),
+                "DEJA_REVIEW_STATE_ROOT": str(deja_root),
             },
         )
 

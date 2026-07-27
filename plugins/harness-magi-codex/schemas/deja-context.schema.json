@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frozen Magi Deja Review context",
+  "type": "object",
+  "properties": {
+    "schema_version": {"const": "magi-deja-context/v1"},
+    "target_path_id": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
+    "target_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "protocol_sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "status": {
+      "type": "string",
+      "enum": ["injected-candidate", "absent", "unavailable"]
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "occurrence_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "reviewer": {"type": "string", "minLength": 1},
+          "round": {"type": "integer", "minimum": 1},
+          "severity": {
+            "type": "string",
+            "enum": ["REJECT", "CRITICAL", "HIGH", "MED", "LOW", "nit"]
+          },
+          "confidence": {"type": "string", "enum": ["high", "med", "low"]},
+          "schema_grounding_verdict": {"type": "string", "enum": ["PASS", "PARTIAL"]},
+          "title": {"type": "string"},
+          "location": {"type": "string"},
+          "rationale": {"type": "string"},
+          "required_fix": {"type": "string"},
+          "missed_angle": {"type": "string"},
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "items": {"type": "string"}
+          },
+          "subsystem": {"type": "string", "minLength": 1},
+          "root_cause_id": {"type": "string", "minLength": 1},
+          "affected_invariant": {"type": "string", "minLength": 1},
+          "relation_to_prior": {"type": "string"}
+        },
+        "required": [
+          "occurrence_id",
+          "source_sha256",
+          "reviewer",
+          "round",
+          "severity",
+          "confidence",
+          "schema_grounding_verdict",
+          "title",
+          "location",
+          "rationale",
+          "required_fix",
+          "missed_angle",
+          "categories"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "target_path_id",
+    "target_sha",
+    "protocol_sha",
+    "status",
+    "findings"
+  ],
+  "additionalProperties": false
+}

@@ -8,6 +8,8 @@ unset TMUX
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FANOUT="$HERE/../scripts/magi_fanout_codex.sh"
 TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 
 pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }

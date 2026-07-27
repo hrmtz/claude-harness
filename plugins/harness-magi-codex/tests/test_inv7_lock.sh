@@ -11,9 +11,13 @@ export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ADAPTER="$HERE/../scripts/magi_xfamily_claude.sh"
 GUARD="$HERE/../scripts/magi_campaign_guard.py"
+DEJA="$HERE/../scripts/magi_deja_context.py"
+PROTOCOL="$HERE/../scripts/magi_protocol.py"
 source "$HERE/../scripts/magi_lock.sh"
 
 TMP="$(mktemp -d)"
+mkdir -p "$TMP/deja"
+export DEJA_REVIEW_STATE_ROOT="$TMP/deja"
 pass=0; fail=0
 ok()   { echo "  ok   - $1"; pass=$((pass+1)); }
 bad()  { echo "  FAIL - $1"; fail=$((fail+1)); }
@@ -89,6 +93,9 @@ seed_xfamily() {
     claim_id="${claim_line##*CLAIM_ID=}"
     python3 "$GUARD" finish "$doc" "$claim_id" success >/dev/null || return 1
     sha="$(sha256sum "$doc" | cut -d' ' -f1)"
+    python3 "$DEJA" select --target "$doc" --magi-state "$state" \
+        --target-path-id "$id" --target-sha "$sha" \
+        --protocol-sha "$(python3 "$PROTOCOL" sha)" >/dev/null || return 1
     source="$state/round_1_source.json"
     printf '{"reviewer":"SOURCE","round":1,"artifact_id":"%s","artifact_sha":"%s","verdict":"GO","schema_grounding_verdict":"PASS","verify_commands_executed":["fixture"],"source_artifacts":[],"dispositions":[],"findings":[]}\n' \
         "$id" "$sha" > "$source"
@@ -127,10 +134,11 @@ MAGI_XFAMILY_TIMEOUT_S=5 timeout 20 setsid "$ADAPTER" "$DOC" 2 "$PRIOR" "$OTHER_
               || bad "same doc escaped the lock via another out-prefix"
 
 # 7. Different docs may proceed even when they share one output directory.
-PRIOR2="$(seed_xfamily "$DOC2" "$STATE")" || exit 1
+DOC2_STATE="$TMP/state-doc2"
+PRIOR2="$(seed_xfamily "$DOC2" "$DOC2_STATE")" || exit 1
 rc_other=0
 env -i PATH=/usr/bin:/bin HOME="$HOME" timeout 15 \
-    "$ADAPTER" "$DOC2" 2 "$PRIOR2" "$STATE/other-doc" >/dev/null 2>&1 </dev/null || rc_other=$?
+    "$ADAPTER" "$DOC2" 2 "$PRIOR2" "$DOC2_STATE/other-doc" >/dev/null 2>&1 </dev/null || rc_other=$?
 release "$h"
 [ "$rc_other" -eq 2 ] && ok "different doc proceeds past its independent lock" \
                        || bad "different doc collided with lock (rc=$rc_other)"

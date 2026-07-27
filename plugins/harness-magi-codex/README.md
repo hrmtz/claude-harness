@@ -56,6 +56,8 @@ scripts/
   magi_git.py                 ambient-config-free Git object reads
   magi_review_packet.py       exact-SHA/tree/full-diff manifest builder + history archive
   magi_protocol.py            closed protocol identity + immutable claim snapshots
+  magi_deja_context.py        exact-SHA historical capture/select/render receipts
+  deja_review_slice0.py       provenance-preserving local corpus normalizer/validator
   magi_rename_noreplace.py    atomic no-replace installer publication primitive
   magi_verify_canonical_templates.py
                               canonical prompt fingerprint verification
@@ -107,6 +109,18 @@ remain auditable.
 `MAGI_MAX_ARTIFACT_BYTES` may tighten the shared fan-out/cross-family review
 artifact ceiling from its 10 MiB default into `1..10485760`. Oversized input is
 refused before a campaign claim or provider launch.
+
+Deja Review context is optional and exact-SHA only. Round-1 fanout freezes one
+selection from `${DEJA_REVIEW_STATE_ROOT:-$HOME/.deja-review}` into the Magi
+state directory. Every selected Slice 0 campaign is validator-clean, every
+finding reviewed the current target bytes, and the canonical payload is capped
+at 8 findings / 12 KiB after credential scrubbing. Same-family and
+cross-family prompts consume the same immutable block and publish
+`deja-consumption-{fanout,xfamily}-r<N>.json` before provider launch.
+Missing or individually invalid historical corpora do not block review;
+frozen identity/digest drift and unprovable consumption fail closed. Successful
+arms are captured only after their ordinary artifacts become authoritative,
+and capture failure never changes the Magi verdict.
 
 ## Use
 
