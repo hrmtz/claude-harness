@@ -225,3 +225,37 @@ zs-orch の報告:
 | #406 | 完全に stale な Qdrant fanout test を削除、現行 PG fallback は 4/4 pass |
 
 #410 の順序が良い。「直っている」ではなく「**直る前は壊れていた**」を先に再現してから、直った状態を確認している。
+
+### 01:39 ジュブゼン — 影響範囲が確定。**defect は実在、実害は極小**
+
+mz-orch の count-only 監査 (2026-06-24 17:43 JST 〜 現在):
+
+```
+chat 経由の jubezen/ジュブゼン/juvgen 問い合わせ:  1 件 / 1 セッション
+そのうち ¥99,000 が提示された応答:                0 件
+live の直接クエリ:  「モニター価格は未掲載」+ ¥132,000 のみ
+```
+
+**patient のテキストや ID は一切読まず、件数のみ**で監査している。privacy の扱いは適切。
+
+意味するところ:
+- defect は実在する (掲載価格が真である以上、chat の応答は誤り)
+- **1 ヶ月で影響を受けた可能性のある患者は 1 件**。実害は極小
+- したがって **緊急修正は不要**。朝落ち着いて判断できる
+
+mz-orch は MHLW の医療広告 guidance (客観的・正確な情報、自由診療の費用詳細) にも触れており、compliance 観点の整理も進んでいる。
+
+**修正は一切していない。** 夜間の read-only 指示を守り、overlay の scope 監査と設計は routing 待ちで保留中。
+
+### 01:38 PR が 2 本、review 段に入った
+
+| PR | 内容 | reviewer |
+|---|---|---|
+| mafutsu-zetith-backend #9 | issue #3 の git drift 防止 rail (4 files, 385+/27-, 14 tests pass) | **verifier (kimi)** に依頼済み |
+| PRS-LLM #414 | issue #406 の stale test 整理 (8 dead test 退役、66 pass/1 skip) | 未割当 |
+
+verifier には **この repo が本番のクリニック chat backend であること**、production deploy 禁止、価格・医療表現が混じっていたら PASS を出さず上げること、値を出力しない credential 検証を明示した。
+
+review 観点として「rail が**実際に drift を検出するか** fixture で確認せよ (設計になっている、ではなく検出した、が要る)」「**false positive で本番 deploy を妨げないか** — この rail は緩すぎるより厳しすぎる方が実害が出る」を指定。
+
+**kimi の quota が 49% (5h rolling)** なので、無理なら断ってよいと伝えてある。詰まった reviewer が bottleneck になるより正直に断られる方が良い。
