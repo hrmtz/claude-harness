@@ -120,7 +120,9 @@ cross-family prompts consume the same immutable block and publish
 Missing or individually invalid historical corpora do not block review;
 frozen identity/digest drift and unprovable consumption fail closed. Successful
 arms are captured only after their ordinary artifacts become authoritative,
-and capture failure never changes the Magi verdict.
+and capture failure never changes the Magi verdict. Capture is synchronously
+bounded to 120 seconds; `MAGI_DEJA_CAPTURE_TIMEOUT_S` may tighten that boundary
+to `1..120`.
 
 ## Use
 

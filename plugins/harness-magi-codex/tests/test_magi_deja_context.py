@@ -405,6 +405,52 @@ class MagiDejaContextTest(unittest.TestCase):
         receipt = json.loads((self.state / "deja-context.receipt.json").read_text())
         self.assertEqual(receipt["selection_sha256"], hashlib.sha256(context).hexdigest())
 
+    def test_interrupted_pair_recovers_from_exact_transaction(self) -> None:
+        self.prepare(
+            "transaction",
+            artifact(self.target_sha, finding("TXN", severity="HIGH", root="transaction")),
+        )
+        self.assertEqual(self.select().returncode, 0)
+        context_path = self.state / "deja-context.json"
+        receipt_path = self.state / "deja-context.receipt.json"
+        context = json.loads(context_path.read_text())
+        receipt = json.loads(receipt_path.read_text())
+        transaction = {
+            "schema_version": "magi-deja-context-transaction/v1",
+            "context": context,
+            "receipt": receipt,
+        }
+        context_path.unlink()
+        receipt_path.unlink()
+        write_json(self.state / ".deja-context.transaction.json", transaction)
+        recovered = self.select()
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(json.loads(context_path.read_text()), context)
+        self.assertEqual(json.loads(receipt_path.read_text()), receipt)
+        self.assertFalse((self.state / ".deja-context.transaction.json").exists())
+
+    def test_incomplete_pair_without_transaction_fails_closed(self) -> None:
+        self.assertEqual(self.select().returncode, 0)
+        (self.state / "deja-context.receipt.json").unlink()
+        result = self.select()
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue((self.state / "deja-context.json").is_file())
+
+    def test_oversized_corpus_is_unavailable_before_admission(self) -> None:
+        campaign = self.prepare(
+            "oversized",
+            artifact(self.target_sha, finding("OVERSIZED", root="oversized")),
+        )
+        corpus = campaign / "normalized-findings.jsonl"
+        with corpus.open("ab") as handle:
+            handle.truncate(8 * 1024 * 1024 + 1)
+        result = self.select()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads((self.state / "deja-context.json").read_text())
+        receipt = json.loads((self.state / "deja-context.receipt.json").read_text())
+        self.assertEqual(context["status"], "unavailable")
+        self.assertEqual(receipt["errors"], ["corpus-byte-limit"])
+
     def test_capture_uses_slice0_and_writes_bounded_receipt(self) -> None:
         source = self.sources / "capture.json"
         write_json(source, artifact(self.target_sha, finding("CAPTURE")))

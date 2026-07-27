@@ -36,6 +36,7 @@ SCRUBBER = ROOT / "scripts/magi_scrub.py"
 
 CONTEXT_NAME = "deja-context.json"
 RECEIPT_NAME = "deja-context.receipt.json"
+TRANSACTION_NAME = ".deja-context.transaction.json"
 MAX_CAMPAIGNS = 256
 MAX_CORPUS_BYTES = 8 * 1024 * 1024
 MAX_FINDINGS = 8
@@ -96,6 +97,17 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace(
         "+00:00", "Z"
     )
+
+
+def capture_timeout() -> int:
+    raw = os.environ.get("MAGI_DEJA_CAPTURE_TIMEOUT_S", "120")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise DejaError("MAGI_DEJA_CAPTURE_TIMEOUT_S must be an integer") from exc
+    if not 1 <= value <= 120:
+        raise DejaError("MAGI_DEJA_CAPTURE_TIMEOUT_S must be within 1..120")
+    return value
 
 
 def validate_timestamp(value: Any) -> None:
@@ -212,11 +224,6 @@ def validate_frozen(
 ) -> tuple[dict[str, Any], dict[str, Any], bytes]:
     context_path = state / CONTEXT_NAME
     receipt_path = state / RECEIPT_NAME
-    if context_path.exists() and not receipt_path.exists():
-        for _ in range(50):
-            time.sleep(0.02)
-            if receipt_path.exists():
-                break
     if not context_path.exists() or not receipt_path.exists():
         raise DejaError("frozen Deja context pair is incomplete")
     context = load_json(context_path, CONTEXT_SCHEMA)
@@ -226,6 +233,16 @@ def validate_frozen(
         receipt, path_id, target_sha, protocol_sha
     ):
         raise DejaError("frozen Deja context identity mismatch")
+    block = validate_payload_pair(context, receipt)
+    return context, receipt, block
+
+
+def validate_payload_pair(
+    context: dict[str, Any], receipt: dict[str, Any]
+) -> bytes:
+    jsonschema.validate(context, CONTEXT_SCHEMA)
+    jsonschema.validate(receipt, RECEIPT_SCHEMA)
+    validate_timestamp(receipt["created_at"])
     context_raw = canonical_bytes(context)
     block = render_context(context)
     if (
@@ -241,7 +258,68 @@ def validate_frozen(
         != receipt["valid_campaign_count"] + receipt["invalid_campaign_count"]
     ):
         raise DejaError("frozen Deja context digest/count mismatch")
-    return context, receipt, block
+    return block
+
+
+def recover_transaction(
+    state: Path, path_id: str, target_sha: str, protocol_sha: str
+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    transaction_path = state / TRANSACTION_NAME
+    transaction = load_json(
+        transaction_path,
+        {
+            "type": "object",
+            "properties": {
+                "schema_version": {"const": "magi-deja-context-transaction/v1"},
+                "context": CONTEXT_SCHEMA,
+                "receipt": RECEIPT_SCHEMA,
+            },
+            "required": ["schema_version", "context", "receipt"],
+            "additionalProperties": False,
+        },
+        max_bytes=512 * 1024,
+    )
+    context = transaction["context"]
+    receipt = transaction["receipt"]
+    if not same_identity(context, path_id, target_sha, protocol_sha) or not same_identity(
+        receipt, path_id, target_sha, protocol_sha
+    ):
+        raise DejaError("Deja transaction identity mismatch")
+    validate_payload_pair(context, receipt)
+    for path, payload, schema in (
+        (state / CONTEXT_NAME, context, CONTEXT_SCHEMA),
+        (state / RECEIPT_NAME, receipt, RECEIPT_SCHEMA),
+    ):
+        raw = canonical_bytes(payload)
+        if path.exists():
+            if canonical_bytes(load_json(path, schema)) != raw:
+                raise DejaError("Deja transaction conflicts with published state")
+        elif not publish_once(path, raw):
+            if canonical_bytes(load_json(path, schema)) != raw:
+                raise DejaError("racing Deja publication differs from transaction")
+    result = validate_frozen(state, path_id, target_sha, protocol_sha)
+    transaction_path.unlink(missing_ok=True)
+    directory_fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return result
+
+
+def recover_or_validate(
+    state: Path, path_id: str, target_sha: str, protocol_sha: str
+) -> tuple[dict[str, Any], dict[str, Any], bytes]:
+    for _ in range(100):
+        if (state / TRANSACTION_NAME).exists():
+            try:
+                return recover_transaction(state, path_id, target_sha, protocol_sha)
+            except FileNotFoundError:
+                pass
+        if (state / CONTEXT_NAME).exists() and (state / RECEIPT_NAME).exists():
+            return validate_frozen(state, path_id, target_sha, protocol_sha)
+        time.sleep(0.02)
+    raise DejaError("Deja transaction recovery did not converge")
 
 
 def path_contained(source: str, state: Path) -> bool:
@@ -310,9 +388,22 @@ def scan(
             if stat.S_ISLNK(campaign_lstat.st_mode):
                 raise DejaError("symlink-campaign")
             fds = slice0.open_campaign(str(root), name, create=False)
+            normalized_info = os.stat(
+                "normalized-findings.jsonl",
+                dir_fd=fds.campaign_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(normalized_info.st_mode)
+                or normalized_info.st_size > MAX_CORPUS_BYTES - corpus_bytes
+            ):
+                raise DejaError("corpus-byte-limit")
             campaign = slice0.validate_campaign_dir(fds)
             normalized_size = campaign["normalized_bytes"]
-            if normalized_size > MAX_CORPUS_BYTES - corpus_bytes:
+            if (
+                normalized_size != normalized_info.st_size
+                or normalized_size > MAX_CORPUS_BYTES - corpus_bytes
+            ):
                 raise DejaError("corpus-byte-limit")
             raw = slice0.read_at(
                 fds.campaign_fd,
@@ -407,12 +498,22 @@ def select_command(args: argparse.Namespace) -> int:
     target = Path(args.target).resolve(strict=True)
     state = safe_state_dir(Path(args.magi_state), create=True)
     validate_identity(target, args.target_path_id, args.target_sha, args.protocol_sha)
-    if (state / CONTEXT_NAME).exists() or (state / RECEIPT_NAME).exists():
+    if (state / TRANSACTION_NAME).exists():
+        context, _, _ = recover_or_validate(
+            state, args.target_path_id, args.target_sha, args.protocol_sha
+        )
+        print(context["status"])
+        return 0
+    context_exists = (state / CONTEXT_NAME).exists()
+    receipt_exists = (state / RECEIPT_NAME).exists()
+    if context_exists and receipt_exists:
         context, _, _ = validate_frozen(
             state, args.target_path_id, args.target_sha, args.protocol_sha
         )
         print(context["status"])
         return 0
+    if context_exists or receipt_exists:
+        raise DejaError("frozen Deja context pair is incomplete without a transaction")
 
     metrics = {
         "inspected_campaign_count": 0,
@@ -463,14 +564,20 @@ def select_command(args: argparse.Namespace) -> int:
         "selected_sources": selected_sources,
     }
     jsonschema.validate(receipt, RECEIPT_SCHEMA)
-    if not publish_once(state / CONTEXT_NAME, context_raw):
-        validate_frozen(state, args.target_path_id, args.target_sha, args.protocol_sha)
-        print(load_json(state / CONTEXT_NAME, CONTEXT_SCHEMA)["status"])
+    transaction = {
+        "schema_version": "magi-deja-context-transaction/v1",
+        "context": context,
+        "receipt": receipt,
+    }
+    if not publish_once(state / TRANSACTION_NAME, canonical_bytes(transaction)):
+        context, _, _ = recover_or_validate(
+            state, args.target_path_id, args.target_sha, args.protocol_sha
+        )
+        print(context["status"])
         return 0
-    if not publish_once(state / RECEIPT_NAME, canonical_bytes(receipt)):
-        validate_frozen(state, args.target_path_id, args.target_sha, args.protocol_sha)
-    else:
-        validate_frozen(state, args.target_path_id, args.target_sha, args.protocol_sha)
+    context, _, _ = recover_or_validate(
+        state, args.target_path_id, args.target_sha, args.protocol_sha
+    )
     print(context["status"])
     return 0
 
@@ -620,7 +727,7 @@ def capture_command(args: argparse.Namespace) -> int:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=False,
-            timeout=900,
+            timeout=capture_timeout(),
         )
         if result.returncode != 0:
             bounded_capture_receipt(
