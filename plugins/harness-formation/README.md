@@ -145,10 +145,25 @@ the parent's pane route separately from its semantic identity: worker
 `report`/`done`/`ask` and parent `ack`/`resolve` all append first, then use the
 same zero-keystroke relay-or-direct signal policy. A dead relay therefore does
 not silently remove the badge fallback, and the body never enters a prompt.
-The parent pane is discovered by process ancestry rather than trusting
-`TMUX_PANE`; stale/inherited sibling ids are ignored. Spawn fails closed when
-it can prove neither a real parent pane nor an explicit `FORMATION_SELF`,
-because replies would otherwise be unaddressable.
+The parent pane is discovered by process ancestry, with a unique controlling
+TTY ↔ `pane_tty` match as the safe fallback for wrapper processes that break
+the root-PID chain. `TMUX_PANE` and mutable window names are never proof;
+stale/inherited sibling ids are ignored. Spawn fails closed when it can prove
+neither a real parent pane with a valid locked/legacy identity nor an explicit
+`FORMATION_SELF`, because replies would otherwise be unaddressable.
+`formation status` renders missing/invalid routes as `parent=UNROUTABLE`
+without mutating legacy rows. An operator in the intended parent pane can
+repair exactly one unambiguous legacy row with
+`formation repair-parent <worker_id>`; the command derives the parent from the
+verified current pane and its locked identity. It also requires the target
+child pane to be live and still carry the worker's locked/legacy identity,
+then synchronizes that pane's parent options with an in-place registry update
+under the registry lock. Before mutation it writes registry, target-row, and
+pane-option preimages below `~/sanada_backup_persistent/` (override with
+`FORMATION_PARENT_REPAIR_BACKUP_ROOT`) and prints that recovery path.
+Set-option or registry failures roll pane options back; closed/recycled child
+panes and mismatched non-null routes are refused. An already exact pane+row
+pair is a byte-for-byte no-op.
 Lifecycle commands return exit `4` when the row/state is durable but a known
 pane could not be signaled. Do not automatically retry `report` or `done` on
 that code—the retry would append a duplicate row. A missing or unverified pane

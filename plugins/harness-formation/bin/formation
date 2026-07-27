@@ -73,6 +73,12 @@ registry_add() {
         exclusive_input: ($exclusive == "1"),
         parent_id: (if $parent_id == "" then null else $parent_id end),
         parent_pane: (if $parent_pane == "" then null else $parent_pane end),
+        parent_route_state:
+          (if $parent_id != "" and $parent_pane != "" then "ROUTABLE"
+           else "UNROUTABLE" end),
+        parent_route_reason:
+          (if $parent_id != "" and $parent_pane != "" then null
+           else "missing-parent-route" end),
         relay_state: "STARTING", relay_pid: null, relay_reason: null,
         relay_log: null, relay_updated: $ts}' \
       >> "$REGISTRY"
@@ -82,6 +88,199 @@ registry_add() {
 registry_get() {
   local worker_id="$1"
   jq -c --arg id "$worker_id" 'select(.id == $id)' "$REGISTRY" | tail -n1
+}
+
+# Read a pane user-option while preserving unset-vs-set for rollback.
+# Output: <0|1>|<value>
+pane_option_snapshot() {
+  local pane="$1" option="$2" line
+  line="$(tmux show-options -p -q -t "$pane" "$option" 2>/dev/null)" || return 1
+  if [[ "$line" == "$option "* ]]; then
+    printf '1|%s\n' "${line#"$option "}"
+  else
+    printf '0|\n'
+  fi
+}
+
+restore_pane_option() {
+  local pane="$1" option="$2" was_set="$3" value="$4"
+  if [[ "$was_set" == "1" ]]; then
+    tmux set-option -p -t "$pane" "$option" "$value" >/dev/null
+  else
+    tmux set-option -p -u -t "$pane" "$option" >/dev/null
+  fi
+}
+
+rollback_parent_pane_options() {
+  local pane="$1" id_set="$2" id_value="$3" pane_set="$4" pane_value="$5"
+  local failed=0
+  restore_pane_option "$pane" @formation_parent_pane \
+    "$pane_set" "$pane_value" || failed=1
+  restore_pane_option "$pane" @formation_parent_id \
+    "$id_set" "$id_value" || failed=1
+  [[ "$failed" -eq 0 ]]
+}
+
+# Repair one legacy worker's full nudge route without appending a registry row.
+# The caller supplies a parent pane+identity pair already verified from the
+# current process. This transaction also verifies the child pane identity,
+# journals every preimage persistently, updates both live child pane options,
+# then atomically replaces the sole registry row under the #217 lock.
+registry_repair_parent_route() {
+  local worker_id="$1" parent_id="$2" parent_pane="$3"
+  (
+    flock -x 202
+    local count current current_parent current_pane current_route_state
+    local worker_pane worker_identity
+    local id_snapshot pane_snapshot id_set id_value pane_set pane_value
+    local live_parent live_parent_pane backup_root backup_dir backup_ts tmp
+    local rollback_failed=0
+    count="$(jq -s --arg id "$worker_id" \
+      '[.[] | select(.id == $id)] | length' "$REGISTRY")"
+    if [[ "$count" -eq 0 ]]; then
+      echo "formation: no such worker: $worker_id" >&2
+      exit 2
+    fi
+    if [[ "$count" -ne 1 ]]; then
+      echo "formation: refusing ambiguous repair for $worker_id: registry has $count rows" >&2
+      exit 5
+    fi
+    current="$(registry_get "$worker_id")"
+    current_parent="$(printf '%s\n' "$current" | jq -r '.parent_id // empty')"
+    current_pane="$(printf '%s\n' "$current" | jq -r '.parent_pane // empty')"
+    current_route_state="$(printf '%s\n' "$current" | jq -r '.parent_route_state // empty')"
+    if [[ (-n "$current_parent" && "$current_parent" != "$parent_id") ||
+          (-n "$current_pane" && "$current_pane" != "$parent_pane") ]]; then
+      echo "formation: refusing to overwrite a different non-null parent route for $worker_id" >&2
+      exit 5
+    fi
+
+    worker_pane="$(printf '%s\n' "$current" | jq -r '.pane_id // empty')"
+    [[ "$worker_pane" =~ ^%[0-9]+$ ]] || {
+      echo "formation: refusing parent repair: worker $worker_id has an invalid pane route" >&2
+      exit 5
+    }
+    worker_identity="$(mailbox_resolve_formation_pane_identity "$worker_pane" || true)"
+    [[ "$worker_identity" == "$worker_id" ]] || {
+      echo "formation: refusing parent repair: target pane $worker_pane is closed, recycled, or belongs to '${worker_identity:-unknown}'" >&2
+      exit 5
+    }
+
+    id_snapshot="$(pane_option_snapshot "$worker_pane" @formation_parent_id)" || {
+      echo "formation: refusing parent repair: cannot read target pane parent-id option" >&2
+      exit 5
+    }
+    pane_snapshot="$(pane_option_snapshot "$worker_pane" @formation_parent_pane)" || {
+      echo "formation: refusing parent repair: cannot read target pane parent-pane option" >&2
+      exit 5
+    }
+    IFS='|' read -r id_set id_value <<<"$id_snapshot"
+    IFS='|' read -r pane_set pane_value <<<"$pane_snapshot"
+    live_parent=""
+    live_parent_pane=""
+    if [[ "$id_set" == "1" ]]; then live_parent="$id_value"; fi
+    if [[ "$pane_set" == "1" ]]; then live_parent_pane="$pane_value"; fi
+    if [[ (-n "$live_parent" && "$live_parent" != "$parent_id") ||
+          (-n "$live_parent_pane" && "$live_parent_pane" != "$parent_pane") ]]; then
+      echo "formation: refusing to overwrite a different non-null live pane route for $worker_id" >&2
+      exit 5
+    fi
+    if [[ "$current_parent" == "$parent_id" &&
+          "$current_pane" == "$parent_pane" &&
+          "$current_route_state" == "ROUTABLE" &&
+          "$live_parent" == "$parent_id" &&
+          "$live_parent_pane" == "$parent_pane" ]]; then
+      printf 'unchanged|\n'
+      exit 0
+    fi
+
+    [[ "$(mailbox_resolve_locked_pane_identity "$parent_pane" || true)" == "$parent_id" ]] || {
+      echo "formation: refusing parent repair: caller pane identity changed before journaling" >&2
+      exit 5
+    }
+    backup_root="${FORMATION_PARENT_REPAIR_BACKUP_ROOT:-$HOME/sanada_backup_persistent}"
+    backup_ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    backup_dir="$backup_root/formation_parent_repair_${worker_id}_${backup_ts}_$$"
+    if ! mkdir -p "$backup_root" || ! mkdir "$backup_dir" ||
+       ! cp -- "$REGISTRY" "$backup_dir/registry.jsonl.preimage" ||
+       ! printf '%s\n' "$current" >"$backup_dir/target-row.json" ||
+       ! jq -cn --arg worker "$worker_id" --arg pane "$worker_pane" \
+          --arg id_set "$id_set" --arg id_value "$id_value" \
+          --arg pane_set "$pane_set" --arg pane_value "$pane_value" \
+          '{
+            worker_id:$worker,pane_id:$pane,
+            parent_id:{set:($id_set == "1"),value:$id_value},
+            parent_pane:{set:($pane_set == "1"),value:$pane_value}
+          }' >"$backup_dir/pane-options.json"; then
+      echo "formation: refusing parent repair: persistent preimage journal failed" >&2
+      exit 7
+    fi
+
+    tmp="$(mktemp "$FORMATION_DIR/.registry.parent-repair.XXXXXX")"
+    if ! jq -c --arg id "$worker_id" --arg parent "$parent_id" \
+        --arg pane "$parent_pane" '
+          if .id == $id then
+            . + {
+              parent_id: $parent,
+              parent_pane: $pane,
+              parent_route_state: "ROUTABLE",
+              parent_route_reason: null,
+              parent_route_repaired_via: "locked-caller"
+            }
+          else . end
+        ' "$REGISTRY" > "$tmp"; then
+      rm -f "$tmp"
+      exit 1
+    fi
+
+    if [[ "$(mailbox_resolve_formation_pane_identity "$worker_pane" || true)" != "$worker_id" ]]; then
+      rm -f "$tmp"
+      echo "formation: refusing parent repair: target pane identity changed before mutation; backup=$backup_dir" >&2
+      exit 5
+    fi
+    if ! tmux set-option -p -t "$worker_pane" \
+        @formation_parent_id "$parent_id" >/dev/null ||
+       ! tmux set-option -p -t "$worker_pane" \
+        @formation_parent_pane "$parent_pane" >/dev/null; then
+      rollback_parent_pane_options "$worker_pane" \
+        "$id_set" "$id_value" "$pane_set" "$pane_value" || rollback_failed=1
+      rm -f "$tmp"
+      if [[ "$rollback_failed" -eq 1 ]]; then
+        echo "formation: PARTIAL REPAIR: pane-option write failed and rollback failed; registry remains unchanged; recover from $backup_dir" >&2
+        exit 8
+      fi
+      echo "formation: parent repair pane-option write failed; rolled back; backup=$backup_dir" >&2
+      exit 7
+    fi
+
+    live_parent="$(pane_option_snapshot "$worker_pane" @formation_parent_id || true)"
+    live_parent_pane="$(pane_option_snapshot "$worker_pane" @formation_parent_pane || true)"
+    if [[ "$live_parent" != "1|$parent_id" ||
+          "$live_parent_pane" != "1|$parent_pane" ]]; then
+      rollback_parent_pane_options "$worker_pane" \
+        "$id_set" "$id_value" "$pane_set" "$pane_value" || rollback_failed=1
+      rm -f "$tmp"
+      if [[ "$rollback_failed" -eq 1 ]]; then
+        echo "formation: PARTIAL REPAIR: pane-option verification and rollback failed; registry remains unchanged; recover from $backup_dir" >&2
+        exit 8
+      fi
+      echo "formation: parent repair pane-option verification failed; rolled back; backup=$backup_dir" >&2
+      exit 7
+    fi
+
+    if ! mv "$tmp" "$REGISTRY"; then
+      rollback_parent_pane_options "$worker_pane" \
+        "$id_set" "$id_value" "$pane_set" "$pane_value" || rollback_failed=1
+      rm -f "$tmp"
+      if [[ "$rollback_failed" -eq 1 ]]; then
+        echo "formation: PARTIAL REPAIR: registry replace and pane rollback failed; registry remains unchanged; recover from $backup_dir" >&2
+        exit 8
+      fi
+      echo "formation: parent repair registry replace failed; pane options rolled back; backup=$backup_dir" >&2
+      exit 7
+    fi
+    printf 'repaired|%s\n' "$backup_dir"
+  ) 202>"$REGISTRY_LOCK"
 }
 
 registry_remove() {
@@ -305,6 +504,8 @@ Parent (lead) commands:
                                           pull nudge and requires --exclusive-input.
   formation status                        List active workers: task, age, last mailbox report
                                           (falls back to last pane line if no report yet)
+  formation repair-parent <worker_id>     Repair one legacy null parent route from the
+                                          verified current caller pane's locked identity
   formation inbox                         Read unread reports addressed to self
   formation inbox --history               Also show the last 50 addressed mailbox rows
   formation ack <request_id> [summary]     Acknowledge an ASK; worker resumes RUNNING
@@ -583,15 +784,21 @@ cmd_spawn() {
   parent_pane_candidate="${TMUX_PANE:-}"
   parent_pane="$(mailbox_resolve_caller_pane || true)"
   if [[ -n "$parent_pane" ]]; then
-    # Bind semantic identity to the ancestry-proven pane, not to a stale
-    # inherited TMUX_PANE value.
-    parent_id="$(TMUX_PANE="$parent_pane" self_id)"
+    # Bind semantic identity to the PID/TTY-proven pane, not to a stale
+    # inherited TMUX_PANE value. A pane-id/process fallback is not a valid
+    # parent identity: missing or malformed locked/legacy identity must refuse
+    # before tmux or registry mutation.
+    parent_id="$(mailbox_resolve_formation_pane_identity "$parent_pane" || true)"
+    [[ -n "$parent_id" ]] || {
+      echo "formation: refusing spawn: verified parent pane $parent_pane has no valid locked/legacy Formation identity." >&2
+      return 2
+    }
     if [[ -n "$parent_pane_candidate" && "$parent_pane_candidate" != "$parent_pane" ]]; then
-      echo "formation: warning: ignored stale TMUX_PANE=$parent_pane_candidate; resolved caller pane=$parent_pane by process ancestry." >&2
+      echo "formation: warning: ignored stale TMUX_PANE=$parent_pane_candidate; verified caller pane=$parent_pane." >&2
     fi
   else
     parent_pane=""
-    [[ -n "${FORMATION_SELF:-}" ]] || {
+    [[ "${FORMATION_SELF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
       echo "formation: refusing spawn without an ancestry-proven parent pane or explicit FORMATION_SELF; replies would be unaddressable." >&2
       return 2
     }
@@ -838,13 +1045,21 @@ cmd_status() {
   fi
   while IFS= read -r row; do
     local id pane cli task spawned age last ask ask_id ask_ts ask_age ask_text ask_count ask_parent
-    local relay
+    local relay parent_id parent_pane parent_route
     id="$(echo "$row" | jq -r '.id')"
     pane="$(echo "$row" | jq -r '.pane_id // empty')"
     cli="$(echo "$row" | jq -r '.cli // "claude"')"
     task="$(echo "$row" | jq -r '.task // "-"')"
     spawned="$(echo "$row" | jq -r '.spawned // empty')"
     relay="$(relay_effective_state "$id" "$row")"
+    parent_id="$(echo "$row" | jq -r '.parent_id // empty')"
+    parent_pane="$(echo "$row" | jq -r '.parent_pane // empty')"
+    if [[ "$parent_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
+          "$parent_pane" =~ ^%[0-9]+$ ]]; then
+      parent_route="parent=$parent_id@$parent_pane"
+    else
+      parent_route="parent=UNROUTABLE"
+    fi
     age="?"
     if [[ -n "$spawned" ]]; then
       local then_s now_s
@@ -888,9 +1103,40 @@ cmd_status() {
       last="$(tmux capture-pane -p -t "$pane" 2>/dev/null | sed '/^$/d' | tail -n1 || true)"
     fi
     last="${last:-(pane closed)}"
-    printf '%-16s %-6s %-7s %-28s %-5s %-13s %s\n' \
-      "$id" "$pane" "[$cli]" "$task" "$age" "relay=$relay" "$last"
+    printf '%-16s %-6s %-7s %-28s %-5s %-13s %-28s %s\n' \
+      "$id" "$pane" "[$cli]" "$task" "$age" "relay=$relay" "$parent_route" "$last"
   done < "$REGISTRY"
+}
+
+cmd_repair_parent() {
+  [[ $# -eq 1 ]] || {
+    echo "usage: formation repair-parent <worker_id>" >&2
+    return 2
+  }
+  local worker_id="$1" parent_pane parent_id result repair_rc result_state backup_dir
+  [[ "$worker_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+    echo "formation: invalid worker id: $worker_id" >&2
+    return 2
+  }
+  parent_pane="$(mailbox_resolve_caller_pane || true)"
+  [[ "$parent_pane" =~ ^%[0-9]+$ ]] || {
+    echo "formation: refusing parent repair without a verified current caller pane" >&2
+    return 2
+  }
+  parent_id="$(mailbox_resolve_locked_pane_identity "$parent_pane" || true)"
+  [[ -n "$parent_id" ]] || {
+    echo "formation: refusing parent repair: verified pane $parent_pane has no valid locked identity" >&2
+    return 2
+  }
+  result="$(registry_repair_parent_route "$worker_id" "$parent_id" "$parent_pane")" ||
+    { repair_rc=$?; return "$repair_rc"; }
+  result_state="${result%%|*}"
+  backup_dir="${result#*|}"
+  if [[ "$result_state" == "unchanged" ]]; then
+    echo "parent route already set: worker=$worker_id parent=$parent_id pane=$parent_pane (no-op)"
+  else
+    echo "parent route repaired: worker=$worker_id parent=$parent_id pane=$parent_pane backup=$backup_dir"
+  fi
 }
 
 cmd_inbox() {
@@ -1144,6 +1390,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     spawn)  cmd_spawn  "$@" ;;
     msg)    cmd_msg    "$@" ;;
     status) cmd_status "$@" ;;
+    repair-parent) cmd_repair_parent "$@" ;;
     inbox)  cmd_inbox  "$@" ;;
     remote-check) cmd_remote_check "$@" ;;
     reap)   cmd_reap   "$@" ;;

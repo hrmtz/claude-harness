@@ -115,7 +115,8 @@ mailbox_resolve_recipient() {
 # tmux run-shell can inherit a live sibling pane id (#59). This check is
 # read-only and uses no process-name inference.
 mailbox_resolve_caller_pane() {
-  local pid="$$" next guard=0 line pane pane_pid rank best_rank=999 best_pane=""
+  local pid="$$" next guard=0 line pane pane_pid pane_tty rank
+  local best_rank=999 best_pane="" caller_tty="" tty_pane="" tty_matches=0
   declare -A ancestor_rank=()
 
   while [[ "$guard" -lt 64 && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]]; do
@@ -126,19 +127,68 @@ mailbox_resolve_caller_pane() {
     guard=$((guard + 1))
   done
 
-  while IFS= read -r line; do
-    IFS='|' read -r pane pane_pid <<<"$line"
-    [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ ]] || continue
-    [[ -n "${ancestor_rank[$pane_pid]+x}" ]] || continue
-    rank="${ancestor_rank[$pane_pid]}"
-    if [[ "$rank" -lt "$best_rank" ]]; then
-      best_rank="$rank"
-      best_pane="$pane"
-    fi
-  done < <(tmux list-panes -a -F '#{pane_id}|#{pane_pid}' 2>/dev/null || true)
+  caller_tty="$(ps -o tty= -p "$$" 2>/dev/null |
+    awk 'NR == 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' || true)"
+  case "$caller_tty" in
+    ""|"?"|"??") caller_tty="" ;;
+    /dev/*) ;;
+    *) caller_tty="/dev/$caller_tty" ;;
+  esac
 
-  [[ -n "$best_pane" ]] || return 1
-  printf '%s\n' "$best_pane"
+  while IFS= read -r line; do
+    IFS='|' read -r pane pane_pid pane_tty <<<"$line"
+    [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ ]] || continue
+    if [[ -n "${ancestor_rank[$pane_pid]+x}" ]]; then
+      rank="${ancestor_rank[$pane_pid]}"
+      if [[ "$rank" -lt "$best_rank" ]]; then
+        best_rank="$rank"
+        best_pane="$pane"
+      fi
+    fi
+    if [[ -n "$caller_tty" && "$pane_tty" == "$caller_tty" ]]; then
+      tty_pane="$pane"
+      tty_matches=$((tty_matches + 1))
+    fi
+  done < <(tmux list-panes -a -F '#{pane_id}|#{pane_pid}|#{pane_tty}' 2>/dev/null || true)
+
+  if [[ -n "$best_pane" ]]; then
+    printf '%s\n' "$best_pane"
+    return
+  fi
+
+  # Wrappers such as CLI launch guards can break the pane-root PID ancestry
+  # chain while the caller still owns the pane's controlling TTY. Accept only
+  # an exact, unique pane_tty match. This does not consult inherited
+  # TMUX_PANE, mutable window names, or pane titles, so a live sibling cannot
+  # become the reply route merely because its id is present in the environment.
+  [[ "$tty_matches" -eq 1 && -n "$tty_pane" ]] || return 1
+  printf '%s\n' "$tty_pane"
+}
+
+# Return only the immutable Formation identity locked on a verified pane.
+# Callers must prove the pane with mailbox_resolve_caller_pane first.
+mailbox_resolve_locked_pane_identity() {
+  local pane="${1:-}" identity=""
+  [[ "$pane" =~ ^%[0-9]+$ ]] || return 1
+  identity="$(tmux display-message -p -t "$pane" \
+    '#{@formation_identity_locked}' 2>/dev/null |
+    tr -d '\000-\037\177' || true)"
+  [[ "$identity" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
+  printf '%s\n' "$identity"
+}
+
+# Resolve only the immutable/legacy Formation identity on a verified pane.
+# Unlike mailbox_resolve_sender this deliberately has no pane-id, window-name,
+# MAILBOX_FROM, or process-name fallback: a spawn reply route must be an
+# existing semantic Formation identity.
+mailbox_resolve_formation_pane_identity() {
+  local pane="${1:-}" identity=""
+  [[ "$pane" =~ ^%[0-9]+$ ]] || return 1
+  identity="$(tmux display-message -p -t "$pane" \
+    '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}' \
+    2>/dev/null | tr -d '\000-\037\177' || true)"
+  [[ "$identity" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
+  printf '%s\n' "$identity"
 }
 
 # Signal a durable row. A healthy relay remains the single signal owner;
