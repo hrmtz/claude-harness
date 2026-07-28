@@ -143,8 +143,11 @@ def repairable_path(
     path: str, *, exact_deny: Iterable[str], prefix_deny: Iterable[str]
 ) -> bool:
     """Allow plugin source only; workflow paths allowlists are intentionally irrelevant."""
-    clean = pathlib.PurePosixPath(path).as_posix().lstrip("/")
-    name = pathlib.PurePosixPath(clean).name
+    parsed = pathlib.PurePosixPath(path)
+    if parsed.is_absolute() or any(part in {"", ".", ".."} for part in parsed.parts):
+        return False
+    clean = parsed.as_posix()
+    name = parsed.name
     if clean in set(exact_deny):
         return False
     if any(clean.startswith(prefix) for prefix in prefix_deny):

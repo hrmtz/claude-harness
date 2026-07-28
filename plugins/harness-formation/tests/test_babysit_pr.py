@@ -114,6 +114,12 @@ class CiMatcherP15Tests(unittest.TestCase):
                 exact_deny=exact, prefix_deny=prefixes,
             ))
 
+    def test_path_traversal_is_never_repairable(self):
+        self.assertFalse(repairable_path(
+            "plugins/example/../../.github/workflows/ci.yml",
+            exact_deny=(), prefix_deny=(),
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

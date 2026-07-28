@@ -5,6 +5,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 
 HERE = pathlib.Path(__file__).resolve().parent
 HOOK = HERE.parent / "hooks" / "pr_receipt.sh"
@@ -50,14 +51,14 @@ class ReceiptHookTests(unittest.TestCase):
         self.registry.write_text(json.dumps({
             "id": "fixture-worker",
             "pane_id": "%42",
-            "session_id": "fixture-session",
+            "session_id": "formation-session",
         }) + "\n", encoding="utf-8")
 
     def payload(self, event="PostToolUse"):
         body = f"Fixture PR\n\n<!-- babysit-pr-nonce: {NONCE} -->"
         return {
             "hook_event_name": event,
-            "session_id": "fixture-session",
+            "session_id": "claude-conversation-session",
             "cwd": str(self.repo),
             "timestamp": "2026-07-28T00:00:00Z",
             "tool_input": {
@@ -78,6 +79,7 @@ class ReceiptHookTests(unittest.TestCase):
                 **os.environ,
                 "HOME": str(self.home),
                 "PATH": f"{self.bin}:{os.environ['PATH']}",
+                "FORMATION_SESSION_ID": "formation-session",
             },
             capture_output=True,
             check=False,
@@ -92,12 +94,10 @@ class ReceiptHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.receipts()), 1)
         receipt = json.loads(self.receipts()[0].read_text(encoding="utf-8"))
+        created_at = receipt.pop("created_at")
+        self.assertIsNotNone(datetime.fromisoformat(created_at))
         self.assertEqual(receipt, {
-            "created_at": "2026-07-28T00:00:00Z",
-            "head_oid": self.oid,
-            "nonce": NONCE,
-            "pr": 42,
-            "repo": "owner/repo",
+            "head_oid": self.oid, "nonce": NONCE, "pr": 42, "repo": "owner/repo",
         })
         self.assertIn(receipt["nonce"], self.payload()["tool_input"]["command"])
 

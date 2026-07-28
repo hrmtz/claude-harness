@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 PR_URL_RE = re.compile(
     r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)"
@@ -117,7 +118,9 @@ def process(payload: Mapping[str, object], home: pathlib.Path) -> pathlib.Path |
     if not match:
         return None
     repo, number = f"{match.group(1)}/{match.group(2)}", int(match.group(3))
-    session_id = str(payload.get("session_id") or "")
+    # Formation owns its spawn-scoped id in the inherited environment. Claude's
+    # hook payload session_id is a different CLI conversation UUID.
+    session_id = os.environ.get("FORMATION_SESSION_ID", "")
     cwd = str(payload.get("cwd") or "")
     registry = home / ".formation" / "formation" / "registry.jsonl"
     if not cwd or _active_formation_row(registry, session_id, cwd) is None:
@@ -136,7 +139,7 @@ def process(payload: Mapping[str, object], home: pathlib.Path) -> pathlib.Path |
         "pr": number,
         "head_oid": anchor,
         "nonce": nonce,
-        "created_at": payload.get("timestamp"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     fd = os.open(target, flags, 0o600)
