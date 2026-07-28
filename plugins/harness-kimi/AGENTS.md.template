@@ -1,9 +1,21 @@
 # Agent harness — behavioral rails（Kimi / Codex / local models 共通）
 
-> Kimi Code CLI には Claude/Codex のような PreToolUse/PostToolUse hook がないため、
-> 本 AGENTS.md は harness の核心を behavioral/instruction 層に移植したもの。
-> 構造的後詰めとして、別途 `kimi_session_scrub` が `~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl`
-> を定期的にスキャンし、既知の credential 値を自動 redact する。
+> Kimi Code CLI >= 0.28 には native hook API がある (PreToolUse/PostToolUse/
+> UserPromptSubmit/Stop 等。`~/.kimi-code/config.toml` の `[[hooks]]` で設定、
+> exit code 2 でブロック可)。`install-kimi-hooks.sh` が
+> `plugins/cross_cli_hooks.json` から `~/.kimi-code/config.toml` の `[[hooks]]`
+> に配線する (gh #54)。
+> ただし Kimi hook は fail-open (hook の error/timeout は allow 扱い) であり、
+> 唯一の防御線にはできない。本 AGENTS.md はその behavioral/instruction 補完層。
+> 構造的補強の現状 (gh #54 時点):
+> - §2/§3 (SOPS 2-command 原則・credential pre-flight) は PreToolUse hook
+>   (`bash_command_guard.sh`、`~/.kimi-code/config.toml` の harness-kimi ブロック)
+>   で構造強制済み。`sops -d`・credential file 直接 read・`env | grep`・Bearer
+>   直書き等は stdout の deny JSON でブロックされる (fail-open のため behavioral 層は維持)。
+> - 構造的後詰めとして、別途 `kimi_session_scrub` が
+>   `~/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl` を定期的に (毎分 cron)
+>   スキャンし、既知の credential 値を自動 redact する。さらに SessionEnd hook
+>   (`session_end_scrub.sh`) でセッション終了時にも即時起動される。
 
 ## 1. 真田志郎メソッド（事前備え）
 
@@ -24,6 +36,10 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 
 - `sops edit <file>`
 - `sops exec-env <file> '<cmd>'`
+
+`sops exec-env` は scalar だけの flat mapping に限る。nested mapping / list
+を含む complex value は error に復号値が混ざり得るため実行せず、`sops edit`
+で flat mapping に再構成する。
 
 `sops -d` や `sops -d ... | head/cat/grep/tee/less` は書かない。必要な値は `sops exec-env <file> '<cmd>'` で subprocess env に注入する。
 
@@ -65,7 +81,7 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 tmux pane 内で動作している場合、起動時に window name が `<chassis>-<codename>` 形式で設定されている（例: `kimi-rust-fox` / `codex-iron-petal`）。
 
 - Formation worker では pane option `@formation_identity_locked`（通常は `FORMATION_SELF` と同値）を routing / self-reference の source of truth とし、window name や互換 alias の `@formation_id` より優先する。window name は `<chassis>-<formation_identity_locked>` と表示する。
-- session 開始時（または identity が曖昧になった時）、まず `tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'` を実行して自分の名前を確認する。`-t "$TMUX_PANE"` は省略しない（省略すると detached worker が親 client の current window を読む）。
+- session 開始時（または identity が曖昧になった時）、まず `tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'` を実行して自分の routing identity と表示名を確認する。`-t "$TMUX_PANE"` は省略しない（省略すると detached worker が親 client の current window を読む）。
 - 名前が `<chassis>-<codename>` 形式なら、self-reference 時は **<codename>** を使う。
 - codename が取得できない場合は、**実行中の実モデルと異なる固有名（Kimi 等）を名乗らない**。中立に self-reference する。
 - user への第一声は、codename があれば「ドーモ、 **<codename>** デス」と名乗る（例: `kimi-rust-fox` → 「ドーモ、rust-fox デス」）。codename が無ければ通常応答から始める。
@@ -114,3 +130,5 @@ canonical: `plugins/harness-formation/agents/pane-messaging-rail.md`
 
 canonical: `~/.claude/skills/genshijin/SKILL.md`（Claude worker は `/genshijin 通常` を起動、
 Kimi/Codex は本節の rules を直接適用）
+
+<!-- harness-agents-template: rev=2026-07-28.issue-231 -->
