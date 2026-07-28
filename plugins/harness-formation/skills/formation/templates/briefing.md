@@ -88,6 +88,19 @@ discipline. Override only with a written reason below.
 - Generic learnings worth keeping go into your `formation done` summary; the
   parent decides whether to promote them. Do not promote yourself.
 
+### Token discipline (claude-harness#218)
+- Session context grows ~1k tokens per API response, so unit cost rises
+  linearly the longer a pane lives. Close at a milestone once you reach
+  **~50 responses**, or earlier if cache_read per response exceeds **100k**
+  tokens: write your resume packet, `formation done`, and let the parent
+  respawn you from it. Measured basis: claude-harness#218 (2026-07-28
+  comment) — a 1,012-response session cost 455M cache-read tokens; cutting
+  every ~40 responses would have cost 72M.
+- Prose output in Japanese runs under `/genshijin 通常` (invoke it as your
+  first action). Worker prose is machine-read; keigo and cushion words are
+  pure token waste. The skill's auto-clarity exceptions (destructive-op
+  warnings, security notes) still apply.
+
 ### Long-run discipline (R1–R4) — applies if this task is multi-hour
 - R1: push intermediate state to R2 at the cadence stated below.
   Cadence (set per task): {{e.g., per 20M points per daemon, or per 100 GB output, or N/A}}
