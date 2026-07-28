@@ -224,11 +224,17 @@ _HI_BURNED_NAMES=""
 _HI_BURNED_NAMES_LOADED=0
 _hi_burned_names_load() {
     [ "$_HI_BURNED_NAMES_LOADED" = "1" ] && return 0
-    local own names
-    own=$(basename "${HARNESS_IDENTITY_SENTINEL:-/nonexistent}")
+    local names
+    # The own-sentinel exclusion is a string comparison inside awk, not a
+    # `! -name` predicate: -name matches its argument as a glob, so a session
+    # key carrying `* ? [..]` would silently exclude *other* sessions'
+    # sentinels from the burned set (an own key of `[ab]` hides a foreign
+    # `a`). FILENAME is the path exactly as find handed it over, and the
+    # sentinel path is built from the same dir variable, so equality is exact.
     names=$(find "$HARNESS_IDENTITY_SENTINEL_DIR" -maxdepth 1 -type f \
-                 ! -name decisions.jsonl ! -name "$own" \
-                 -exec awk 'FNR==1' {} + 2>/dev/null)
+                 ! -name decisions.jsonl \
+                 -exec awk -v own="${HARNESS_IDENTITY_SENTINEL:-}" \
+                     'FNR == 1 && FILENAME != own' {} + 2>/dev/null)
     # Wrapped in newlines so membership is a whole-line match, not a substring.
     _HI_BURNED_NAMES="
 $names

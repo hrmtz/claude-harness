@@ -339,7 +339,7 @@ pane_reset %race
 cat > "$WORK/bin/hi-claim" <<HELPER
 #!/usr/bin/env bash
 . "$LIB"
-harness_identity_claim --pane "\$1" --chassis "\$2" --mode session-start
+harness_identity_claim --pane "\$1" --chassis "\$2" --mode "\${3:-session-start}"
 printf '%s|%s|%s\n' "\$HARNESS_IDENTITY_DECISION" "\$HARNESS_IDENTITY_REASON" "\$HARNESS_IDENTITY_NAME"
 HELPER
 chmod +x "$WORK/bin/hi-claim"
@@ -540,6 +540,18 @@ check "a converged codename is refused" "REFUSE" "$(field "$R" 1)"
 check "as sentinel-taken" "sentinel-taken" "$(field "$R" 2)"
 rm -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_own" "$HARNESS_IDENTITY_SENTINEL_DIR/sess_other"
 
+# A session key is a filename, and the own-sentinel exclusion must treat it as
+# one: matched as a glob (`! -name`), an own key of `k[ab]` also hides a
+# foreign `ka`, whose burned name then goes unseen and the convergence above
+# silently passes. Same fixture as the converged case, hostile key.
+printf 'claude-frost-quill\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/k[ab]"
+printf 'claude-frost-quill\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/ka"
+pane_reset %sen2b
+R=$(resolve %sen2b claude session-start --session-key 'k[ab]')
+check "a glob-metachar session key cannot hide foreign sentinels" "REFUSE" "$(field "$R" 1)"
+check "the converged name is still seen" "sentinel-taken" "$(field "$R" 2)"
+rm -f "$HARNESS_IDENTITY_SENTINEL_DIR/k[ab]" "$HARNESS_IDENTITY_SENTINEL_DIR/ka"
+
 # Burn the entire claude pool. A fresh claim must then take the numeric-suffix
 # fallback without colliding with any burned name — and, the point of #236,
 # without paying one process per sentinel per attempt. The old loop here is
@@ -588,7 +600,8 @@ rm -f "$HARNESS_IDENTITY_SENTINEL_DIR"/burn_* "$HARNESS_IDENTITY_SENTINEL_DIR/se
 touch -d '10 days ago' "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale" 2>/dev/null \
     || touch -t "$(date -v-10d +%Y%m%d%H%M 2>/dev/null)" "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale"
 printf 'claude-slate-cairn\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent"
-touch -d '2 days ago' "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent" 2>/dev/null || true
+touch -d '2 days ago' "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent" 2>/dev/null \
+    || touch -t "$(date -v-2d +%Y%m%d%H%M 2>/dev/null)" "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent"
 pane_reset %sen4
 resolve %sen4 claude session-start >/dev/null
 if [ ! -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale" ]; then
@@ -609,16 +622,19 @@ rm -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent"
 echo
 echo "lock refusal is logged"
 
+# Non-default chassis and mode on purpose: the refusal path re-parses its own
+# args (resolve never ran), and defaults would let that parser rot invisibly —
+# deleting it entirely still logs "claude"/"session-start".
 mkdir -p "$HARNESS_IDENTITY_SENTINEL_DIR/.locks/_lk.lock"
 pane_reset %lk
-R=$("$WORK/bin/hi-claim" %lk claude)
+R=$("$WORK/bin/hi-claim" %lk kimi interactive)
 check "a held lock still refuses" "REFUSE" "$(field "$R" 1)"
 check "with the lock reason" "lock-unavailable" "$(field "$R" 2)"
 LOGGED=$(tail -n1 "$HARNESS_IDENTITY_SENTINEL_DIR/decisions.jsonl" 2>/dev/null)
 case "$LOGGED" in
-    *'"decision":"REFUSE"'*'"reason":"lock-unavailable"'*)
-        ok "and the refusal reached the decision log" ;;
-    *)  bad "and the refusal reached the decision log" "last line: $LOGGED" ;;
+    *'"pane":"%lk"'*'"chassis":"kimi"'*'"mode":"interactive"'*'"decision":"REFUSE"'*'"reason":"lock-unavailable"'*)
+        ok "and the log carries the caller's pane, chassis and mode" ;;
+    *)  bad "and the log carries the caller's pane, chassis and mode" "last line: $LOGGED" ;;
 esac
 rmdir "$HARNESS_IDENTITY_SENTINEL_DIR/.locks/_lk.lock" 2>/dev/null
 
