@@ -19,6 +19,15 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/fabricated_user_turn_advisor.py\" 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/fabricated_user_turn_advisor.py 2>/dev/null || exit 0",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "SubagentStop": [
