@@ -287,6 +287,20 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   Use `formation status`, whose sticky ASK row remains caller-independent and
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
+- **Reading the delivery line. Never re-send on the strength of it.** Every
+  `msg` / `report` / `done` / `ask` prints one of four outcomes. Three of them
+  mean the send is finished and the body is durable either way — a re-send only
+  duplicates a long verdict and forces the recipient to de-duplicate it:
+
+  | Output | Meaning | Your move |
+  |---|---|---|
+  | `signal=relay-owned` | Best case. The recipient's relay is alive and owns the badge write. | Nothing. Done. |
+  | `signal=sent-directly` | No relay, so the sender set the badge itself. | Nothing. Done. |
+  | `signal=unavailable … pull required` | No usable route. The row is durable; the recipient will see it when it reads its inbox. | Tell a human if it was urgent. Do not re-send. |
+  | `FAILED (exit 4)` | The pane could not be signaled. Row still durable, but no badge appears. | Report the failure. Do not re-send the body. |
+
+  If you believe a message was lost, check `formation inbox --history` or ask
+  the recipient — do not put the same body in the mailbox twice.
 - On completion:
   `formation done "<summary>"` — durable mailbox append plus the same
   zero-keystroke parent signal. `formation report` uses this route too.
