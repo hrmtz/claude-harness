@@ -512,6 +512,7 @@ Parent (lead) commands:
   formation repair-parent <worker_id>     Repair one legacy null parent route from the
                                           verified current caller pane's locked identity
   formation inbox                         Read unread reports addressed to self
+  formation inbox --count                 Print unread count, max seq, and oldest timestamp
   formation inbox --history               Also show the last 50 addressed mailbox rows
   formation ack <request_id> [summary]     Acknowledge an ASK; worker resumes RUNNING
   formation resolve <request_id> <summary>
@@ -1145,9 +1146,43 @@ cmd_repair_parent() {
 }
 
 cmd_inbox() {
-  local history=0
-  if [[ "${1:-}" == "--history" ]]; then history=1; shift; fi
-  [[ $# -eq 0 ]] || { echo "usage: formation inbox [--history]" >&2; return 2; }
+  local history=0 count_only=0
+  case "${1:-}" in
+    --history) history=1; shift ;;
+    --count) count_only=1; shift ;;
+  esac
+  [[ $# -eq 0 ]] || { echo "usage: formation inbox [--history|--count]" >&2; return 2; }
+
+  if [[ "$count_only" == "1" ]]; then
+    # Advisory callers must never consume mail or alter the tmux badge. Capture
+    # the whole operation so every failure collapses to one machine-safe line.
+    local count_output
+    count_output="$(
+      local count_self count_pane_id count_pane_alias="" count_unread
+      count_self="$(self_id)" || exit 1
+      count_pane_id="$(mailbox_resolve_caller_pane || true)"
+      [[ -n "$count_pane_id" ]] &&
+        count_pane_alias="pane-${count_pane_id#%}"
+      count_unread="$(mailbox_read "$count_self" "$count_pane_alias")" || exit 1
+      if [[ -z "$count_unread" ]]; then
+        printf '0 0 -\n'
+      else
+        printf '%s\n' "$count_unread" | jq -sr '
+          "\(length) \(map(.seq) | max // 0) \((min_by(.seq).ts // "-") | tostring)"
+        ' || exit 1
+      fi
+    )" || {
+      printf '0 0 -\n'
+      return 0
+    }
+    if [[ "$count_output" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][^[:space:]]+$ ]]; then
+      printf '%s\n' "$count_output"
+    else
+      printf '0 0 -\n'
+    fi
+    return 0
+  fi
+
   local self; self="$(self_id)"
   local pane_id pane_alias=""
   pane_id="$(mailbox_resolve_caller_pane || true)"
