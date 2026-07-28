@@ -50,8 +50,12 @@ def _parse_create(command: str) -> tuple[list[str], str] | None:
     return argv, body
 
 
-def _repo_root(path: str) -> str:
-    return str(pathlib.Path(_command(["git", "rev-parse", "--show-toplevel"], path)).resolve())
+def _repo_identity(path: str) -> str:
+    """Resolve the shared git directory so sibling worktrees are one repository."""
+    common = pathlib.Path(_command(["git", "rev-parse", "--git-common-dir"], path))
+    if not common.is_absolute():
+        common = pathlib.Path(path) / common
+    return str(common.resolve())
 
 
 def _active_formation_row(
@@ -83,7 +87,7 @@ def _active_formation_row(
         ]).split("\t", 1)
         if len(pane_state) != 2 or pane_state[0] != "0":
             return None
-        if _repo_root(pane_state[1]) != _repo_root(cwd):
+        if _repo_identity(pane_state[1]) != _repo_identity(cwd):
             return None
     except (OSError, RuntimeError):
         return None

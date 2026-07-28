@@ -11,6 +11,7 @@ class BabysitSkillContractTests(unittest.TestCase):
         cls.text = SKILL.read_text(encoding="utf-8")
 
     def test_receipt_is_an_unconditional_entry_gate(self):
+        self.assertIn("Version: 1.0.0", self.text)
         self.assertIn("If it is absent, malformed", self.text)
         self.assertIn("return a no-op", self.text)
         self.assertIn("Never reconstruct or mint a receipt manually", self.text)
