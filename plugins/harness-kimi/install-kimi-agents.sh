@@ -41,8 +41,11 @@ if [ -f "$TARGET" ]; then
     fi
     BACKUP_DIR="$HOME/sanada_backup_persistent/install-kimi-agents_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$BACKUP_DIR"
-    cp "$TARGET" "$BACKUP_DIR/AGENTS.md"
-    echo "backed up $TARGET -> $BACKUP_DIR/AGENTS.md"
+    # Project-unique name: a batch loop over N projects in the same second must
+    # keep N backups, not collapse them onto one fixed 'AGENTS.md'.
+    BACKUP_FILE="$BACKUP_DIR/$(basename "$(dirname "$TARGET")")_AGENTS.md"
+    cp "$TARGET" "$BACKUP_FILE"
+    echo "backed up $TARGET -> $BACKUP_FILE"
 fi
 
 cp "$TEMPLATE" "$TARGET"
