@@ -9,6 +9,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | Path | What it does |
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
+| `skills/babysit-pr/SKILL.md` | Receipt-gated CI monitoring, bounded source repair, and review follow-up for Formation-owned PRs |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
 | `bin/formation-mail-nudge` | Optional one-shot/watching escalation for ignored badges; never starts automatically |
 | `bin/install-formation-mail-nudge-service` | Explicit systemd user-service install/uninstall for the optional watcher |
@@ -19,6 +20,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | `lib/requests.sh` | Durable semantic ASK/ACK/resolve state, separate from transport |
 | `lib/wake.sh`, `lib/redact.sh` | The single exceptional submit primitive and shared credential refusal/audit |
 | `hooks/formation_suggest.sh` | UserPromptSubmit hook: detects worker-spawn intent, injects a formation keyword to surface the skill |
+| `hooks/pr_receipt.sh` | PostToolUse hook: mints a local PR ownership receipt only for an active Formation session |
 
 ## Trigger keywords (auto-suggest hook)
 
