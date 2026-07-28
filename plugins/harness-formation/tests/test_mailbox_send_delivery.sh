@@ -22,6 +22,7 @@ trap cleanup EXIT
 
 FAKE_BIN="$FIXTURE/bin"
 TMUX_LOG="$FIXTURE/tmux.log"
+TMUX_PAYLOAD_LOG="$FIXTURE/tmux.payload"
 TMUX_STATE="$FIXTURE/tmux.pending"
 MAILBOX="$FIXTURE/mailbox/log.jsonl"
 FORMATION_HOME_FIXTURE="$FIXTURE/formation-home"
@@ -47,7 +48,7 @@ printf '%s\n' \
   '    if [[ " $* " == *" @formation_mail_pending "* && " $* " != *" -u "* ]]; then printf "%s\n" "${*: -1}" >"$TMUX_STATE"; fi ;;' \
   '  load-buffer)' \
   '    [[ "${TMUX_FAIL_LOAD:-0}" != "1" ]] || exit 1' \
-  '    dd of=/dev/null status=none ;;' \
+  '    dd of="${TMUX_PAYLOAD_LOG:-/dev/null}" status=none ;;' \
   '  send-keys) [[ "${TMUX_FAIL_ENTER:-0}" != "1" ]] ;;' \
   'esac' \
   >"$FAKE_BIN/tmux"
@@ -56,7 +57,9 @@ chmod +x "$FAKE_BIN/tmux"
 run_send() {
   local out="$1"; shift
   : >"$TMUX_LOG"
+  : >"$TMUX_PAYLOAD_LOG"
   TMUX_LOG="$TMUX_LOG" \
+  TMUX_PAYLOAD_LOG="$TMUX_PAYLOAD_LOG" \
   FORMATION_HOME="$FORMATION_HOME_FIXTURE" \
   FORMATION_MAILBOX="$MAILBOX" \
   MAILBOX_SUBMIT_SETTLE_S=0 \
@@ -277,12 +280,15 @@ grep -Fq 'tmux load-buffer -b ' "$TMUX_LOG"
 grep -Fq 'tmux paste-buffer -t %42 ' "$TMUX_LOG"
 grep -Fq -- '-p -d' "$TMUX_LOG"
 [[ "$(grep -Fc 'tmux send-keys -t %42 Enter' "$TMUX_LOG")" -eq 2 ]]
+grep -Eq '^\[FORMATION-NUDGE from=fixture-sender seq=[0-9]+\] ' \
+  "$TMUX_PAYLOAD_LOG"
+grep -Fq 'pull with formation inbox' "$TMUX_PAYLOAD_LOG"
 if grep -Fq 'send-keys -t %42 -l' "$TMUX_LOG"; then
   echo "FAIL: mailbox-send regressed to raw send-keys text injection" >&2
   exit 1
 fi
 # Inject nudge must NOT contain the full body (body stays in mailbox).
-if grep -Fq 'inject fixture' "$TMUX_LOG"; then
+if grep -Fq 'inject fixture' "$TMUX_LOG" "$TMUX_PAYLOAD_LOG"; then
   echo "FAIL: --inject must not paste full body into the prompt" >&2
   cat "$TMUX_LOG" >&2
   exit 1

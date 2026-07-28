@@ -1375,7 +1375,7 @@ cmd_request_transition() {
   fi
   local summary="${*:-acknowledged}" actor current parent worker result
   local persisted_action persisted_summary state marker body notify_result
-  local notified notify_seq row pane signal_rc=0
+  local notified notify_seq row pane transitioned signal_rc=0 nudge_rc=0
   if is_credential_like "$summary"; then
     refuse_credential "$action" "$(self_id)" "request=$request_id summary refused"
     return 3
@@ -1393,6 +1393,7 @@ cmd_request_transition() {
   persisted_action="$(printf '%s\n' "$result" | jq -r '.event')"
   persisted_summary="$(printf '%s\n' "$result" | jq -r '.summary // "acknowledged"')"
   state="$(printf '%s\n' "$result" | jq -r '.state')"
+  transitioned="$(printf '%s\n' "$result" | jq -r '._transitioned // false')"
   marker="[$(printf '%s' "$persisted_action" | tr '[:lower:]' '[:upper:]') request_id=$request_id]"
   body="$marker $persisted_summary"
   notify_result="$(ensure_request_mailbox_message "$actor" "$worker" "$marker" "$body")"
@@ -1407,6 +1408,14 @@ cmd_request_transition() {
   fi
   mailbox_signal_durable_row "$worker" "$pane" "$notify_seq" "$actor" \
     "$FORMATION_DIR" >&2 || signal_rc=$?
+  # ACK/resolve is the only nonexclusive prompt-wake exception. The durable
+  # pre-transition snapshot proves the worker is waiting on this exact request
+  # and that the sender is its recorded parent. Retries do not inject twice.
+  if [[ "$transitioned" == "true" ]]; then
+    mailbox_inject_waiting_request_nudge "$pane" "$notify_seq" "$actor" \
+      "$request_id" "$worker" "$current" >&2 || nudge_rc=$?
+    [[ "$nudge_rc" -eq 0 ]] || signal_rc=4
+  fi
   printf '%s\n' "$result" | jq -r \
     --arg notified "$notified" \
     '"request=\(.request_id) event=\(.event) state=\(.state) notified=\($notified)"'

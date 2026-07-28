@@ -257,7 +257,7 @@ mailbox_inject_nudge() {
   local submit_rc=0
   if FORMATION_SUBMIT_SETTLE_S="$settle" \
      FORMATION_SUBMIT_RETRY_S="$retry" \
-     tmux_send_submit "$pane" "$notify"; then
+     tmux_send_nudge "$pane" "$from" "$seq" "$notify"; then
     echo "inject=attempted pane=$pane (short pull nudge only; receipt unconfirmed)"
     return 0
   else
@@ -267,6 +267,51 @@ mailbox_inject_nudge() {
     echo "WARN (exit 4): inject=pasted pane=$pane but submit is unconfirmed; DO NOT RETRY automatically (row remains durable)." >&2
   else
     echo "WARN (exit 4): row is durable and its signal path was accepted, but prompt nudge was not pasted." >&2
+  fi
+  return 4
+}
+
+# Wake a nonexclusive worker only for the answer to the exact ASK on which it
+# is durably WAITING_PARENT. This is the sole exception to the exclusive-input
+# gate. The caller supplies the pre-transition snapshot and invokes this only
+# when request_transition reports that it performed the first close.
+#
+# Eligibility is deliberately rechecked at the injection boundary:
+#   1. the request is open and WAITING_PARENT;
+#   2. request_id and worker_id identify the target worker's own ASK;
+#   3. the sender is the parent_id recorded on that ASK.
+#
+# Args: <pane> <seq> <from> <request-id> <worker-id> <pre-transition-json>
+mailbox_inject_waiting_request_nudge() {
+  local pane="$1" seq="$2" from="$3" request_id="$4" worker="$5" current="$6"
+  if ! printf '%s\n' "$current" | jq -e \
+      --arg request "$request_id" --arg worker "$worker" --arg parent "$from" '
+        .closed == false
+        and .state == "WAITING_PARENT"
+        and .request_id == $request
+        and .worker_id == $worker
+        and .parent_id == $parent
+      ' >/dev/null 2>&1; then
+    echo "WARN (exit 4): ASK reply row is durable, but nonexclusive nudge authorization no longer matches request=$request_id worker=$worker parent=$from." >&2
+    return 4
+  fi
+  if [[ ! "$pane" =~ ^%[0-9]+$ ]]; then
+    echo "WARN (exit 4): ASK reply row is durable, but worker=$worker has no valid pane route for its pull nudge." >&2
+    return 4
+  fi
+
+  local notify="ASK reply ready for request=${request_id}; pull with formation inbox (receipt unconfirmed)"
+  local submit_rc=0
+  if tmux_send_nudge "$pane" "$from" "$seq" "$notify"; then
+    echo "ask-nudge=attempted pane=$pane request=$request_id (short pull nudge only; receipt unconfirmed)"
+    return 0
+  else
+    submit_rc=$?
+  fi
+  if [[ "$submit_rc" -eq "${TMUX_SUBMIT_PASTED_UNCONFIRMED:-11}" ]]; then
+    echo "WARN (exit 4): ASK reply nudge was pasted to pane=$pane but submit is unconfirmed; DO NOT RETRY automatically (row remains durable)." >&2
+  else
+    echo "WARN (exit 4): ASK reply row is durable, but its pull nudge was not pasted to pane=$pane." >&2
   fi
   return 4
 }
