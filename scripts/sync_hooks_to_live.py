@@ -47,7 +47,8 @@ def build_settings():
             for blk in blocks:
                 nb = {k: v for k, v in blk.items() if k != "hooks"}
                 nb["hooks"] = [dict(h, command=h["command"].replace(
-                    "${CLAUDE_PLUGIN_ROOT}/hooks/", f"{HOME}/.claude/hooks/")) for h in blk.get("hooks", [])]
+                    "${CLAUDE_PLUGIN_ROOT}/hooks/", f"{HOME}/.claude/hooks/").replace(
+                    "${CLAUDE_PLUGIN_ROOT}/", f"{PLUG}/{p}/")) for h in blk.get("hooks", [])]
                 merged.setdefault(event, []).append(nb)
     final = dict(live.get("hooks", {}))     # keep live-only events (SessionEnd ...)
     final.update(merged)                      # plugin union authoritative for shared events
