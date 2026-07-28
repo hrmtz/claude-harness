@@ -16,6 +16,12 @@
 # with exactly that shape: if someone reintroduces name matching, these fail.
 set -uo pipefail
 
+# Live-pane isolation, asserted before anything else runs: an inherited
+# TMUX_PANE reaching a real tmux renames the operator's own pane even when
+# stdin is faked (the 2026-07 hook-test incident). The fake tmux on PATH is
+# the primary wall; dropping the inherited env here is the second.
+unset TMUX TMUX_PANE
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LIB="$ROOT/plugins/harness-core/hooks/identity_owner.sh"
 
@@ -506,6 +512,115 @@ check "and the window it does not own is untouched" "codex-old-name" "$(pane_get
 pane_reset %legacy_same "window_name=claude-old-name" "pane_title=claude-old-name"
 R=$(resolve %legacy_same claude session-start)
 check "a legacy label of our own chassis is adopted" "CLAIM" "$(field "$R" 1)"
+
+# ── sentinel scan at scale (#236) ────────────────────────────────────────────
+# The fresh-claim path died inside the SessionStart hook timeout once the
+# sentinel dir grew to 729 files: one `head` process per file per candidate.
+# These cases pin (a) the sentinel semantics the rewrite must preserve, and
+# (b) that cost no longer scales per-file-per-attempt. This section runs last
+# because it floods the shared sentinel dir.
+echo
+echo "sentinel scan at scale (#236)"
+
+# A session resuming its own recorded codename must not read its own sentinel
+# as a conflict — even with the dir crowded.
+printf 'claude-woven-vireo\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/sess_own"
+pane_reset %sen1
+R=$(resolve %sen1 claude session-start --session-key sess_own)
+check "own sentinel resumes its codename" "CLAIM" "$(field "$R" 1)"
+check "via the sentinel path" "sentinel" "$(field "$R" 2)"
+check "with the recorded name" "woven-vireo" "$(field "$R" 4)"
+
+# Two sessions must still not converge on one codename: a foreign sentinel
+# holding our recorded name forces a refusal, not a silent rename.
+printf 'claude-woven-vireo\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/sess_other"
+pane_reset %sen2
+R=$(resolve %sen2 claude session-start --session-key sess_own)
+check "a converged codename is refused" "REFUSE" "$(field "$R" 1)"
+check "as sentinel-taken" "sentinel-taken" "$(field "$R" 2)"
+rm -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_own" "$HARNESS_IDENTITY_SENTINEL_DIR/sess_other"
+
+# Burn the entire claude pool. A fresh claim must then take the numeric-suffix
+# fallback without colliding with any burned name — and, the point of #236,
+# without paying one process per sentinel per attempt. The old loop here is
+# 40 attempts × ~670 files; anything per-file-per-attempt blows the bound.
+POOL_TOTAL=$(
+    # shellcheck disable=SC1090
+    . "$LIB"
+    # shellcheck disable=SC2086
+    set -- $_HI_POOL_ADJ; ADJ=$#
+    # shellcheck disable=SC2086
+    set -- $_HI_POOL_NOUN
+    echo $((ADJ * $#))
+)
+(
+    # shellcheck disable=SC1090
+    . "$LIB"
+    for a in $_HI_POOL_ADJ; do
+        for n in $_HI_POOL_NOUN; do
+            printf 'claude-%s-%s\n' "$a" "$n" > "$HARNESS_IDENTITY_SENTINEL_DIR/burn_${a}_${n}"
+        done
+    done
+)
+BURNED=$(find "$HARNESS_IDENTITY_SENTINEL_DIR" -maxdepth 1 -name 'burn_*' | wc -l | tr -d ' ')
+check "fixture burned the whole pool" "$POOL_TOTAL" "$BURNED"
+
+pane_reset %sen3
+T0=$(date +%s)
+R=$(resolve %sen3 claude session-start --session-key sess_fresh)
+T1=$(date +%s)
+check "a fully-burned pool still claims" "CLAIM" "$(field "$R" 1)"
+SEN3_ID=$(field "$R" 4)
+case "$SEN3_ID" in
+    *-*-[0-9]*) ok "the claim fell through to the numeric-suffix fallback ($SEN3_ID)" ;;
+    *)          bad "the claim fell through to the numeric-suffix fallback" "got '$SEN3_ID' — a burned name was reused" ;;
+esac
+ELAPSED=$((T1 - T0))
+if [ "$ELAPSED" -lt 5 ]; then
+    ok "40 attempts against $BURNED sentinels resolved in ${ELAPSED}s (old path: minutes)"
+else
+    bad "40 attempts against $BURNED sentinels resolved in ${ELAPSED}s" "per-file-per-attempt scan is back"
+fi
+rm -f "$HARNESS_IDENTITY_SENTINEL_DIR"/burn_* "$HARNESS_IDENTITY_SENTINEL_DIR/sess_fresh"
+
+# Retention is a week now, not a month: sentinels only matter for sessions a
+# user would still resume, and a month of them burned a third of the pool.
+touch -d '10 days ago' "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale" 2>/dev/null \
+    || touch -t "$(date -v-10d +%Y%m%d%H%M 2>/dev/null)" "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale"
+printf 'claude-slate-cairn\n' > "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent"
+touch -d '2 days ago' "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent" 2>/dev/null || true
+pane_reset %sen4
+resolve %sen4 claude session-start >/dev/null
+if [ ! -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_stale" ]; then
+    ok "a 10-day-old sentinel is retired on resolve"
+else
+    bad "a 10-day-old sentinel is retired on resolve" "still present"
+fi
+if [ -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent" ]; then
+    ok "a 2-day-old sentinel survives"
+else
+    bad "a 2-day-old sentinel survives" "deleted"
+fi
+rm -f "$HARNESS_IDENTITY_SENTINEL_DIR/sess_recent"
+
+# ── lock refusal leaves a trace (#236) ───────────────────────────────────────
+# lock-unavailable was the one exit with no decision-log line, and a lock wait
+# the same length as the hook timeout made it indistinguishable from a hang.
+echo
+echo "lock refusal is logged"
+
+mkdir -p "$HARNESS_IDENTITY_SENTINEL_DIR/.locks/_lk.lock"
+pane_reset %lk
+R=$("$WORK/bin/hi-claim" %lk claude)
+check "a held lock still refuses" "REFUSE" "$(field "$R" 1)"
+check "with the lock reason" "lock-unavailable" "$(field "$R" 2)"
+LOGGED=$(tail -n1 "$HARNESS_IDENTITY_SENTINEL_DIR/decisions.jsonl" 2>/dev/null)
+case "$LOGGED" in
+    *'"decision":"REFUSE"'*'"reason":"lock-unavailable"'*)
+        ok "and the refusal reached the decision log" ;;
+    *)  bad "and the refusal reached the decision log" "last line: $LOGGED" ;;
+esac
+rmdir "$HARNESS_IDENTITY_SENTINEL_DIR/.locks/_lk.lock" 2>/dev/null
 
 echo
 echo "─────────────────────────────────────────"

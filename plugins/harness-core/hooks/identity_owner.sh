@@ -208,17 +208,52 @@ _hi_routing_id_on_other_pane() {
 # For a candidate this process is about to invent or resume from a sentinel,
 # a past session's sentinel does count: two sessions must not converge on one
 # codename just because neither is live yet.
-_hi_routing_id_in_use() {
-    local ident="$1" f n
-    [ -n "$ident" ] || return 1
-    _hi_routing_id_on_other_pane "$ident" && return 0
-    for f in "$HARNESS_IDENTITY_SENTINEL_DIR"/*; do
-        [ -f "$f" ] || continue
-        [ "$f" = "$HARNESS_IDENTITY_SENTINEL" ] && continue
-        n=$(head -n1 "$f" 2>/dev/null)
-        [ "$n" = "${HARNESS_IDENTITY_CHASSIS}-${ident}" ] && return 0
-    done
+#
+# The sentinel side of that question used to be answered per candidate with one
+# `head` process per file. At 729 accumulated files that is >1s per attempt,
+# and with a third of the name pool burned more than one attempt is the
+# expected case — inside a hook timeout that the SessionStart fork storm
+# already crowds, the fresh-claim path blew it and the hook died unlogged
+# (#236). Read every sentinel's first line in a single pass per resolve;
+# candidates then test membership in shell state without spawning anything.
+#
+# The pane's own sentinel is excluded at load time for the same reason the old
+# loop skipped it: a session resuming its own recorded codename must not read
+# that record as a conflict.
+_HI_BURNED_NAMES=""
+_HI_BURNED_NAMES_LOADED=0
+_hi_burned_names_load() {
+    [ "$_HI_BURNED_NAMES_LOADED" = "1" ] && return 0
+    local own names
+    own=$(basename "${HARNESS_IDENTITY_SENTINEL:-/nonexistent}")
+    names=$(find "$HARNESS_IDENTITY_SENTINEL_DIR" -maxdepth 1 -type f \
+                 ! -name decisions.jsonl ! -name "$own" \
+                 -exec awk 'FNR==1' {} + 2>/dev/null)
+    # Wrapped in newlines so membership is a whole-line match, not a substring.
+    _HI_BURNED_NAMES="
+$names
+"
+    _HI_BURNED_NAMES_LOADED=1
+}
+
+_hi_name_burned() { # full display name, e.g. claude-amber-koto
+    _hi_burned_names_load
+    case "$_HI_BURNED_NAMES" in
+        *"
+$1
+"*) return 0 ;;
+    esac
     return 1
+}
+
+_hi_routing_id_in_use() {
+    local ident="$1"
+    [ -n "$ident" ] || return 1
+    # Burned-set first: it is pure shell state, so a candidate that collides
+    # with a sentinel is rejected without a tmux round-trip. Only a candidate
+    # that survives the cheap check pays for the live-pane question.
+    _hi_name_burned "${HARNESS_IDENTITY_CHASSIS}-${ident}" && return 0
+    _hi_routing_id_on_other_pane "$ident"
 }
 
 # ── decision log ─────────────────────────────────────────────────────────────
@@ -313,7 +348,12 @@ harness_identity_resolve() {
     fi
     mkdir -p "$HARNESS_IDENTITY_SENTINEL_DIR" 2>/dev/null || true
     HARNESS_IDENTITY_SENTINEL="$HARNESS_IDENTITY_SENTINEL_DIR/$HARNESS_IDENTITY_SESSION_KEY"
-    find "$HARNESS_IDENTITY_SENTINEL_DIR" -maxdepth 1 -type f -mtime +30 -delete 2>/dev/null || true
+    # 7 days, not 30: at this host's session rate 30 days accumulated 729
+    # sentinels against a 672-name pool, so fresh claims fought a ~30% burned
+    # rate for names nothing would ever resume (#236). A week comfortably
+    # covers any session a user would still resume by hand.
+    find "$HARNESS_IDENTITY_SENTINEL_DIR" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+    _HI_BURNED_NAMES_LOADED=0
 
     local pane_pid owner_chassis owner_key
     pane_pid=$(_hi_tmux_get '#{pane_pid}')
@@ -569,9 +609,23 @@ harness_identity_claim() {
 
     if ! _hi_lock "$pane_key"; then
         # Losing the lock is not a licence to write anyway: a contended pane is
-        # exactly the case this exists to protect.
-        HARNESS_IDENTITY_DECISION="REFUSE"
-        HARNESS_IDENTITY_REASON="lock-unavailable"
+        # exactly the case this exists to protect. It is also not a licence to
+        # vanish: this used to be the one exit that skipped the decision log,
+        # and a 5s lock wait inside a same-sized hook timeout left no trace at
+        # all (#236). Resolve has not run, so log with what the args carry.
+        HARNESS_IDENTITY_PANE="${TMUX_PANE:-}"
+        HARNESS_IDENTITY_CHASSIS="claude"
+        HARNESS_IDENTITY_MODE="session-start"
+        HARNESS_IDENTITY_ROUTING_ID=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --pane)    HARNESS_IDENTITY_PANE="$2"; shift 2 ;;
+                --chassis) HARNESS_IDENTITY_CHASSIS="$2"; shift 2 ;;
+                --mode)    HARNESS_IDENTITY_MODE="$2"; shift 2 ;;
+                *)         shift ;;
+            esac
+        done
+        _hi_decide REFUSE lock-unavailable
         return 1
     fi
     harness_identity_resolve "$@"
