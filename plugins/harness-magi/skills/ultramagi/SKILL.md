@@ -1,6 +1,6 @@
 ---
 name: ultramagi
-version: 0.4.0
+version: 0.5.0
 description: >-
   End-to-end rigor loop for a non-trivial, hard-to-reverse change: local plan/design →
   dual-magi review to PLATEAU → code → dual-magi/bug-hunt on the implementation → code-review →
@@ -119,13 +119,78 @@ For an epic:
 If the request is already one independently mergeable slice, do not create ceremonial Epic
 overhead.
 
+## Phase 0 (premise grill) — before [1] PLAN
+
+Before drafting a design doc, verify that the premises it will rest on actually exist. An unchecked
+premise can later surface as a schema-drift CRITICAL, and it is cheapest to kill before there is
+prose defending it. Run this once **per slice** — never on an umbrella Epic document.
+
+1. **Input.** A gh issue number or a verbal task. Summarize purpose and background from
+   `gh issue view` (or the user's statement).
+2. **Preemptive investigation** — a **read-only `Explore` subagent** (or an equally read-only
+   equivalent): the target code paths, **schema-as-code** (the DDL files under `migrations/`),
+   feature flags, existing tests, and the nearest similar implementation.
+   - **Phase 0 does no live-DB verification at all** — not `\d`, not a `SELECT`. Its evidence of
+     record is schema-as-code, because Codex-family reviewers run under a psql-forbidden rail and
+     could not re-run a live-DB receipt; `migrations/` is the one surface every family can `grep`.
+     A premise that only a live DB can settle is not resolved here — it is tagged and deferred
+     (below). This bans live-DB checks **inside the grill only**; the review rounds [2]/[4] keep
+     the full § Schema-grounding mandate.
+3. **Question minimization.** Ask the user only what the investigation could not answer —
+   `AskUserQuestion`, at most 3 per turn, each with a recommended answer.
+4. **Refinement memo** → `docs/designs/<slug>_REFINEMENT.md`. One entry per premise, carrying a
+   sequential `premise_id` and an **evidence receipt**: the command that was run plus the excerpt
+   of its output, cited as `path:line`. Later reviewers re-run the receipt's command to verify.
+
+**`LIVE-DB-UNVERIFIED`.** A premise only a live DB can settle (populate rates, row counts) goes
+into the memo tagged `LIVE-DB-UNVERIFIED`. Writing "this must be verified later" does not make it
+happen, so three structural placements carry it:
+
+1. the slice's pre-flight checklist opens with "resolve every `LIVE-DB-UNVERIFIED` line in the
+   corresponding memo" — resolving means appending the executed command + its output excerpt;
+2. the slice PR body states the remaining count, and **is not merged unless that count is 0**;
+3. one or more remaining ⇒ file a gh issue and reference it from the slice PR (a TODO belongs in
+   the tracker, not in your head).
+
+All three are **operator conventions unless something separately enforces them**: this skill does
+not block a merge, does not check the PR body, and does not file the issue. Branch protection or a
+CI check is what would make placement 2 real; nothing does that today.
+
+A slice that predates its memo (work started before Phase 0 existed) substitutes re-running the
+measurement table in its own design sub-doc on the day the work starts.
+
+**Measure the effect directly.** Do not compare round-1 REJECT/CRITICAL counts against a historical
+average: with n=3 campaigns that is a coin flip (the per-campaign distribution is a long right
+tail, so "median ≤1" lands at chance rates even with zero real effect). The metric is the
+**premise re-flag rate** — of the premises recorded in the memo, the fraction later re-flagged as a
+schema/premise finding. Denominator = the memo's `premise_id` count. Numerator = **distinct**
+premises re-flagged (several findings on one premise still count once; counting finding rows pushes
+the ratio past 100%). Judge severity by the normalized column (`severity_norm`), not the reviewer's
+raw string. The grains differ — a memo is per **slice**, while findings are keyed by campaign
+directory — so under an Epic split, where several sub-docs hang off one campaign directory, the
+numerator counts only findings whose `location` / `source_path` resolves to the sub-doc actually
+under review. Set a target value only after the first three campaigns have run.
+
+**Not enforced by machinery** (said plainly so nobody mistakes it for a gate): the pre-flight above
+is a checklist, not a hook — starting implementation without opening the memo remains possible; and
+the re-flag numerator is a human judgment call, not a derived column.
+
+**Non-goals** (from the design of record): Phase 0 is not a standalone skill — it lives only in
+this file; it runs no live-DB verification (above); it adds no automatic schema-drift
+classification column (a human reads the finding's title/rationale); and it is not copied into the
+harness-kimi or harness-magi-codex SKILL.md — v1 is the Claude flow only.
+
 ## The loop (one pass per task; the task list is usually a gh epic)
+
+`[0]`–`[6]` are **lines inside the single code block below, not sections**. When revising, add or
+edit lines within the block; do not promote a step to a heading or split the block.
 
 ```
 [0] SCOPE      one independently mergeable task/slice. State the local and inherited epic
                invariants that must not break.
 [1] PLAN       local design doc, preferably Claude-led for hard planning. GitHub transport for Plan is
-               unreliable → plan LOCALLY into docs/designs/<NAME>.md.
+               unreliable → plan LOCALLY into docs/designs/<NAME>.md. Requires Phase 0 (premise
+               grill) on this slice first — see § Phase 0 (premise grill).
 [2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU (see definition). N rounds.
    ↻           each round: revise the doc with findings, re-review. Cross-family (codex) round
                is MANDATORY before any plateau claim.
@@ -228,6 +293,13 @@ commands it ran (`verify_commands_executed`). A round whose reviewers only read 
 targeted verification, is graded **degraded** regardless of its stated verdict — re-run it. Any
 doc-vs-reality drift = a CRITICAL finding (the design's SQL / column / flag premise is imaginary).
 
+Every family must run the checks its rail permits, and schema-as-code (`grep migrations/ core/`) is
+required of all of them because all of them can run it. Live-DB checks are required only of
+reviewers whose rail allows psql — a Codex-family reviewer that cannot open a database is not
+graded degraded for that, but is still graded degraded if it skipped the schema-as-code and
+code-behavior checks it could run. This is also why Phase 0 takes schema-as-code as its evidence of
+record: a receipt every family can re-run.
+
 ## Perspectives (orthogonal; adapt per task)
 
 Pick 3 that cut the task differently. Defaults for a data/migration task:
@@ -277,7 +349,7 @@ never `build → swap` directly.
 |---|---|---|
 | straight-to-code on a canonical change | ships the silent corruption | gate [2] then [4] |
 | declaring plateau after Claude-only rounds | same-family blind spots survive | codex round mandatory |
-| reviewers that don't run psql/grep | self-reported grounding = hallucination passes | `verify_commands_executed`, degrade empty rounds |
+| reviewers that skip the grounding checks their rail permits | self-reported grounding = hallucination passes | schema-as-code (`grep migrations/ core/`) from every family, live-DB checks from those that can; `verify_commands_executed`, degrade empty rounds |
 | `--confirm` as the only swap guard | an agent / operator clears it on bad state | programmatic coverage/residual/invariant gate in the script |
 | one mega design doc for the whole epic | un-reviewable, un-shippable | one task per loop, epic tracks the list |
 | reviewing or implementing the umbrella Epic as one task | rigor amplifies scope instead of convergence | admit the Epic, then gate one mergeable slice at a time |
@@ -286,6 +358,7 @@ never `build → swap` directly.
 | revising the doc for MED/LOW every round | revision churn — each fix is new review surface | defer to gate [4]/[5] via DEFERRED.md |
 | prose that enumerates machine-derivable detail (grants, opclasses, column lists) | whack-a-mole finding class; doc below design altitude | executable gate in the build; execution-derived, not text-derived |
 | full-doc re-review after a small revision | re-litigates unchanged text, burns tokens | diff-scoped re-review with invariant attached |
+| drafting the design before checking its premises exist | an imaginary premise surfaces as a doc-vs-reality CRITICAL once there is prose defending it | Phase 0 (premise grill) per slice, premises carrying evidence receipts |
 
 ## Cost / cadence
 
@@ -314,4 +387,5 @@ counted).
 | 2026-06-02 | 0.1.0 | Initial — codifies the design→dual-magi→code→bug-hunt→code-review loop proven on the PRS-LLM authors-dedup (caught 3 data-corruption bugs at the gates). |
 | 2026-07-10 | 0.2.0 | **Convergence economics** — learned from the company-shared-hippocampus run (41 rounds, ~4.7h, findings never reached zero under Fable-class reviewers). Plateau redefined severity-gated (new CRITICAL/HIGH breaking the invariant blocks; MED/LOW → deferred ledger, never a doc revision). Added: round budget (soft 5 / hard 8 with user sign-off) + altitude checkpoint, revision churn rule (fix-minimal + diff-scoped re-review; the r34 fix was r35's CRITICAL), altitude rule (execution-derived not text-derived — enumerable detail goes to executable gates, not prose), scope freeze during review, per-round budget/walltime reporting. |
 | 2026-07-21 | 0.4.0 | **Headroom-aware child tier (capacity-oracle #92 / claude-harness#97)** — before a heavy review/verify fan-out, consult `capacity-oracle substitute -q '.keep'` (fail-open if the CLI is absent). Claude is the only family that routinely exhausts its subscription; when it's below the offload floor, downgrade same-family review children opus→sonnet (still an explicit tier, never inherited fable) to stretch its budget — quality is carried by multi-perspective breadth + the mandatory Codex round, not child tier. Cross-family (Codex) round stays full-weight. |
+| 2026-07-28 | 0.5.0 | **Phase 0 (premise grill) (claude-harness#233 slice ①)** — a per-slice premise-verification phase before [1] PLAN: read-only investigation against schema-as-code (`migrations/`, grep-verifiable by every family — not a live `\d` that Codex reviewers cannot re-run), ≤3 recommended-answer questions, and a `docs/designs/<slug>_REFINEMENT.md` memo whose every premise carries a `premise_id` + re-runnable evidence receipt. `LIVE-DB-UNVERIFIED` premises are carried by three structural placements (slice pre-flight, PR-body count that must reach 0 before merge, gh issue when it does not). Effect is measured as the premise re-flag rate (distinct premises, `severity_norm`, sub-doc-scoped under an Epic split), not by n=3 round-1 finding counts. The schema-grounding mandate is reconciled with it: schema-as-code is required of every family, live-DB checks only of reviewers whose rail permits psql. Also recorded that `[0]`–`[6]` are lines in one code block, not sections. |
 | 2026-07-21 | 0.3.0 | **Drift reconciliation (#98)** — the live installed 0.2.0 (convergence economics) had never been committed to source, while source had independently gained the `Default family routing` section + `[2b] BATTLE` phase + flow routing hints. Merged both into a single canonical superset (installed 0.2.0 as base + source-only routing/battle content) and re-established source as SoT. No behavior removed from either side. |
