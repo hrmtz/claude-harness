@@ -88,6 +88,23 @@ def is_green(pr: Mapping[str, object]) -> bool:
     return classify_checks(pr) == "PASS" and classify_review(pr) == "PASS"
 
 
+def lineage_is_owned(
+    anchor: str, head: str, anchor_to_head: Iterable[str], in_run_pushes: Iterable[str]
+) -> bool:
+    """Accept only the creation anchor plus commits pushed by this invocation."""
+    if not re.fullmatch(r"[0-9a-f]{40}", anchor):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        return False
+    commits = list(anchor_to_head)
+    if any(not re.fullmatch(r"[0-9a-f]{40}", oid) for oid in commits):
+        return False
+    if head == anchor:
+        return not commits
+    allowed = set(in_run_pushes)
+    return bool(commits) and head in commits and all(oid in allowed for oid in commits)
+
+
 def _workflow_run_paths(text: str) -> set[str]:
     """Extract repo-local executables named by workflow run blocks."""
     paths: set[str] = set()

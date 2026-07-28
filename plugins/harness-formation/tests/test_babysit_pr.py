@@ -13,6 +13,7 @@ from babysit_pr import (  # noqa: E402
     classify_checks,
     classify_review,
     is_green,
+    lineage_is_owned,
     repairable_path,
 )
 
@@ -70,6 +71,13 @@ class BabysitPredicateTests(unittest.TestCase):
         pr = self.pr()
         pr.update({"state": "MERGED", "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"})
         self.assertFalse(is_green(pr))
+
+    def test_anchor_lineage_hands_back_on_any_commit_not_pushed_this_run(self):
+        anchor, own, foreign = "a" * 40, "b" * 40, "c" * 40
+        self.assertTrue(lineage_is_owned(anchor, anchor, [], []))
+        self.assertTrue(lineage_is_owned(anchor, own, [own], [own]))
+        self.assertFalse(lineage_is_owned(anchor, foreign, [foreign], []))
+        self.assertFalse(lineage_is_owned(anchor, own, [foreign, own], [own]))
 
 
 class CiMatcherP15Tests(unittest.TestCase):
