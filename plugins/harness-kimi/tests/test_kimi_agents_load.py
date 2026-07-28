@@ -45,6 +45,45 @@ class TestKimiAgentsLoad(unittest.TestCase):
         self.assertIn("genshijin", self.text)
         self.assertIn("体言止め", self.text)
 
+    def test_contains_native_hook_preamble(self):
+        """gh #54 / #231: preamble states Kimi >= 0.28 native hooks + wiring path."""
+        self.assertIn("native hook API", self.text)
+        self.assertIn("install-kimi-hooks.sh", self.text)
+        self.assertIn("cross_cli_hooks.json", self.text)
+        self.assertIn("fail-open", self.text)
+
+    def test_no_stale_no_hooks_claim(self):
+        """gh #231: the pre-0.28 'Kimi has no hooks' claim must not come back."""
+        self.assertNotIn("hook がないため", self.text)
+
+    def test_contains_sops_flat_mapping_constraint(self):
+        """gh #231: CH-only nested mapping / list constraint is merged into §2."""
+        self.assertIn("flat mapping", self.text)
+        self.assertIn("nested mapping", self.text)
+
+    def test_contains_identity_locked(self):
+        """gh #231: §8 keeps the @formation_identity_locked source of truth."""
+        self.assertIn("@formation_identity_locked", self.text)
+        self.assertIn("routing identity と表示名", self.text)
+
+    def test_contains_pane_messaging_section(self):
+        """gh #231: §9 Formation pane messaging is present (31 installs lack it)."""
+        self.assertRegex(self.text, r"(?m)^## 9\. Formation pane messaging")
+        self.assertIn("pane-messaging-rail.md", self.text)
+
+    def test_section_numbering_has_no_gap(self):
+        """gh #231: sections 1-10 all present, in order, no gap."""
+        heads = re.findall(r"^## (\d+)\.", self.text, flags=re.MULTILINE)
+        self.assertEqual(heads, [str(n) for n in range(1, 11)])
+
+    def test_no_volatile_tmp_backup(self):
+        """gh #231: the anagram-port /tmp 24h backup rule is discarded."""
+        self.assertNotIn("/tmp/sanada_backup", self.text)
+
+    def test_contains_template_stamp(self):
+        """gh #231: machine-readable provenance stamp for the drift checker."""
+        self.assertRegex(self.text, r"<!-- harness-agents-template: rev=\S+ -->")
+
     def test_contains_double_submit_rail(self):
         """gh #105: the always-loaded template must pin the pane-messaging contract."""
         for token in (
