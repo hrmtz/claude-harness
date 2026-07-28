@@ -21,7 +21,34 @@ from pathlib import Path
 
 REDACTED = "«REDACTED»"
 
+# What this scrubber does and does not catch. Keep this list in sync with
+# plugins/harness-formation/lib/redact.sh — a shape present in one layer and
+# absent in the other is exactly the gap that let an age secret key through
+# review artifacts (gh #212).
+#
+# Caught: DSN userinfo, NAME=VALUE where NAME ends in a secret word, Bearer
+# tokens, sk-/ghp_/gho_/ghs_/github_pat_/AIza/xai-/AKIA/ASIA vendor shapes,
+# JWTs, PEM private key bodies, and age secret keys.
+#
+# Deliberately NOT caught, because redacting them destroys meaning without
+# protecting anything: age *public* keys (age1…, published by design), key
+# fingerprints and digests, recipient lists in .sops.yaml, and file paths that
+# merely point at a secret. A path is not a value; scrubbing it would hide
+# which file needs rotating.
 PATTERNS = [
+    # age secret keys — the sops decryption key itself, so it outranks any single
+    # API key: leaking it opens every *.enc.yaml at once.
+    (re.compile(r"(?i)\bAGE-SECRET-KEY-1[0-9A-Z]{40,}"), lambda m: REDACTED),
+    # PEM private key blocks (OpenSSH, RSA, EC, PGP). Keep the header and footer so
+    # the reader still learns a key was present; redact only the body.
+    (re.compile(r"(?P<begin>-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----)"
+                r"(?P<body>.*?)"
+                r"(?P<end>-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----)",
+                re.DOTALL),
+     lambda m: f"{m.group('begin')}{REDACTED}{m.group('end')}"),
+    # JWTs — bearer-equivalent when they carry a session.
+    (re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+     lambda m: REDACTED),
     # DSN userinfo: scheme://user:secret@host (including an empty user) -> keep shape.
     (re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<user>[^:/@\s]*):(?P<pw>[^@/\s]+)@"),
      lambda m: f"{m.group('scheme')}{m.group('user')}:{REDACTED}@"),
@@ -38,7 +65,11 @@ PATTERNS = [
     (re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._\-]{12,}"), lambda m: f"Bearer {REDACTED}"),
     # Common vendor key shapes
     (re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"), lambda m: REDACTED),
-    (re.compile(r"\bghp_[A-Za-z0-9]{20,}"), lambda m: REDACTED),
+    (re.compile(r"\bgh[pous]_[A-Za-z0-9]{20,}"), lambda m: REDACTED),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), lambda m: REDACTED),
+    (re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}"), lambda m: REDACTED),
+    (re.compile(r"\bxai-[A-Za-z0-9]{20,}"), lambda m: REDACTED),
+    (re.compile(r"\bASIA[0-9A-Z]{16}\b"), lambda m: REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), lambda m: REDACTED),
 ]
 

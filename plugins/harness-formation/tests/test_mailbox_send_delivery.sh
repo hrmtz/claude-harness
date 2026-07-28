@@ -83,7 +83,7 @@ fi
 run_send "$FIXTURE/default.stdout" %42 "delivery fixture"
 
 grep -Fq 'appended seq=' "$FIXTURE/default.stdout"
-grep -Fq 'signaled pane=%42 directly' "$FIXTURE/default.stdout"
+grep -Fq 'signal=sent-directly pane=%42' "$FIXTURE/default.stdout"
 grep -Fq 'inject=skipped' "$FIXTURE/default.stdout"
 grep -Fq 'tmux set-option -p -t %42 @formation_mail_pending' "$TMUX_LOG"
 grep -Fq 'tmux display-message -t %42' "$TMUX_LOG"
@@ -364,7 +364,7 @@ RELAY_PIDS+=("$relay_pid")
 printf '%s\n' "$relay_pid" > "$FORMATION_HOME_FIXTURE/formation/worker-42.relay_pid"
 run_send "$FIXTURE/relay-owned.stdout" %42 "canonical worker fixture"
 grep -Fq 'to=worker-42' "$FIXTURE/relay-owned.stdout"
-grep -Fq 'signal=pending relay_pid=' "$FIXTURE/relay-owned.stdout"
+grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/relay-owned.stdout"
 if [[ -s "$TMUX_LOG" ]]; then
   echo "FAIL: mailbox-send duplicated signaling owned by the live relay" >&2
   cat "$TMUX_LOG" >&2
@@ -378,7 +378,7 @@ pkill -P "$relay_pid" 2>/dev/null || true
 kill "$relay_pid" 2>/dev/null || true
 
 # End-to-end formation msg: the CLI appends to the same mailbox watched by a
-# real relay, claims only signal=pending, and the relay actually sets the badge.
+# real relay, claims only signal=relay-owned, and the relay actually sets the badge.
 : > "$TMUX_LOG"
 : > "$TMUX_STATE"
 FORMATION_MAILBOX="$MAILBOX" TMUX_LOG="$TMUX_LOG" TMUX_STATE="$TMUX_STATE" \
@@ -393,7 +393,7 @@ TMUX_LOG="$TMUX_LOG" TMUX_STATE="$TMUX_STATE" FORMATION_HOME="$FORMATION_HOME_FI
   PATH="$FAKE_BIN:/usr/bin:/bin" \
   bash "$HERE/../bin/formation" msg worker-42 "formation msg relay integration" \
     >"$FIXTURE/formation-msg.stdout"
-grep -Fq 'signal=pending relay_pid=' "$FIXTURE/formation-msg.stdout"
+grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/formation-msg.stdout"
 for _ in $(seq 1 40); do
   grep -Fq 'tmux set-option -p -t %42 @formation_mail_pending' "$TMUX_LOG" && break
   sleep 0.05

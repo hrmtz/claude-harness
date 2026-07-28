@@ -462,7 +462,8 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
                     "receipt=effective effect=badge-cleared-or-advanced"
                 )
         if state is None or state["pending_seq"] != int(row["seq"]):
-            print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=would-observe")
+            if not args.quiet:
+                print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=would-observe")
             if not args.dry_run:
                 atomic_json(path, new_state(row, now, checksum))
             continue
@@ -523,7 +524,8 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
         if state["receipt"] == "parent-alerted-no-attempt":
             continue
         if state["snapshot_crc"] != checksum:
-            print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=snapshot-changed")
+            if not args.quiet:
+                print(f"{row['pane']} worker={row['worker']} seq={row['seq']} result=snapshot-changed")
             if not args.dry_run:
                 state["snapshot_crc"] = checksum
                 state["snapshot_since"] = now
@@ -647,6 +649,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="formation-mail-nudge")
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    # Every sweep reports would-observe and snapshot-changed for each pending
+    # seq on each pane. On a nine-pane fleet that buries the lines that need a
+    # human — escalations and receipts — in fifty routine ones, and a reader who
+    # learns to skim the block stops seeing the rare line it exists to deliver.
+    # Off by default so --watch keeps its debugging detail; the caller running an
+    # unattended monitor is the one who wants --quiet.
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress routine would-observe / snapshot-changed lines; "
+             "escalations, receipts and errors are always printed",
+    )
     parser.add_argument("--interval", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_INTERVAL", "30"))
     parser.add_argument("--stale", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_STALE", "120"))
     parser.add_argument("--idle", type=positive_int, default=os.getenv("FORMATION_MAIL_NUDGE_IDLE", "25"))

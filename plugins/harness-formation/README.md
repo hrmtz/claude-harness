@@ -115,6 +115,7 @@ sends zero child and parent prompt keystrokes and never retries the alert.
 formation-mail-nudge --dry-run
 formation-mail-nudge                 # one sweep
 formation-mail-nudge --watch         # foreground watcher
+formation-mail-nudge --watch --quiet # drop routine lines; keep escalations
 install-formation-mail-nudge-service --dry-run install
 install-formation-mail-nudge-service install
 install-formation-mail-nudge-service uninstall
