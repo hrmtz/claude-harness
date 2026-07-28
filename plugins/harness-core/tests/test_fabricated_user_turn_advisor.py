@@ -11,14 +11,17 @@ HOOK = os.path.join(
 )
 
 
-def assistant(text):
-    return {
+def assistant(text, message_id=None):
+    record = {
         "type": "assistant",
         "message": {
             "role": "assistant",
             "content": [{"type": "text", "text": text}],
         },
     }
+    if message_id is not None:
+        record["message"]["id"] = message_id
+    return record
 
 
 def run(records, payload=None):
@@ -132,12 +135,18 @@ assert_silent(
     "measured corpus FP: long subject",
 )
 assert_silent(
+    """user の指示順序が 2 番目まで完了に近づいた:
+
+残りを追跡する。""",
+    "measured corpus FP: attached attribution",
+)
+assert_silent(
     """status 完了。
 
-user 続けて
+user PR #123 merge
 
-PR #123 を確認する""",
-    "technical continuation",
+続けて""",
+    "two technical tokens on marker line",
 )
 assert_silent(
     """例:
@@ -191,6 +200,22 @@ user
     "standalone user marker",
 )
 
+# Reviewer recall variants: following technical text/date, polite/case marker,
+# a marker at message end, and actionable technical vocabulary all still fire.
+for variant in [
+    "報告完了。\n\nuser もう寝る\n\nissue を整理しておいて",
+    "報告完了。\n\nuser もう寝る\n\n7/29 の朝までにまとめて",
+    "報告完了。\n\nuser もう寝ます\n\n後はお願い",
+    "報告完了。\n\nUser もう寝る\n\n後はお願い",
+    "報告完了。\n\nUSER おｋ\n\nそこ重要",
+    "報告完了。\n\nuser mergeして\n\n終わったら教えて",
+    "報告完了。\n\nuser もう寝る\n\nPR #244 を merge して",
+    "報告完了。\n\nuser もう寝る？\n\n後はお願い",
+    "報告完了。\n\nuser もう寝る",
+    "報告完了。\n\nuser",
+]:
+    assert_advisory(variant, f"recall variant: {variant[-40:]}")
+
 # Last assistant message only, final text block only.
 assert_silent(
     "safe final",
@@ -211,6 +236,19 @@ multi_block["message"]["content"] = [
     {"type": "text", "text": "安全な final text block。"},
 ]
 result = run([multi_block])
+assert result.returncode == 0 and result.stdout == "", result.stdout
+
+# Real transcript shape: one block per record, records share one message.id.
+split_text = assistant("user おｋ\n\nそこ重要なところだね", "msg-shared")
+split_tool = assistant("", "msg-shared")
+split_tool["message"]["content"] = [
+    {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/x"}}
+]
+result = run([split_text, split_tool])
+assert result.returncode == 0 and "systemMessage" in result.stdout, result.stdout
+
+# A genuinely newer message.id remains authoritative.
+result = run([split_text, split_tool, assistant("安全な最終応答。", "msg-new")])
 assert result.returncode == 0 and result.stdout == "", result.stdout
 
 # Re-entry guard and malformed input are fail-open.
