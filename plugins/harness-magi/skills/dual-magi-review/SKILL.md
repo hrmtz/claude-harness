@@ -1,6 +1,6 @@
 ---
 name: dual-magi-review
-version: 0.10.0
+version: 0.10.1
 description: |
   Independent multi-perspective peer review for large design docs.
   Spawn 3 same-family sub-agent reviewers AND a cross-family reviewer
@@ -159,9 +159,17 @@ round). This avoids context exhaustion + makes state explicit in user transcript
 - Read `<doc-path>` (= full content)
 - Compute artifact_sha = sha256 of doc content (= for correlation)
 - Determine round number (= from `--round` flag、 default 1)
-- `mkdir -p ${doc_dir}/.dual-magi` (= 親が先行実行。reviewer sub-agent は directory 作成に失敗しても
-  親に伝えられないため、spawn 前に必ず存在保証する)
-- Load prior-round findings if round > 1 (= from `${doc_dir}/.dual-magi/round_<N-1>.json`)
+- **state dir は per-doc namespace** (= v0.10.1): `${magi_dir} = ${doc_dir}/.dual-magi/<doc-stem>/`
+  (doc-stem = doc file 名から拡張子を除いたもの、例 `REVIEW_FLOW_PORT`)。
+  `mkdir -p ${magi_dir}` を親が先行実行 (= reviewer sub-agent は directory 作成に失敗しても
+  親に伝えられないため、spawn 前に必ず存在保証する)。
+  **理由 (2026-07-28 実 incident)**: `${doc_dir}/.dual-magi/` 直下は同 dir の全 doc + magi
+  campaign (CAMPAIGN/PLATEAU/round_<N>_<persona>) が共有しており、flat 配置だと merged
+  `round_<N>.json` / `state.json` が他 doc・他 campaign の同名 state を **clobber する**
+  (v0.10.0 初実戦で旧 campaign の merged file 3 本を上書き、per-persona 生存 file から再構成)。
+  mkdir 前に `ls ${doc_dir}/.dual-magi/` で既存 state の有無を確認し、既存 flat 配置の
+  round file が居る場合も自分の書込みは必ず subdir 側に行う
+- Load prior-round findings if round > 1 (= from `${magi_dir}/round_<N-1>.json`)
 
 **Perspective label 予約語禁止**: perspective label (= file 名 `round_<N>_<perspective>.json` に使う)
 として `melchior` / `balthasar` / `caspar` / `hornet` / `gnat` / `wasp` / `codex` / `xfamily` は
@@ -202,7 +210,8 @@ spawn 指示に以下を **必ず含める**:
 1. sub-agent は **general-purpose type** (= `Write` tool 必須。read-only type では file を書けない)
 2. full findings JSON (= § Finding schema の配列 + `verify_commands_executed` +
    `schema_grounding_verdict`) を
-   `${doc_dir}/.dual-magi/round_<N>_<perspective>.json` に **Write してから** return する
+   `${magi_dir}/round_<N>_<perspective>.json` (= per-doc subdir、Step 1 参照) に
+   **Write してから** return する
 3. **返り値契約 = ≤200 words**: file path echo + 総合 verdict (GO / GO-WITH-REVISE / REJECT) +
    severity 別件数 (REJECT/HIGH/MED/LOW/nit) + 上位 3 finding の title のみ。
    **長文 findings・rationale・verify command 列挙を返り値に書くな** — 本体は file が正、
@@ -299,7 +308,7 @@ single-model self-review では同 doc 起草者 (= AI) が verify を skip す�
 
 返り受領後、reviewer ごとに per-reviewer file を検証 (= v0.10.0):
 
-1. `${doc_dir}/.dual-magi/round_<N>_<perspective>.json` が実在するか
+1. `${magi_dir}/round_<N>_<perspective>.json` が実在するか
 2. JSON として parse できるか (= `jq empty <file>` 等)
 
 **欠落 / parse 不能時の fallback**: その reviewer は **返り値 text で synthesize を続行**
@@ -321,7 +330,7 @@ Failure handling:
 jq '{findings: [.findings[] | {finding_id, severity, verdict, title, location, dup_flag}],
      verdict, schema_grounding_verdict,
      verify_commands_count: (.verify_commands_executed | length)}' \
-  ${doc_dir}/.dual-magi/round_<N>_<perspective>.json
+  ${magi_dir}/round_<N>_<perspective>.json
 ```
 
 (`verify_commands_executed` は件数のみ取る — 実行 command の全文列挙は audit 用に file に
@@ -348,7 +357,7 @@ Then aggregate:
 - cross-perspective agreement (= 2+ perspectives flag same issue = high-confidence cluster)
 - new-vs-duplicate ratio (= if > 80% dup → ship signal)
 
-Save to `${doc_dir}/.dual-magi/round_<N>.json` for next-round reference (= 親の merged json
+Save to `${magi_dir}/round_<N>.json` for next-round reference (= 親の merged json
 write は v0.10.0 でも**維持** — Step 1 の round 継続性はこの file が担う)。merged json に
 `reviewer_files` 配列 (= per-reviewer file の path 一覧) を追加し、欠落があれば
 `reviewer_file_missing` も記録する (= Step 3 参照)。
@@ -670,11 +679,13 @@ Why not auto-loop:
 - user state visibility in transcript
 - external reviewer async wait (= mailbox response may span hours / user session)
 
-State persistence (= `.dual-magi/`):
-- `${doc_dir}/.dual-magi/round_<N>.json` per round findings (= merged、親が write)
-- `${doc_dir}/.dual-magi/round_<N>_<perspective>.json` per-reviewer full findings
+State persistence (= `.dual-magi/<doc-stem>/`、v0.10.1 per-doc namespace):
+- `${magi_dir}/round_<N>.json` per round findings (= merged、親が write)
+- `${magi_dir}/round_<N>_<perspective>.json` per-reviewer full findings
   (= v0.10.0、reviewer 自身が Write。perspective label は予約語禁止 — Step 1 参照)
-- `${doc_dir}/.dual-magi/state.json` overall progress
+- `${magi_dir}/state.json` overall progress
+- flat 配置 (`${doc_dir}/.dual-magi/` 直下) は v0.10.0 以前の legacy + magi campaign の
+  共有域 — 読取りは後方互換で許可、**書込み禁止** (clobber 事故防止、Step 1 参照)
 - gitignore recommended (= meta-state, not artifact)
 
 ## Failure modes (= troubleshooting)
@@ -764,6 +775,7 @@ These are not prerequisites for skill function. Pattern is self-contained in thi
 | 2026-05-22 | 0.5.1 | **Reviewer `verify_commands_executed` MUST-emit** 追加 (= 5/22 ADR-TPN v0.2 dual-magi v3 で MELCHIOR LOW #3 finding 即対応、 gh #194)。 v0.5.0 hook efficacy が anecdotal (= reviewer の self-report) だった問題を、 各 reviewer の output JSON に **実行 command 完全 list を MUST 含む** で measurable 化。 空 list or generic Read のみ = schema_grounding_verdict FAIL 自動判定、 round 全体が degraded mark。 user instruction「N+1 回目を待たない、 100 回叩く前に構造で先回り」 の literal application、 incident → memory → skill skeleton → output-format-mandate の 4 段 escalation 完了 |
 | 2026-05-22 | 0.6.0 | **Cross-family default mandatory** (= gh #195 incident 学習)。 v0.5.x までは `--external` opt-in flag、 同日 citation pipeline refactor v0.5 で 4 Claude same-family round plateau CONFIRM 4.3/4.5/4.8 到達後 Codex 1 round REJECT 1/5 + **6 NEW CRITICAL** (= Claude 全 round 全 miss、 production-shape dict drift / paradigm 矛盾 / GLOBAL rewrite span 等)。 root cause = memory `feedback_dual_magi_mandatory_for_scripts` mandate と skill default の乖離、 私 (= AI) が flag 忘れて skip。 structural fix 3 点: (1) `--external` default = `codex-exec` adapter で auto final round (= zero-config sync invocation、 `codex exec --skip-git-repo-check -`)、 (2) plateau CONFIRM declaration block until cross-family round recorded、 (3) cross-family REJECT/CRITICAL → final verdict 優先 overrule Claude CONFIRM。 `--no-cross-family <reason>` opt-out は valid reason 限定 (= quick-iteration / non-design-artifact) + telemetry audit。 memory `feedback_dual_magi_mandatory_for_scripts` の behavioral rule を skill default に焼付け、 私 (= Claude) の self-discipline failure を structural rail で先回り。 v0.5.0 schema-grounding と同 escalation pattern (= behavioral → skill skeleton)、 incident → memory → skill default の 3 段昇格 完了 |
 | 2026-07-10 | 0.7.0 | **Severity-gated terminal + runaway guard** (= company-shared-hippocampus 41-round run 学習)。 Fable-class reviewer は zero-findings に到達しない (実測: 41 round × 3-7 findings/round、 全部 grounded) ため ratio gate (= criterion 1) が不発、 加えて revision churn (= fix が次 round の CRITICAL になる) で verdict 往復。 structural fix: (1) stop criteria 5 = invariant を破る NEW CRITICAL/HIGH なし → converge、 MED/LOW は DEFERRED.md 行き (doc revision しない)、 (2) round 5 altitude checkpoint / round 8 hard stop、 (3) diff-scoped re-review、 (4) enumerable detail の prose 列挙は altitude 違反 → executable gate 化。 ultramagi v0.2.0 § Convergence economics と対 |
+| 2026-07-28 | 0.10.1 | **Per-doc state namespace** (= v0.10.0 初実戦 incident 学習)。`${doc_dir}/.dual-magi/` flat 配置は同 dir の他 doc + magi campaign と共有で、REVIEW_FLOW_PORT round 1 実走時に旧 campaign の merged `round_1/2.json` + `state.json` を clobber (per-persona 生存 file から reconstructed mark 付きで再構成済)。fix: 全書込みを `${magi_dir} = ${doc_dir}/.dual-magi/<doc-stem>/` に namespace 化、flat 域は読取り専用 legacy 扱い、Step 1 に事前 `ls` 確認を追加 |
 | 2026-07-28 | 0.10.0 | **Reviewer file-return contract (claude-harness#218)** — 実測 (2026-07-28): reviewer の Task 返り値 30-43k chars × 3 並列 × 最大 8 round が session 肥大 tool_result の最大単一クラスで、multi-round campaign では数百 k chars が context に居座り全 turn で cache read され続けていた。structural fix: (1) reviewer は full findings JSON を `round_<N>_<perspective>.json` に Write してから return、返り値契約 = ≤200 words receipt (path + verdict + severity 件数 + 上位 3 title)、(2) 親は file 実在 + JSON parse 検証、欠落時は返り値 fallback で synthesize 続行 (= v0.9.0 後方互換、retry なし)、(3) synthesize 入力は per-reviewer file の jq projection Read (`verify_commands_executed` は件数のみ)、(4) merged `round_<N>.json` は維持 + `reviewer_files` 配列追加、(5) perspective label 予約語禁止 (melchior/balthasar/caspar/hornet/gnat/wasp/codex/xfamily = magi_campaign_guard.py の companion 完了判定 file 名と衝突)。期待効果: prior round の 3×30-43k 返り値が context に残らず compact merged json (2-3KB) だけ再流入、reviewer 出力も構造化 JSON 強制で ~60-70% 減 |
 | 2026-07-21 | 0.9.0 | **Headroom-aware reviewer tier (capacity-oracle #92 / claude-harness#97)** — before spawning the Claude×3 same-family reviewers, consult `capacity-oracle substitute -q '.keep'` (fail-open if the CLI is absent). When Claude is below the offload floor (hot), downgrade the same-family reviewers opus→sonnet (explicit tier, not inherited fable); review quality is carried by multi-perspective + the mandatory Codex cross-family round, not child tier. The Codex cross-family round is never thinned (Codex rarely exhausts). |
 | 2026-07-21 | 0.8.0 | **Drift reconciliation (#98)** — installed live 0.7.0 (opus-pin, severity-gated terminal) had never been committed to source, while source had independently gained the `Family routing policy` section and the plateau-gate script count grew G7→G9. Merged into one canonical superset (installed 0.7.0 as base + source-only routing section + G9 fix), re-established source as SoT. No behavior removed from either side. |
