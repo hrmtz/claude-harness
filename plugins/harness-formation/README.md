@@ -9,7 +9,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | Path | What it does |
 |---|---|
 | `skills/formation/SKILL.md` | Skill definition (when to spawn vs use Task tool, briefing template, R1-R4 long-run rules, credential discipline) |
-| `skills/babysit-pr/SKILL.md` | Receipt-gated, bounded CI monitoring and reply-only review follow-up for Formation-owned PRs |
+| `skills/babysit-pr/SKILL.md` | Receipt-gated CI monitoring, bounded source repair, and review follow-up for Formation-owned PRs |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
 | `bin/formation-mail-nudge` | Optional one-shot/watching escalation for ignored badges; never starts automatically |
 | `bin/install-formation-mail-nudge-service` | Explicit systemd user-service install/uninstall for the optional watcher |
