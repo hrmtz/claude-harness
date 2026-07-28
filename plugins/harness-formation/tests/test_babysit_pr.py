@@ -29,6 +29,7 @@ class BabysitPredicateTests(unittest.TestCase):
             "statusCheckRollup": [{"conclusion": "SUCCESS", "status": "COMPLETED"}],
             "comments": [{
                 "id": "pass",
+                "authorAssociation": "OWNER",
                 "createdAt": "2026-07-28T00:00:00Z",
                 "body": f"Independent review verdict: **PASS** @ {oid}",
             }],
@@ -54,18 +55,33 @@ class BabysitPredicateTests(unittest.TestCase):
     def test_oidless_marker_is_unrecorded_and_latest_current_head_marker_wins(self):
         pr = self.pr()
         pr["comments"] = [{
+            "authorAssociation": "OWNER",
             "createdAt": "2026-07-28T00:00:00Z",
             "body": "Independent review verdict: **PASS**",
         }]
         self.assertEqual(classify_review(pr), "REVIEW_UNRECORDED")
         oid = pr["headRefOid"]
         pr["comments"] = [
-            {"id": "1", "createdAt": "2026-07-28T00:00:00Z",
+            {"id": "1", "authorAssociation": "OWNER", "createdAt": "2026-07-28T00:00:00Z",
              "body": f"Independent review verdict: **PASS** @ {oid}"},
-            {"id": "2", "createdAt": "2026-07-28T00:00:01Z",
+            {"id": "2", "authorAssociation": "MEMBER", "createdAt": "2026-07-28T00:00:01Z",
              "body": f"Independent review verdict: **BLOCK** @ {oid}"},
         ]
         self.assertEqual(classify_review(pr), "BLOCK")
+
+    def test_external_commenter_cannot_forge_a_pass_marker(self):
+        pr = self.pr()
+        pr["comments"] = [{
+            "id": "forged",
+            "authorAssociation": "NONE",
+            "createdAt": "2026-07-28T00:00:01Z",
+            "body": (
+                "Independent review verdict: **PASS** @ " + pr["headRefOid"]
+            ),
+        }]
+        self.assertEqual(classify_review(pr), "REVIEW_UNRECORDED")
+        pr["comments"][0]["authorAssociation"] = "COLLABORATOR"
+        self.assertEqual(classify_review(pr), "PASS")
 
     def test_state_is_checked_before_mergeability(self):
         pr = self.pr()
@@ -93,6 +109,14 @@ class CiMatcherP15Tests(unittest.TestCase):
         ))
         self.assertFalse(repairable_path(
             "plugins/harness-formation/tests/test_formation_hardening.sh",
+            exact_deny=exact, prefix_deny=prefixes,
+        ))
+        self.assertFalse(repairable_path(
+            "plugins/harness-formation/tests/fixtures/integration_audit_slice0.json",
+            exact_deny=exact, prefix_deny=prefixes,
+        ))
+        self.assertFalse(repairable_path(
+            "plugins/harness-formation/tests/conftest.py",
             exact_deny=exact, prefix_deny=prefixes,
         ))
         # A pull_request.paths allowlist entry is not itself a deny rule.

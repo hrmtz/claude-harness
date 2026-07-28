@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 PASS_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 PENDING_STATUSES = {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "EXPECTED"}
 FAIL_STATUSES = {"FAILURE", "ERROR"}
+TRUSTED_REVIEW_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 MARKER_RE = re.compile(
     r"^Independent review verdict: \*\*(BLOCK|PASS)\*\* @ ([0-9a-f]{40})$",
     re.MULTILINE,
@@ -66,6 +67,8 @@ def classify_review(pr: Mapping[str, object]) -> str:
         return "REVIEW_UNRECORDED"
     for comment in comments:
         if not isinstance(comment, Mapping):
+            continue
+        if str(comment.get("authorAssociation") or "").upper() not in TRUSTED_REVIEW_ASSOCIATIONS:
             continue
         match = MARKER_RE.search(_comment_body(comment))
         if match and match.group(2) == head:
@@ -145,6 +148,8 @@ def repairable_path(
     """Allow plugin source only; workflow paths allowlists are intentionally irrelevant."""
     parsed = pathlib.PurePosixPath(path)
     if parsed.is_absolute() or any(part in {"", ".", ".."} for part in parsed.parts):
+        return False
+    if any(part in {"tests", "migrations", "creds-migration"} for part in parsed.parts):
         return False
     clean = parsed.as_posix()
     name = parsed.name

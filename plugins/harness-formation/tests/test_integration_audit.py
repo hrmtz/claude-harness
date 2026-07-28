@@ -40,6 +40,7 @@ class AuditTests(unittest.TestCase):
         self.assertNotIn("CHECKS_FAILED_OR_UNKNOWN", self.codes(data))
         data["prs"][0]["comments"].append({
             "id": "block",
+            "authorAssociation": "OWNER",
             "createdAt": "2026-07-24T00:00:01Z",
             "body": "Independent review verdict: **BLOCK** @ " + data["prs"][0]["headRefOid"],
         })

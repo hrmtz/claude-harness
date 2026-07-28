@@ -72,6 +72,8 @@ Recognize only a comment line matching:
 For the current head only, the newest marker by comment timestamp wins.
 OID-less markers and markers for older heads are unrecorded. A pushed commit
 therefore invalidates an earlier PASS.
+Accept markers only from comments whose `authorAssociation` is `OWNER`,
+`MEMBER`, or `COLLABORATOR`; missing or other associations are untrusted.
 
 Green means all of:
 

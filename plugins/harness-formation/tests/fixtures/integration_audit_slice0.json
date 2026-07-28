@@ -16,7 +16,7 @@
       "isCrossRepository": false,
       "isDraft": false,
       "issue_numbers": [140],
-      "comments": [{"id": "pass-200", "createdAt": "2026-07-24T00:00:00Z", "body": "Independent review verdict: **PASS** @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+      "comments": [{"id": "pass-200", "authorAssociation": "OWNER", "createdAt": "2026-07-24T00:00:00Z", "body": "Independent review verdict: **PASS** @ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
       "mergedAt": "2026-07-24T00:00:00Z",
       "number": 200,
       "state": "MERGED",
