@@ -65,6 +65,8 @@ jobs:
         run: bash plugins/harness-kimi/tests/test_formation_identity.sh
       - name: Test cross-CLI launch guard
         run: bash plugins/harness-core/tests/test_cross_cli_guard.sh
+      - name: Test fabricated user-turn advisory
+        run: python3 plugins/harness-core/tests/test_fabricated_user_turn_advisor.py
       - name: Test identity ownership core
         run: bash plugins/harness-core/tests/test_identity_owner.sh
       # The dispatch suite drives real tmux panes on purpose: #177 survived every
