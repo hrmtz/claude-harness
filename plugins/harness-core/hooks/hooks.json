@@ -53,6 +53,11 @@
           },
           {
             "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/fat_output_advisor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/fat_output_advisor.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pg_rotation_propagation_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/pg_rotation_propagation_guard.sh",
             "timeout": 5
           },
