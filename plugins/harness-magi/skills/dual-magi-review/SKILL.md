@@ -1,6 +1,6 @@
 ---
 name: dual-magi-review
-version: 0.10.1
+version: 0.11.0
 description: |
   Independent multi-perspective peer review for large design docs.
   Spawn 3 same-family sub-agent reviewers AND a cross-family reviewer
@@ -8,6 +8,8 @@ description: |
   training-data bias. Cross-family is **default mandatory** since v0.6.0
   (= gh #195 incident: 4 Claude same-family rounds reached plateau CONFIRM,
   Codex 1 round = REJECT with 6 NEW CRITICAL all missed by Claude).
+  From round 2, `--freerange` may add a fourth same-family reviewer with no
+  perspective checklist; it never replaces the required 3 reviewers.
   Synthesize REJECT/REVISE findings into a structured report. Default mode
   is review-only: mutation (apply, commit, push) is opt-in.
 
@@ -62,7 +64,8 @@ Fallback when a family is unavailable:
 1. independent multi-perspective critique (= N sub-agents、 perspectives 直交)
 2. cross-family bias cancellation (= 異 model、 optional adapter)
 3. iterative reroll (= round 毎に prior findings 反映 + 新 catch)
-4. `magi_design_convergence_gate.py` の bounded decision で stop / next action を決める
+4. Claude-native campaign は Step 6 の散文 stop criteria、companion campaign は
+   `magi_design_convergence_gate.py` の bounded decision で stop / next action を決める
 ```
 
 Variant detail (= adjustable):
@@ -110,6 +113,7 @@ branch policy invariant (see § Prerequisites).
   [--external <adapter-id>]           # default: codex-exec (= v0.6.0 mandate)
   [--no-cross-family <reason>]        # explicit opt-out, must justify
   [--domain-preset <path>]            # extra perspective definitions
+  [--freerange]                       # round 2+ only: add checklist-free 4th reviewer
   [--apply-local | --commit-push]     # opt-in mutation
   [--round N]                         # resume at specific round (= 2-phase pattern)
 ```
@@ -120,6 +124,9 @@ branch policy invariant (see § Prerequisites).
 - `--external`: see § Adapters。 **default `codex-exec`** (= v0.6.0、 see § Cross-family mandate)
 - `--no-cross-family <reason>`: opt-out cross-family、 reason string required (= telemetry + audit)。 valid reasons: `quick-iteration` (= rapid doc skeleton iteration、 followed by mandatory final round) / `non-design-artifact` (= not a design doc、 e.g., status report)
 - `--domain-preset`: load additional perspective briefs from external file
+- `--freerange`: round 2 以降で checklist-free reviewer を**追加の 4 体目**として起動する。
+  既存 3 perspective の置換には使わない。出力は
+  `${magi_dir}/round_<N>_freerange.json`
 - `--apply-local` / `--commit-push`: enable mutation (= mutually exclusive)
 - `--round N`: explicit round number for resuming (= e.g., `--round 2` after externall reply received)
 
@@ -172,7 +179,8 @@ round). This avoids context exhaustion + makes state explicit in user transcript
 - Load prior-round findings if round > 1 (= from `${magi_dir}/round_<N-1>.json`)
 
 **Perspective label 予約語禁止**: perspective label (= file 名 `round_<N>_<perspective>.json` に使う)
-として `melchior` / `balthasar` / `caspar` / `hornet` / `gnat` / `wasp` / `codex` / `xfamily` は
+として `melchior` / `balthasar` / `caspar` / `hornet` / `gnat` / `wasp` / `codex` /
+`xfamily` / `freerange` は
 **使用禁止**。`magi_campaign_guard.py` (= harness-magi-codex) が同名 file
 `round_<N>_<persona>.json` の存在で companion campaign の完了判定を行うため、この skill の
 per-reviewer file が同名だと campaign 状態を誤判定する。default perspectives
@@ -217,7 +225,35 @@ spawn 指示に以下を **必ず含める**:
    **長文 findings・rationale・verify command 列挙を返り値に書くな** — 本体は file が正、
    返り値は receipt にすぎない
 
+#### Optional fourth reviewer: `--freerange` (= v0.11.0)
+
+`--freerange` は round 2 以降だけ有効。通常の 3 perspective を全て起動したうえで、
+同じ parallel Task batch に **追加の 4 体目**として general-purpose sub-agent を入れる。
+既存 reviewer の置換・必要 reviewer 集合への算入は禁止。model tier は当該 round の
+same-family reviewer と同じ明示 tier (`opus`、headroom 低下時は `sonnet`) を使う。
+
+prompt は full doc、次の brief 1 行、出力契約だけで構成する。perspective checklist や
+探索観点を追加して自由探索を狭めない:
+
+> この doc の問題点を自由に探せ。checklist はない。
+
+出力契約は通常 Claude-native reviewer と同じ JSON object:
+`reviewer` / `round` / `verdict` / `schema_grounding_verdict` /
+`verify_commands_executed` と § Finding schema の `findings` 配列。
+`reviewer: "freerange"` と当該 `round` を設定して
+`${magi_dir}/round_<N>_freerange.json` に Write してから返すこと。
+§ Finding schema は各 finding object の例であり、companion
+`plugins/harness-magi-codex/schemas/finding.schema.json` の full envelope に
+Claude-native 出力を適合させるという意味ではない。
+返り値は通常 reviewer と同じく ≤200 words の receipt
+(file path、総合 verdict、severity 別件数、上位 3 title) に限定する。
+`${doc_dir}/.dual-magi/` flat 域への書込みは禁止。
+
 #### Schema-grounding mandate (= v0.5.0、 5/22 ADR-TPN v0.1 incident 学習)
+
+以下の checklist inject は通常 3 perspective の契約。`--freerange` reviewer は
+checklist-free を保つため inject 対象外だが、自由探索中に実行した verification は
+`verify_commands_executed` に記録する。
 
 doc に table 名 / column 名 / SQL 例 / 既存 code 挙動 premise が含まれる場合、 各 sub-agent
 prompt template に下記を **必ず inject** (= AI 自起草 doc の 妄想 column / hallucinated schema を
@@ -302,14 +338,20 @@ rail — every round emits its own audit, no round is graded only on outcome.
 dual-magi v1 → v2 の 同 doc round で 1 round 単独で 5 CRITICAL schema-drift を catch、
 single-model self-review では同 doc 起草者 (= AI) が verify を skip するため miss 確実。
 
-### Step 3: Wait for all 3 outputs (= foreground block)
+### Step 3: Wait for required 3 outputs + optional freerange (= foreground block)
 
-`Task` tool returns when sub-agent completes. All 3 block in parallel.
+`Task` tool returns when sub-agent completes. Required 3 reviewers と、
+`--freerange` 指定時の追加 reviewer は同じ batch で parallel block する。
 
-返り受領後、reviewer ごとに per-reviewer file を検証 (= v0.10.0):
+返り受領後、reviewer ごと (`--freerange` 指定時は `freerange` も含む) に
+per-reviewer file を検証 (= v0.10.0):
 
 1. `${magi_dir}/round_<N>_<perspective>.json` が実在するか
 2. JSON として parse できるか (= `jq empty <file>` 等)
+
+required reviewer completeness は、起動時に確定した元の 3 perspective label が
+全て返ったかを明示的に検査する。freerange は required 集合に入れず、required reviewer
+の欠落を埋めたものとして数えない。
 
 **欠落 / parse 不能時の fallback**: その reviewer は **返り値 text で synthesize を続行**
 (= v0.9.0 挙動への後方互換。返り値契約違反で長文が返っていればそれが使える)。
@@ -318,7 +360,11 @@ synthesis 出力に degraded を明記する。**retry しない** (= reviewer �
 walltime を倍にする割に、返り値 fallback で成果は保全されているため)。
 
 Failure handling:
-- If N<3 sub-agents return: log gap, proceed with what's available, mark report degraded
+- 元の required 3 perspective のいずれかが未返却なら、freerange の成否に関係なく gap を
+  記録し、利用可能な出力で続行して report を degraded にする
+- `--freerange` 指定時に freerange が未返却 / file 欠落 / parse 不能なら、required
+  completeness は変えず `optional_freerange_missing: true` を merged file に記録し degraded
+  を明記する
 - If any sub-agent times out: continue with remainders, retry budget = 1
 
 ### Step 4: Synthesize
@@ -356,11 +402,50 @@ Then aggregate:
 - count per severity
 - cross-perspective agreement (= 2+ perspectives flag same issue = high-confidence cluster)
 - new-vs-duplicate ratio (= if > 80% dup → ship signal)
+- `--freerange` 指定時は freerange findings も同じ matrix / severity aggregate に含める
 
 Save to `${magi_dir}/round_<N>.json` for next-round reference (= 親の merged json
 write は v0.10.0 でも**維持** — Step 1 の round 継続性はこの file が担う)。merged json に
 `reviewer_files` 配列 (= per-reviewer file の path 一覧) を追加し、欠落があれば
-`reviewer_file_missing` も記録する (= Step 3 参照)。
+`reviewer_file_missing` も記録する (= Step 3 参照)。retirement launch ledger 用に
+`campaign_id` と、最初の reviewer batch 起動時に UTC で実測して以後の round へそのまま
+引き継ぐ RFC3339 UTC `campaign_launched_at` (`%Y-%m-%dT%H:%M:%SZ`) も記録する。
+`--freerange` round は reviewer artifact の `.findings | length` を
+`freerange_finding_count` として記録する。
+
+親 synthesis は各 finding の evidence を確認し、`${magi_dir}/verification.json` に
+`verified` / `disputed` / `unreviewed` を finding 単位で Write する。Step 3 で reviewer
+artifact を parse する際、raw JSON bytes の sha256 も計算し `artifact_digest` として
+sidecar に固定する。sidecar は次の形:
+
+```json
+{
+  "canonical_repo": "/absolute/canonical/repo",
+  "campaign_id": "<doc-stem>",
+  "round": 2,
+  "written_by": "parent-synthesis",
+  "verifications": [
+    {
+      "source_relpath": "docs/designs/.dual-magi/example/round_2_freerange.json",
+      "artifact_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reviewer": "freerange",
+      "finding_id": "r2-freerange-1",
+      "status": "verified",
+      "note": "confirmed during synthesis"
+    }
+  ]
+}
+```
+
+`canonical_repo` は worktree ではなく canonical checkout の absolute path、
+`source_relpath` はその repo root から reviewer file への canonical relative path とする。
+join は `canonical_repo + source_relpath + artifact_digest + reviewer + finding_id` の
+完全形、または既知の `sighting_key` のみを使う。同じ relpath の別 worktree artifact を
+digest なしで join しない。曖昧な campaign/reviewer tuple は書かない。
+
+**verdict の DB 反映は非同期**: sidecar 自体は DB に接続せず、次回 harvest が finding upsert
+後に適用する。撤去判定を今すぐ引く必要がある場合だけ、project の credential-safe な既存手順で
+harvester を手動実行する。skill は harvester の script 名や DB credential を仮定しない。
 
 ### Step 5 (optional): External reviewer round
 
@@ -390,14 +475,22 @@ Stop criteria (= user judges OR explicit flag for auto):
    Fable-class reviewer では到達不能** (2026-07-10 実測: 41 round 回しても毎 round 3-7 findings) —
    findings ゼロ待ち・criterion 1 の発火待ちで loop を回し続けない。
 
-Runaway guard: one campaign is mechanically bounded to 3 full fan-out/cross-family pairs
-(12 weighted launches). At that boundary, take the altitude checkpoint (= ship core / slice /
-descend to code). Only a real requirement revision may roll into the remaining global allowance,
-which can fund at most one further pair; user sign-off and a fresh state directory cannot extend
-either bound. Revision after re-review is **diff-scoped** (= diff + invariant を渡す、 unchanged text
-の再審は auto-dup 扱い)。
+**freerange の CRITICAL / HIGH は、他 reviewer と同様に plateau を止める。
+「数えない」のは必要 reviewer 集合であって severity gate ではない。** この拘束は Claude-native state を読まない
+機械 gate ではなく、この Step 6 の散文 gate が担う (`未強制の convention`)。
+
+Runaway guard: Claude-native campaign の散文予算は 3 full fan-out/cross-family pairs
+(12 weighted launches)。これは wired enforcement ではない。境界で altitude checkpoint
+(= ship core / slice / descend to code) を取る。real requirement revision のみ remaining global
+allowance へ進め、最大 1 pair。user sign-off や fresh state directory で予算を延長しない。
+Revision after re-review is **diff-scoped** (= diff + invariant を渡す、 unchanged text の再審は
+auto-dup 扱い)。
 enumerable detail (= grant list / opclass / column list 等) を prose で列挙する doc は altitude
 違反 — 修正は追記でなく executable gate 化 (= ultramagi § Convergence economics 参照)。
+
+`--freerange` round は 3 perspective + cross-family + freerange = 5 launches。12 launch の
+散文予算では full pair 2 回、端数 2 は retry 用となる。これは wired enforcement ではなく
+discipline target (`未強制の convention`)。freerange は round 2 以降に統括が明示した時だけ回す。
 
 ### Step 7: Mutation (= only if --apply-local or --commit-push)
 
@@ -414,6 +507,160 @@ If mutation flag set:
 
 If mutation flag NOT set (= default review-only):
 - Output: 「No mutation applied. Run with --apply-local to integrate findings.」
+
+## Operational procedure: freerange retirement
+
+これは ordinary review invocation の Step ではない。DB credential を要求せず review-only を
+維持する。operator が periodic に全 repository を横断して実行する独立手順。
+
+まず全 canonical repo の merged `${magi_dir}/round_<N>.json` を走査する。正規表現
+`round_[0-9]+\.json` に一致する merged file だけを対象にし、`reviewer_files` に
+`round_<N>_freerange.json` がある campaign を「launched」と数える。zero-finding output も
+ledger に残るため 1 campaign と数える。各 campaign は最初の該当 round だけを採り、
+`campaign_launched_at`, `campaign_id` の順で global sort する。DB の finding row や
+`first_seen_at` を launch count / order に使わない。latest 3 consecutive campaign の
+`canonical_repo + campaign_id` を固定する。3 本未満なら `KEEP_FLOOR`。canonical repo
+root を引数に渡す executable derivation:
+
+```bash
+set -euo pipefail
+[ "$#" -gt 0 ] || {
+  echo "usage: retirement-ledger <canonical-repo-root>..." >&2
+  exit 2
+}
+
+{
+  for supplied_root in "$@"; do
+    common_dir=$(git -C "$supplied_root" rev-parse \
+      --path-format=absolute --git-common-dir)
+    canonical_root=$(dirname "$common_dir")
+    find "$canonical_root" -type f -name 'round_*.json' -print0
+  done
+} |
+while IFS= read -r -d '' merged; do
+  [[ $(basename "$merged") =~ ^round_[0-9]+\.json$ ]] || continue
+  common_dir=$(git -C "$(dirname "$merged")" rev-parse \
+    --path-format=absolute --git-common-dir)
+  canonical_root=$(dirname "$common_dir")
+  jq -r --arg repo "$canonical_root" --arg merged "$merged" '
+    select(any(.reviewer_files[]?; endswith("_freerange.json"))) |
+    [
+      (.campaign_launched_at // error("missing campaign_launched_at: " + $merged)),
+      $repo,
+      (.campaign_id // error("missing campaign_id: " + $merged)),
+      (.freerange_finding_count // error("missing freerange_finding_count: " + $merged)),
+      $merged
+    ] | @tsv
+  ' "$merged"
+done |
+sort -u |
+awk -F '\t' '
+  {
+    key = $2 SUBSEP $3
+    if (!(key in launched) || $1 < launched[key]) {
+      launched[key] = $1
+      repo[key] = $2
+      campaign[key] = $3
+    }
+    expected[key] += $4
+  }
+  END {
+    for (key in launched)
+      print launched[key] "\t" repo[key] "\t" campaign[key] "\t" expected[key]
+  }
+' |
+sort -t "$(printf '\t')" -k1,1 -k2,2 -k3,3 |
+tail -n 3 |
+awk -F '\t' '
+  { rows[NR] = $0 }
+  END {
+    if (NR < 3) {
+      print "KEEP_FLOOR: only " NR " campaign(s)" > "/dev/stderr"
+      exit 3
+    }
+    for (i = 1; i <= NR; i++) print rows[i]
+  }
+'
+```
+
+linked worktree が引数でも `--git-common-dir` から canonical checkout に正規化する。
+出力第 4 field は campaign 全 round の raw freerange finding 数。次に credential-safe な
+既存 `psql` session へ、その**正確な 3 row** を parameter として渡す:
+
+```sql
+WITH selected(
+  canonical_repo, campaign_id, expected_findings, launch_order
+) AS (
+  VALUES
+    (:'repo_1', :'campaign_1', :'expected_1'::bigint, 1),
+    (:'repo_2', :'campaign_2', :'expected_2'::bigint, 2),
+    (:'repo_3', :'campaign_3', :'expected_3'::bigint, 3)
+),
+campaign_stats AS (
+  SELECT
+    s.canonical_repo,
+    s.campaign_id,
+    s.expected_findings,
+    s.launch_order,
+    count(f.*) AS observed_findings,
+    count(f.*) FILTER (WHERE NOT f.dropped) AS finding_count,
+    count(f.*) FILTER (
+      WHERE NOT f.dropped
+        AND f.parent_verdict IN ('verified', 'disputed')
+    )::numeric / NULLIF(
+      count(f.*) FILTER (WHERE NOT f.dropped), 0
+    ) AS verdict_coverage,
+    count(DISTINCT (f.title_norm, f.location_norm, f.severity_norm)) FILTER (
+      WHERE NOT f.dropped
+        AND f.severity_norm IN ('REJECT', 'CRITICAL', 'HIGH')
+        AND f.parent_verdict = 'verified'
+    ) AS verified_blockers
+  FROM selected s
+  LEFT JOIN personal.magi_findings f
+    ON f.canonical_repo = s.canonical_repo
+   AND f.campaign_id = s.campaign_id
+   AND lower(f.reviewer) = 'freerange'
+  GROUP BY
+    s.canonical_repo, s.campaign_id, s.expected_findings, s.launch_order
+)
+SELECT
+  count(*) AS campaigns_observed,
+  bool_and(
+    observed_findings = expected_findings
+    AND (finding_count = 0 OR verdict_coverage = 1)
+  ) AS coverage_complete,
+  coalesce(sum(verified_blockers), 0) AS verified_blockers,
+  CASE
+    WHEN count(DISTINCT (canonical_repo, campaign_id)) <> 3
+      OR bool_or(
+        coalesce(canonical_repo, '') = ''
+        OR coalesce(campaign_id, '') = ''
+      ) THEN 'KEEP_FLOOR'
+    WHEN bool_and(
+      observed_findings = expected_findings
+      AND (finding_count = 0 OR verdict_coverage = 1)
+    )
+     AND coalesce(sum(verified_blockers), 0) = 0 THEN 'RETIRE'
+    WHEN NOT bool_and(
+      observed_findings = expected_findings
+      AND (finding_count = 0 OR verdict_coverage = 1)
+    ) THEN 'HOLD_COVERAGE'
+    ELSE 'KEEP_EFFECTIVE'
+  END AS decision
+FROM campaign_stats;
+```
+
+coverage numerator は `verified` / `disputed` のみ。`unreviewed` は coverage に数えない。
+filesystem の expected count と DB の observed count が一致するまで未 harvest / 部分 harvest
+として `HOLD_COVERAGE`。expected count が 0 の真正 zero-finding campaign だけ coverage
+complete と扱う。
+semantic blocker は campaign 内の
+`(title_norm, location_norm, severity_norm)` distinct。判定は repository-local でなく global。
+`verification.json` は authenticated でない (`written_by` は自己申告)。`RETIRE` 前に対象
+3 campaign の sidecar が親 synthesis の出力であることを operator が確認する。
+
+v0.11.0 release 日 2026-07-28 から 6 か月後の 2027-01-28 に 3 campaign 未満なら、
+「使われていない」を理由に撤去する。
 
 ## Finding schema (= standardized)
 
@@ -768,6 +1015,7 @@ These are not prerequisites for skill function. Pattern is self-contained in thi
 
 | date | version | change |
 |---|---|---|
+| 2026-07-28 | 0.11.0 | **Optional free-range reviewer (claude-harness#233 slice ②)** — round 2+ の `--freerange` で checklist-free reviewer を追加 4 体目として起動。per-doc file contract、≤200-word receipt、Step 6 severity-gated terminal、12-launch 散文予算、非同期 `verification.json` sidecar、3-campaign retirement SQL を追加。companion mechanical gate / persona set / fanout CLI は不変 |
 | 2026-05-14 | 0.1.0 | Initial skeleton |
 | 2026-05-14 | 0.3.0 | Isolation pattern canonical化、 user feedback 「session 濁る」 反映:<br>- adapter `codex-mailbox` に `--codex-pane` / `--mailbox-path` / `--spawn-via` options 追加<br>- β isolation pattern (= 専用 pane + 専用 mailbox channel) を recommended default<br>- γ ephemeral spawn pattern (= formation skill 経由 都度 spawn / kill) 追加<br>- shared pane pattern (= v0.2.0 default) deprecated、 v0.4.0 で削除候補<br>- request schema に `project_slug` 追加 (= context 切替明示)<br>- Codex side responsibility 明示 (= skill scope 外、 Codex repo で別 implement) |
 | 2026-05-21 | 0.4.0 | Empirical patterns 3 件追加 (= 2026-05-21 PG hardening session 観測): (1) cross-family round skip 不能 (2) design pivot 連鎖 (3) ship gate = new/total<20%。 cost datum 4 件目 (= provision_pg ~4h ~$25) |
