@@ -7,6 +7,22 @@
             "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/formation_suggest.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-formation hooks/formation_suggest.sh",
             "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mailbox_unread_advisor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-formation hooks/mailbox_unread_advisor.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mailbox_unread_advisor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-formation hooks/mailbox_unread_advisor.sh",
+            "timeout": 5
           }
         ]
       }
