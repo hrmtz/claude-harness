@@ -27,7 +27,7 @@ import sys
 
 TAIL_LINES = 12
 TURN_MARKER = re.compile(
-    r"^[ \t]*user(?:[ \u3000]+(?P<utterance>\S.*))?[ \t]*$",
+    r"^[ \t]*(?P<marker>user|ユーザー)(?P<remainder>.*?)[ \t]*$",
     re.IGNORECASE,
 )
 TECHNICAL_TOKEN = re.compile(
@@ -107,7 +107,15 @@ def has_fabricated_user_turn(text: str) -> bool:
             continue
         if _inside_fence(lines, index):
             continue
-        utterance = (match.group("utterance") or "").strip()
+        remainder = match.group("remainder")
+        # Japanese conversational text normally has no word separator:
+        # ``user頼んだ`` is a turn marker followed by speech. Conversely,
+        # ASCII continuations are identifiers/ordinary words (username,
+        # users, user_id), not a marker boundary. Whitespace and a non-ASCII
+        # first character are the only accepted boundaries.
+        if remainder and remainder[0].isascii() and not remainder[0].isspace():
+            continue
+        utterance = remainder.lstrip(" \t\u3000").strip()
         # Corpus-grounded precision constraints: normal line-leading prose uses
         # a longer subject phrase, attribution prefix, or prose punctuation.
         # Technical vocabulary in the *following fabricated speech* is allowed:
