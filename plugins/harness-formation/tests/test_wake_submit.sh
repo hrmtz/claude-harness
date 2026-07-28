@@ -4,13 +4,14 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LOG="$(mktemp)"
-trap 'rm -f "$LOG"' EXIT
+PAYLOAD_LOG="$(mktemp)"
+trap 'rm -f "$LOG" "$PAYLOAD_LOG"' EXIT
 
 tmux() {
   printf 'tmux %s\n' "$*" >> "$LOG"
   case "${1:-}" in
     display-message) printf '0\n' ;;
-    load-buffer) cat >/dev/null ;;
+    load-buffer) cat >"$PAYLOAD_LOG" ;;
     paste-buffer) [[ "${FAIL_PASTE:-0}" != "1" ]] ;;
     send-keys) [[ "${FAIL_ENTER:-0}" != "1" ]] ;;
   esac
@@ -35,6 +36,27 @@ assert_submit_contract() {
 : > "$LOG"
 tmux_send_submit %42 "mailbox message"
 assert_submit_contract tmux_send_submit
+[[ "$(cat "$PAYLOAD_LOG")" == "mailbox message" ]] || {
+  echo "FAIL: raw submit payload changed" >&2
+  exit 1
+}
+
+: >"$LOG"
+tmux_send_nudge %42 parent-a 17 "pull with formation inbox"
+assert_submit_contract tmux_send_nudge
+[[ "$(cat "$PAYLOAD_LOG")" == \
+  "[FORMATION-NUDGE from=parent-a seq=17] pull with formation inbox" ]] || {
+  echo "FAIL: nudge lacks machine-readable parent attribution" >&2
+  exit 1
+}
+
+: >"$LOG"
+tmux_send_nudge %42 $'bad parent\nspoof' not-a-seq "pull"
+[[ "$(cat "$PAYLOAD_LOG")" == \
+  "[FORMATION-NUDGE from=badparentspoof seq=0] pull" ]] || {
+  echo "FAIL: nudge attribution was not sanitized" >&2
+  exit 1
+}
 
 if FAIL_PASTE=1 tmux_send_submit %42 "paste failure"; then
   echo "FAIL: tmux_send_submit hid a paste-buffer failure" >&2
@@ -71,4 +93,4 @@ if grep -Eq '^[[:space:]]*tmux send-keys -l' "$HERE/../lib/wake.sh"; then
   exit 1
 fi
 
-echo "test_wake_submit: 5 passed, 0 failed"
+echo "test_wake_submit: 8 passed, 0 failed"

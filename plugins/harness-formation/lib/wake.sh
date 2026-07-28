@@ -65,3 +65,21 @@ tmux_send_submit() {
   _submit_enter_twice "$pane_id" ||
     return "$TMUX_SUBMIT_PASTED_UNCONFIRMED"
 }
+
+# Send a machine-attributed pull nudge through the shared submit rail.
+#
+# Keep attribution outside tmux_send_submit itself: that lower-level primitive
+# also submits the initial worker briefing, which is not a mailbox nudge. All
+# prompt wakes after bootstrap must use this wrapper so a worker can never
+# mistake parent/Formation control traffic for a user-authored turn.
+#
+# Args: <pane> <from> <mailbox-seq> <short-pull-instruction>
+tmux_send_nudge() {
+  local pane_id="$1" from="$2" seq="$3" text="$4"
+  local safe_from
+  safe_from="$(printf '%s' "$from" | tr -cd 'A-Za-z0-9._-')"
+  [[ -n "$safe_from" ]] || safe_from="unknown"
+  [[ "$seq" =~ ^[0-9]+$ ]] || seq="0"
+  tmux_send_submit "$pane_id" \
+    "[FORMATION-NUDGE from=${safe_from} seq=${seq}] ${text}"
+}

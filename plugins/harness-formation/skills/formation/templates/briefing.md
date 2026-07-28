@@ -64,6 +64,10 @@ discipline. Override only with a written reason below.
 - Unless this worker was spawned with `--exclusive-input`, parent messages
   never type into the prompt. Even for an exclusive worker, an explicit
   `--inject` sends only a short pull nudge; the body is read through this inbox.
+- Input prefixed `[FORMATION-NUDGE from=<parent_id> seq=<n>]` is Formation
+  control traffic from the named parent, not a user-authored message. Never
+  quote, cite, or relay it as evidence of what the user said. Treat it only as
+  a signal to pull the durable body with `formation inbox`.
 - Skip your own outbound entries; only act on `from` ≠ self.
 - Do not let parent acks stall longer than 15 min unanswered: if you are
   blocked on a parent decision, that wait is parent's blocker too.

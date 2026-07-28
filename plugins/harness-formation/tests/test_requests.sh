@@ -21,12 +21,15 @@ export FORMATION_PARENT=parent-a
 unset TMUX_PANE
 
 TMUX_LOG="$FIXTURE/tmux.log"
+TMUX_LOAD_LOG="$FIXTURE/tmux-load.log"
 : >"$TMUX_LOG"
+: >"$TMUX_LOAD_LOG"
 tmux() {
   printf 'tmux %s\n' "$*" >>"$TMUX_LOG"
   case "${1:-}" in
     show-options) return 0 ;;
     set-option) [[ "${TMUX_FAIL_SET_OPTION:-0}" != "1" ]] ;;
+    load-buffer) cat >>"$TMUX_LOAD_LOG" ;;
     display-message|capture-pane|kill-pane) return 0 ;;
   esac
 }
@@ -172,6 +175,8 @@ request_current_one "$request_id" | jq -e \
 FORMATION_SELF=worker-lead-child
 FORMATION_PARENT=lead
 lead_id="$(cmd_ask 'Only literal lead may close this')"
+registry_add worker-lead-child %997 formation-worker-lead-child \
+  "$FIXTURE/brief.md" lead-sid codex task goal 0
 FORMATION_SELF=intruder
 set +e
 cmd_ack "$lead_id" stolen >"$FIXTURE/intruder-lead.out" 2>&1
@@ -185,11 +190,18 @@ FORMATION_PARENT=parent-a
 
 # ACK closes semantic state, transitions to RUNNING, and notifies once.
 FORMATION_SELF=parent-a
+: >"$TMUX_LOG"
+: >"$TMUX_LOAD_LOG"
 ack_out="$(cmd_ack "$request_id" 'review started')"
 grep -Fq "request=$request_id event=ack state=RUNNING notified=true" <<<"$ack_out"
 grep -Fq 'tmux set-option -p -t %999 @formation_mail_pending' "$TMUX_LOG"
-if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
-  echo "FAIL: ACK signal touched the worker prompt" >&2
+grep -Fq 'tmux load-buffer' "$TMUX_LOG"
+grep -Fq 'tmux paste-buffer -t %999' "$TMUX_LOG"
+grep -Fq 'tmux send-keys -t %999 Enter' "$TMUX_LOG"
+grep -Fq "[FORMATION-NUDGE from=parent-a" "$TMUX_LOAD_LOG"
+grep -Fq "ASK reply ready for request=$request_id" "$TMUX_LOAD_LOG"
+if grep -Fq 'review started' "$TMUX_LOAD_LOG"; then
+  echo "FAIL: ACK body was pasted instead of a short pull nudge" >&2
   exit 1
 fi
 request_current_one "$request_id" | jq -e \
@@ -199,9 +211,51 @@ ack_rows="$(jq -Rsc --arg id "[ACK request_id=$request_id]" \
 [[ "$ack_rows" -eq 1 ]]
 
 # Duplicate ACK is a no-op and produces no duplicate worker notification.
+: >"$TMUX_LOG"
+: >"$TMUX_LOAD_LOG"
 cmd_ack "$request_id" 'review started' | grep -Fq 'notified=false'
 [[ "$(jq -Rsc --arg id "[ACK request_id=$request_id]" \
   '[splits("\n") | fromjson? | select((.body // "") | startswith($id))] | length' "$MAILBOX_LOG")" -eq 1 ]]
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+  echo "FAIL: duplicate ACK injected a second pull nudge" >&2
+  exit 1
+fi
+
+# The nonexclusive exception is authorized only by all three facts in the
+# pre-transition snapshot: WAITING_PARENT, exact worker/request party, and the
+# parent recorded on that ASK. Missing any one must produce zero prompt input.
+valid_waiting="$(request_current_one "$concurrent_id")"
+assert_request_nudge_refused() {
+  local snapshot="$1" request="$2" worker="$3" parent="$4"
+  : >"$TMUX_LOG"
+  : >"$TMUX_LOAD_LOG"
+  set +e
+  mailbox_inject_waiting_request_nudge %999 88 "$parent" \
+    "$request" "$worker" "$snapshot" >"$FIXTURE/nudge-refused.out" 2>&1
+  local nudge_rc=$?
+  set -e
+  [[ "$nudge_rc" -eq 4 ]]
+  [[ ! -s "$TMUX_LOAD_LOG" ]]
+  if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+    echo "FAIL: unauthorized ASK reply touched the prompt" >&2
+    exit 1
+  fi
+}
+assert_request_nudge_refused \
+  "$(jq -c '.state="RUNNING"' <<<"$valid_waiting")" \
+  "$concurrent_id" worker-a parent-a
+assert_request_nudge_refused "$valid_waiting" wrong-request worker-a parent-a
+assert_request_nudge_refused "$valid_waiting" "$concurrent_id" wrong-worker parent-a
+assert_request_nudge_refused "$valid_waiting" "$concurrent_id" worker-a wrong-parent
+
+# Ordinary formation msg remains badge-only for a nonexclusive worker.
+: >"$TMUX_LOG"
+: >"$TMUX_LOAD_LOG"
+cmd_msg worker-a 'ordinary parent message'
+if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
+  echo "FAIL: ordinary formation msg gained the ASK reply exception" >&2
+  exit 1
+fi
 
 # Every lifecycle caller preserves the durable row/state and returns the shared
 # honest exit 4 when a known pane cannot be badged.
@@ -261,10 +315,15 @@ null_route_id="$(jq -r '.request_id' <<<"$null_route_create")"
 ensure_request_mailbox_message worker-null parent-a \
   "[ASK request_id=$null_route_id]" "[ASK request_id=$null_route_id] Missing pane route" >/dev/null
 : >"$TMUX_LOG"
+set +e
 FORMATION_SELF=parent-a cmd_ack "$null_route_id" durable \
   >"$FIXTURE/null-route-ack.out" 2>"$FIXTURE/null-route-ack.err"
+null_route_rc=$?
+set -e
+[[ "$null_route_rc" -eq 4 ]]
 grep -Fq 'notified=true' "$FIXTURE/null-route-ack.out"
 grep -Fq 'route=absent-or-invalid' "$FIXTURE/null-route-ack.err"
+grep -Fq 'no valid pane route' "$FIXTURE/null-route-ack.err"
 if grep -Eq '@formation_status|@formation_mail_pending|-t null ' "$TMUX_LOG"; then
   echo "FAIL: missing pane_id mutated a tmux pane through an empty/null target" >&2
   exit 1
