@@ -19,6 +19,7 @@ class ReceiptHookTests(unittest.TestCase):
         self.root = pathlib.Path(self.tmp.name)
         self.home = self.root / "home"
         self.repo = self.root / "repo"
+        self.worktree = self.root / "worktree"
         self.bin = self.root / "bin"
         self.home.mkdir()
         self.repo.mkdir()
@@ -30,8 +31,12 @@ class ReceiptHookTests(unittest.TestCase):
         (self.repo / "tracked").write_text("fixture\n", encoding="utf-8")
         subprocess.run(["git", "add", "tracked"], cwd=self.repo, check=True)
         subprocess.run(["git", "commit", "-qm", "fixture"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", "fixture-worktree", str(self.worktree)],
+            cwd=self.repo, check=True,
+        )
         self.oid = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.repo, text=True
+            ["git", "rev-parse", "HEAD"], cwd=self.worktree, text=True
         ).strip()
         tmux = self.bin / "tmux"
         tmux.write_text(
@@ -59,7 +64,7 @@ class ReceiptHookTests(unittest.TestCase):
         return {
             "hook_event_name": event,
             "session_id": "claude-conversation-session",
-            "cwd": str(self.repo),
+            "cwd": str(self.worktree),
             "timestamp": "2026-07-28T00:00:00Z",
             "tool_input": {
                 "command": "gh pr create --draft --title fixture --body "

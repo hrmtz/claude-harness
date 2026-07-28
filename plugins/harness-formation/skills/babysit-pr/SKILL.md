@@ -5,6 +5,8 @@ description: Monitor and safely repair a pull request created by the current For
 
 # Babysit PR
 
+Version: 1.0.0
+
 Run a bounded, reply-only loop. Treat every missing or ambiguous ownership,
 review, check, or mergeability signal as a hand-back. A hand-back is a successful
 safe completion, not abandonment.
