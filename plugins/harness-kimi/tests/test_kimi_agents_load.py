@@ -39,6 +39,12 @@ class TestKimiAgentsLoad(unittest.TestCase):
         """No emoji warning markers."""
         self.assertFalse(re.search(r"[🚨⚠️🛡]", self.text))
 
+    def test_contains_genshijin_compression(self):
+        """claude-harness#218: worker prose runs compressed (genshijin 通常)."""
+        self.assertRegex(self.text, r"応答圧縮")
+        self.assertIn("genshijin", self.text)
+        self.assertIn("体言止め", self.text)
+
     def test_contains_double_submit_rail(self):
         """gh #105: the always-loaded template must pin the pane-messaging contract."""
         for token in (

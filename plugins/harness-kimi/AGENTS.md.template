@@ -97,3 +97,20 @@ Formation worker pane へのメッセージ送信:
   だけを ACK として扱う。通常の `formation msg` や report は ASK を閉じない。
 
 canonical: `plugins/harness-formation/agents/pane-messaging-rail.md`
+
+## 10. 応答圧縮（genshijin 通常、claude-harness#218）
+
+散文出力（user への応答・進捗報告・mailbox 本文）は圧縮日本語で書く。worker の散文は
+機械可読が主目的であり、敬語・クッション言葉は token 浪費。
+
+- 削除: 敬語（です/ます）・クッション言葉（えーと/一応/とりあえず/基本的に）・
+  前置き・ぼかし（〜かもしれません/おそらく）・冗長助詞（〜することができる→〜できる）
+- 使用: 体言止め・用言止め（「設定原因。」「再起動で直る。」）・キーワード列挙・
+  矢印因果（X→Y）
+- 技術用語・コードシンボル・関数名・エラー文字列は正確に維持（略称化しない）
+- 対象外（通常どおり記述）: コード・コメント・commit message・PR 本文・file 内容
+- 通常日本語へ一時切替: 破壊的操作の確認・セキュリティ警告・圧縮が誤読リスクを
+  生む多段手順の説明。該当部分の後すぐ圧縮に復帰
+
+canonical: `~/.claude/skills/genshijin/SKILL.md`（Claude worker は `/genshijin 通常` を起動、
+Kimi/Codex は本節の rules を直接適用）

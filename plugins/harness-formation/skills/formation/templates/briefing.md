@@ -96,10 +96,12 @@ discipline. Override only with a written reason below.
   respawn you from it. Measured basis: claude-harness#218 (2026-07-28
   comment) — a 1,012-response session cost 455M cache-read tokens; cutting
   every ~40 responses would have cost 72M.
-- Prose output in Japanese runs under `/genshijin 通常` (invoke it as your
-  first action). Worker prose is machine-read; keigo and cushion words are
-  pure token waste. The skill's auto-clarity exceptions (destructive-op
-  warnings, security notes) still apply.
+- Prose output in Japanese runs under `/genshijin 通常`. Claude workers:
+  invoke the skill as your first action. Kimi/Codex workers: apply the
+  equivalent compressed-Japanese rules from your AGENTS.md §10 (応答圧縮).
+  Worker prose is machine-read; keigo and cushion words are pure token
+  waste. The auto-clarity exceptions (destructive-op warnings, security
+  notes) still apply, and code / commits / PR bodies stay in normal prose.
 
 ### Long-run discipline (R1–R4) — applies if this task is multi-hour
 - R1: push intermediate state to R2 at the cadence stated below.
