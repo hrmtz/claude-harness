@@ -38,8 +38,13 @@ class AuditTests(unittest.TestCase):
             self.assertIn("CHECKS_FAILED_OR_UNKNOWN", self.codes(data))
         data["prs"][0]["statusCheckRollup"] = [{"state": "SUCCESS"}]
         self.assertNotIn("CHECKS_FAILED_OR_UNKNOWN", self.codes(data))
-        data["prs"][0].update({"reviewDecision": "", "latestReviews": [{"state": "CHANGES_REQUESTED"}]})
-        self.assertIn("REVIEW_CHANGES_REQUESTED", self.codes(data))
+        data["prs"][0]["comments"].append({
+            "id": "block",
+            "authorAssociation": "OWNER",
+            "createdAt": "2026-07-24T00:00:01Z",
+            "body": "Independent review verdict: **BLOCK** @ " + data["prs"][0]["headRefOid"],
+        })
+        self.assertIn("REVIEW_BLOCKED", self.codes(data))
     def test_unknown_issue_on_open_pr_is_action(self):
         data = copy.deepcopy(self.data)
         data["issues"]["141"] = "UNKNOWN"

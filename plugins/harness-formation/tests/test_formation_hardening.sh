@@ -669,6 +669,15 @@ got="$(echo '{}' | FORMATION_HOME="$SL_HOME" bash "$SL_BIN"; echo "rc=$?")"
 if [[ "$got" == "rc=0" ]]; then ok "statusline silent + exit 0 without FORMATION_SELF"; else bad "statusline no-self got [$got]"; fi
 
 # ----------------------------------------------------------------------------
+# Group 5: babysit-pr evidence, receipt, skill, and activation contracts (#233)
+# ----------------------------------------------------------------------------
+echo "== babysit-pr contracts (#233) =="
+if python3 "$HERE/test_babysit_pr.py"; then ok "babysit evidence and CI matcher"; else bad "babysit evidence and CI matcher"; fi
+if python3 "$HERE/test_pr_receipt.py"; then ok "babysit ownership receipt"; else bad "babysit ownership receipt"; fi
+if python3 "$HERE/test_babysit_skill.py"; then ok "babysit skill boundaries"; else bad "babysit skill boundaries"; fi
+if bash "$HERE/test_claude_skill_install.sh"; then ok "babysit Claude skill installer"; else bad "babysit Claude skill installer"; fi
+
+# ----------------------------------------------------------------------------
 echo
 printf 'RESULT: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

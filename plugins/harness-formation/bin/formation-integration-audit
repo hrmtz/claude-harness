@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse, datetime as dt, json, os, pathlib, re, subprocess, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "lib"))
+from babysit_pr import classify_checks, classify_review
 ISSUE_RE = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|gh|issue)"
                       r"\s*:?\s*(?:(?:https://github\.com/)?([\w.-]+/[\w.-]+)(?:#|/issues/)|#)(\d+)\b")
 CLOSE_RE = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
@@ -8,7 +10,7 @@ TEST_RE = re.compile(
     r"(?im)^\s*(?:(?:[-*]\s*)?(?:tests?|test evidence|verification|validation)\s*[:\-]\s*\S|"
     r"#{1,6}\s*(?:tests?|validation|verification)\s*$\n\s*[-*]\s*\S)"
 )
-PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefName,headRefOid,url,mergedAt,isCrossRepository,reviewDecision,latestReviews,statusCheckRollup"
+PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefName,headRefOid,url,mergedAt,isCrossRepository,comments,statusCheckRollup"
 def safe(text, fallback):
     line = next((x.strip() for x in text.splitlines() if x.strip()), fallback)
     line = re.sub(r"[\x00-\x1f\x7f]", "", line)
@@ -209,36 +211,22 @@ def audit(data):
         merged = bool(pr.get("mergedAt")) or pr.get("state") == "MERGED"
         checks = pr.get("statusCheckRollup") or []
         check_evidence = ", ".join(f"{check.get('workflowName') or '-'}:{check.get('name') or check.get('context') or 'check'}={check.get('conclusion') or check.get('status') or check.get('state') or 'UNKNOWN'}" for check in checks)
-        if not checks:
+        check_state = classify_checks(pr)
+        if check_state == "UNKNOWN":
             add("ACTION", "evidence", "CHECKS_UNKNOWN", f"{subject}: no checks recorded", "record check evidence", (subject,))
+        elif check_state == "FAILED_OR_UNKNOWN":
+            add("ACTION", "evidence", "CHECKS_FAILED_OR_UNKNOWN", f"{subject}: {check_evidence}", "repair or establish check evidence", (subject,))
+        elif check_state == "PENDING":
+            add("WARN", "evidence", "CHECKS_PENDING", f"{subject}: {check_evidence}", "wait and rerun", (subject,))
         else:
-            bad, pending, unknown = 0, 0, 0
-            for check in checks:
-                conclusion = str(check.get("conclusion") or "").upper()
-                status = str(check.get("status") or check.get("state") or "").upper()
-                if (conclusion and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}) or (
-                    not conclusion and status in {"FAILURE", "ERROR"}):
-                    bad += 1
-                elif not conclusion and status == "SUCCESS":
-                    continue
-                elif not conclusion and status in {"PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "EXPECTED"}:
-                    pending += 1
-                elif not conclusion:
-                    unknown += 1
-            if bad or unknown:
-                add("ACTION", "evidence", "CHECKS_FAILED_OR_UNKNOWN", f"{subject}: {check_evidence}", "repair or establish check evidence", (subject,))
-            elif pending:
-                add("WARN", "evidence", "CHECKS_PENDING", f"{subject}: {check_evidence}", "wait and rerun", (subject,))
-            else:
-                add("PASS", "evidence", "CHECKS_PASS", f"{subject}: {check_evidence}", subjects=(subject,))
-        decision, reviews = str(pr.get("reviewDecision") or ""), pr.get("latestReviews") or []
-        review_evidence = ", ".join(f"{(review.get('author') or {}).get('login') or 'unknown'}={review.get('state') or 'UNKNOWN'}" for review in reviews) or decision or "none"
-        if decision == "CHANGES_REQUESTED" or any(review.get("state") == "CHANGES_REQUESTED" for review in reviews):
-            add("ACTION", "evidence", "REVIEW_CHANGES_REQUESTED", f"{subject}: {review_evidence}", "resolve review findings", (subject,))
-        elif decision == "APPROVED" or reviews:
-            add("PASS", "evidence", "REVIEW_RECORDED", f"{subject}: {review_evidence}", subjects=(subject,))
+            add("PASS", "evidence", "CHECKS_PASS", f"{subject}: {check_evidence}", subjects=(subject,))
+        review_state = classify_review(pr)
+        if review_state == "BLOCK":
+            add("ACTION", "evidence", "REVIEW_BLOCKED", f"{subject}: current head has a BLOCK marker", "resolve review findings", (subject,))
+        elif review_state == "PASS":
+            add("PASS", "evidence", "REVIEW_RECORDED", f"{subject}: current head has a PASS marker", subjects=(subject,))
         else:
-            add("ACTION", "evidence", "REVIEW_UNKNOWN", f"{subject}: no review recorded", "record review evidence", (subject,))
+            add("ACTION", "evidence", "REVIEW_UNRECORDED", f"{subject}: current head has no contractual review marker", "record review evidence", (subject,))
         add("PASS" if TEST_RE.search(str(pr.get("body") or "")) else "ACTION", "evidence",
             "TEST_EVIDENCE_RECORDED" if TEST_RE.search(str(pr.get("body") or "")) else "TEST_EVIDENCE_MISSING",
             f"{subject}: test evidence {'recorded' if TEST_RE.search(str(pr.get('body') or '')) else 'missing'}",
