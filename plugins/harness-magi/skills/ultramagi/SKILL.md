@@ -121,8 +121,8 @@ overhead.
 
 ## Phase 0 (premise grill) — before [1] PLAN
 
-Before drafting a design doc, verify that the premises it will rest on actually exist. A premise
-nobody checked becomes a schema-drift CRITICAL later, and it is cheapest to kill before there is
+Before drafting a design doc, verify that the premises it will rest on actually exist. An unchecked
+premise can later surface as a schema-drift CRITICAL, and it is cheapest to kill before there is
 prose defending it. Run this once **per slice** — never on an umbrella Epic document.
 
 1. **Input.** A gh issue number or a verbal task. Summarize purpose and background from
@@ -349,7 +349,7 @@ never `build → swap` directly.
 |---|---|---|
 | straight-to-code on a canonical change | ships the silent corruption | gate [2] then [4] |
 | declaring plateau after Claude-only rounds | same-family blind spots survive | codex round mandatory |
-| reviewers that don't run psql/grep | self-reported grounding = hallucination passes | `verify_commands_executed`, degrade empty rounds |
+| reviewers that skip the grounding checks their rail permits | self-reported grounding = hallucination passes | schema-as-code (`grep migrations/ core/`) from every family, live-DB checks from those that can; `verify_commands_executed`, degrade empty rounds |
 | `--confirm` as the only swap guard | an agent / operator clears it on bad state | programmatic coverage/residual/invariant gate in the script |
 | one mega design doc for the whole epic | un-reviewable, un-shippable | one task per loop, epic tracks the list |
 | reviewing or implementing the umbrella Epic as one task | rigor amplifies scope instead of convergence | admit the Epic, then gate one mergeable slice at a time |
