@@ -10,19 +10,58 @@ These cases run the real script in a subprocess and assert on exit codes and
 output only — nothing here may touch the live tree, so the deploy path is
 exercised solely through --dry-run.
 """
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(ROOT, "scripts", "sync_hooks_to_live.py")
 
 
-def run(*args):
+def run(*args, home=None):
+    env = dict(os.environ)
+    if home is not None:
+        env["HOME"] = home
     return subprocess.run(
-        [sys.executable, SCRIPT, *args], capture_output=True, text=True
+        [sys.executable, SCRIPT, *args], capture_output=True, text=True, env=env
     )
+
+
+class FakeHome:
+    """A throwaway ~ so a deploy, if one happens, is visible and harmless.
+
+    Asserting on stdout alone cannot distinguish "did not deploy" from
+    "deployed but printed nothing"; the messages are the thing most likely to
+    change. Here the live artifacts are real files whose bytes we compare.
+    """
+
+    def __enter__(self):
+        self.dir = tempfile.mkdtemp(prefix="synchooks_home_")
+        claude = os.path.join(self.dir, ".claude")
+        os.makedirs(os.path.join(claude, "hooks"))
+        self.settings = os.path.join(claude, "settings.json")
+        with open(self.settings, "w") as handle:
+            json.dump({"hooks": {}, "sentinel": "untouched"}, handle)
+        self.backups = os.path.join(self.dir, "sanada_backup_persistent")
+        self.before = self.snapshot()
+        return self
+
+    def snapshot(self):
+        with open(self.settings, "rb") as handle:
+            settings = handle.read()
+        hooks = sorted(os.listdir(os.path.join(self.dir, ".claude", "hooks")))
+        backups = sorted(os.listdir(self.backups)) if os.path.isdir(self.backups) else []
+        return settings, hooks, backups
+
+    def unchanged(self):
+        return self.snapshot() == self.before
+
+    def __exit__(self, *exc):
+        shutil.rmtree(self.dir, ignore_errors=True)
 
 
 class TestArgvHandling(unittest.TestCase):
@@ -33,23 +72,50 @@ class TestArgvHandling(unittest.TestCase):
                 self.assertEqual(r.returncode, 0)
                 self.assertIn("usage: sync_hooks_to_live.py", r.stdout)
 
-    def test_help_does_not_deploy(self):
-        """The regression itself: help must not reach the copy/write stage."""
-        r = run("--help")
-        combined = r.stdout + r.stderr
-        for marker in ("copied", "wrote settings.json", "syntax gate"):
-            self.assertNotIn(marker, combined)
+    def test_non_deploying_invocations_leave_the_tree_untouched(self):
+        """The regression itself, checked against files rather than messages.
 
-    def test_unknown_argument_is_rejected(self):
-        r = run("--bogus")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("unknown argument", r.stderr)
-        self.assertNotIn("copied", r.stdout)
+        `--ts --dry-run` is here because the first attempt at this fix let
+        --ts swallow the following flag, so that invocation deployed for real
+        while reading as a dry run.
+        """
+        for args in (
+            ("--help",),
+            ("-h",),
+            ("--bogus",),
+            ("--ts",),
+            ("--ts", "--dry-run"),
+            ("--ts", "--help"),
+            ("--ts", ""),
+            ("--",),
+            ("",),
+            ("--dry-run", "--bogus"),
+        ):
+            with self.subTest(args=args), FakeHome() as home:
+                r = run(*args, home=home.dir)
+                self.assertTrue(
+                    home.unchanged(),
+                    f"{args} wrote to the live tree (exit {r.returncode})",
+                )
 
-    def test_ts_requires_a_value(self):
-        r = run("--ts")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("--ts requires a value", r.stderr)
+    def test_help_exits_zero_other_rejections_exit_two(self):
+        for args, code in (
+            (("--help",), 0),
+            (("-h",), 0),
+            (("--bogus",), 2),
+            (("--ts",), 2),
+            (("--ts", "--dry-run"), 2),
+            (("--ts", ""), 2),
+            (("--",), 2),
+        ):
+            with self.subTest(args=args), FakeHome() as home:
+                self.assertEqual(run(*args, home=home.dir).returncode, code)
+
+    def test_argument_errors_go_to_stderr(self):
+        with FakeHome() as home:
+            r = run("--bogus", home=home.dir)
+            self.assertIn("unknown argument", r.stderr)
+            self.assertNotIn("unknown argument", r.stdout)
 
     def test_dry_run_still_plans_without_writing(self):
         r = run("--dry-run")

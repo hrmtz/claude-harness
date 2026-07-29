@@ -53,11 +53,20 @@ def _parse_argv(argv):
         elif arg == "--dry-run":
             dry = True
         elif arg == "--ts":
+            # A flag-shaped value means the timestamp was omitted. Swallowing
+            # it would drop the *next* flag: `--ts --dry-run` consumed
+            # --dry-run and deployed for real — the same defect this fix is
+            # for, reintroduced one argument over.
             if i + 1 >= len(argv):
                 print("error: --ts requires a value\n", file=sys.stderr)
                 print(USAGE, end="", file=sys.stderr)
                 sys.exit(2)
-            ts = argv[i + 1]
+            value = argv[i + 1]
+            if value.startswith("-") or not value.strip():
+                print(f"error: --ts requires a timestamp, got {value!r}\n", file=sys.stderr)
+                print(USAGE, end="", file=sys.stderr)
+                sys.exit(2)
+            ts = value
             i += 1
         else:
             print(f"error: unknown argument {arg!r}\n", file=sys.stderr)
