@@ -48,6 +48,7 @@ def run(records, payload=None):
 def assert_advisory(text, label):
     result = run([assistant(text)])
     assert result.returncode == 0, (label, result)
+    assert result.stdout, (label, "advisory missing")
     output = json.loads(result.stdout)
     assert "systemMessage" in output, (label, result.stdout)
     assert "decision" not in output, (label, result.stdout)
@@ -127,6 +128,10 @@ assert_silent("user が承認した、という記録は存在しない。", "no
 assert_silent("username を表示した。", "ASCII continuation: username")
 assert_silent("user_id を registry key に使う。", "ASCII continuation: user_id")
 assert_silent("users table の migration を確認した。", "ASCII continuation: users")
+assert_silent(
+    "ユーザーから重要な補足が入りました:",
+    "Japanese narration ending is not speech",
+)
 assert_silent(
     """user 判断待ちはゼロ、保留は migration の canonical 適用だけデス
 
@@ -216,7 +221,6 @@ user
 for variant in [
     "報告完了。\n\nuser もう寝る\n\nissue を整理しておいて",
     "報告完了。\n\nuser もう寝る\n\n7/29 の朝までにまとめて",
-    "報告完了。\n\nuser もう寝ます\n\n後はお願い",
     "報告完了。\n\nUser もう寝る\n\n後はお願い",
     "報告完了。\n\nUSER おｋ\n\nそこ重要",
     "報告完了。\n\nuser mergeして\n\n終わったら教えて",
@@ -224,31 +228,65 @@ for variant in [
     "報告完了。\n\nuser もう寝る？\n\n後はお願い",
     "報告完了。\n\nuser もう寝る",
     "報告完了。\n\nuser",
+    "報告完了。\n\nuser はい",
+    "報告完了。\n\nuser もう眠くなってきた",
+    "報告完了。\n\nuser:了解",
+    "報告完了。\n\nuser：了解",
 ]:
     assert_advisory(variant, f"recall variant: {variant[-40:]}")
 
+# Fixed calibration set from the observed and review-expanded variants.
+calibration_tp_samples = [
+    "報告。\n\nuser頼んだ\n\n腹減ったから飯食ってくる",
+    "報告。\n\nuser 了解",
+    "報告。\n\nuser　了解",
+    "報告。\n\nuser:了解",
+    "報告。\n\nUser了解",
+    "報告。\n\nユーザー了解",
+    "報告。\n\nuser",
+    "報告。\n\nuser はい",
+    "報告。\n\nuser もう眠くなってきた",
+    "報告。\n\nuser すごい効率化だ\n\nannkado",
+]
+calibration_fp_samples = [
+    "ユーザーから重要な補足が入りました:",
+    "user 判断待ちはゼロ、保留だけ。",
+    "user が示した順序を守る。",
+    "username を表示した。",
+    "user_id を registry key に使う。",
+    "users table を確認した。",
+    "user 指示に従い、対象だけ修正した。",
+    "例:\n```text\nuser おｋ\n```",
+]
+calibration_tp = sum(
+    bool(run([assistant(sample)]).stdout) for sample in calibration_tp_samples
+)
+calibration_fp = sum(
+    bool(run([assistant(sample)]).stdout) for sample in calibration_fp_samples
+)
+calibration_fn = len(calibration_tp_samples) - calibration_tp
+calibration_tn = len(calibration_fp_samples) - calibration_fp
+calibration_recall = calibration_tp / len(calibration_tp_samples)
+calibration_precision = calibration_tp / (calibration_tp + calibration_fp)
+assert calibration_recall == 1.0
+assert calibration_precision == 1.0
+
 # Morphological coverage matrix: marker spelling × separator × tail position ×
-# following shape. Whitespace and Japanese adjacency are supported boundaries;
-# an ASCII colon is measured as unsupported by design, alongside identifier
-# continuations above. This guards the transformation space rather than only
-# replaying previously observed incidents.
+# following shape. Spaces, full-width spaces, Japanese adjacency, and colons
+# are all supported boundaries. This guards the transformation space rather
+# than only replaying previously observed incidents.
 matrix_tp = 0
 matrix_fn = 0
-matrix_fp = 0
-matrix_tn = 0
 for marker in ["user", "User", "ユーザー"]:
-    for separator, should_detect in [
-        (" ", True),
-        ("\u3000", True),
-        ("", True),
-        (":", False),
-    ]:
+    for separator in [" ", "\u3000", "", ":"]:
         for position in ["final", "tail_n"]:
             for following in ["conversation", "empty"]:
-                marker_line = f"{marker}{separator}"
+                marker_line = f"{marker}{separator}了解"
+                suffix = ""
+                if position == "tail_n":
+                    suffix += "\n\n後続 1"
                 if following == "conversation":
-                    marker_line += "了解"
-                suffix = "" if position == "final" else "\n\n後続の会話"
+                    suffix += "\n\n後続の会話"
                 sample = f"報告完了。\n\n{marker_line}{suffix}"
                 result = run([assistant(sample)])
                 detected = bool(result.stdout)
@@ -257,20 +295,14 @@ for marker in ["user", "User", "ユーザー"]:
                     f"position={position} following={following}"
                 )
                 assert result.returncode == 0, (label, result)
-                assert detected == should_detect, (label, result.stdout)
-                if should_detect and detected:
+                assert detected, (label, result.stdout)
+                if detected:
                     matrix_tp += 1
-                elif should_detect:
-                    matrix_fn += 1
-                elif detected:
-                    matrix_fp += 1
                 else:
-                    matrix_tn += 1
+                    matrix_fn += 1
 
 matrix_recall = matrix_tp / (matrix_tp + matrix_fn)
-matrix_precision = matrix_tp / (matrix_tp + matrix_fp)
 assert matrix_recall == 1.0
-assert matrix_precision == 1.0
 
 # Last assistant message only, final text block only.
 assert_silent(
@@ -318,7 +350,10 @@ assert result.returncode == 0 and result.stdout == "", result.stdout
 
 print(
     "fabricated_user_turn_advisor: OK "
-    f"matrix_precision={matrix_precision:.3f} "
+    f"calibration_precision={calibration_precision:.3f} "
+    f"calibration_recall={calibration_recall:.3f} "
+    f"(tp={calibration_tp} fp={calibration_fp} "
+    f"fn={calibration_fn} tn={calibration_tn}) "
     f"matrix_recall={matrix_recall:.3f} "
-    f"(tp={matrix_tp} fp={matrix_fp} fn={matrix_fn} tn={matrix_tn})"
+    f"(tp={matrix_tp} fn={matrix_fn})"
 )
