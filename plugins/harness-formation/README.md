@@ -167,6 +167,16 @@ pane-option preimages below `~/sanada_backup_persistent/` (override with
 Set-option or registry failures roll pane options back; closed/recycled child
 panes and mismatched non-null routes are refused. An already exact pane+row
 pair is a byte-for-byte no-op.
+
+Review work has a separate durable lifecycle. The requester runs
+`formation review-request <reviewer-id> <subject>` and retains the printed
+review id. Formation sends the id to the reviewer and copies the request to
+the requester's manager. The assigned reviewer closes it with
+`formation verdict <review-id> <PASS|BLOCK> <summary>`; the verdict is copied
+to both requester and manager. `formation reviews --stale-minutes <N>` exposes
+unanswered requests directly, so a watcher does not have to infer progress
+from mailbox unread counts or pane text.
+
 Lifecycle commands return exit `4` when the row/state is durable but a known
 pane could not be signaled. Do not automatically retry `report` or `done` on
 that code—the retry would append a duplicate row. A missing or unverified pane

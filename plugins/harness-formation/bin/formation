@@ -41,6 +41,8 @@ source "$LIB_DIR/redact.sh"
 source "$LIB_DIR/mailbox_delivery.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/requests.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/reviews.sh"
 
 mkdir -p "$FORMATION_DIR"
 touch "$REGISTRY"
@@ -517,6 +519,12 @@ Parent (lead) commands:
   formation ack <request_id> [summary]     Acknowledge an ASK; worker resumes RUNNING
   formation resolve <request_id> <summary>
                                           Resolve an ASK into its declared next state
+  formation review-request <reviewer_id> <subject>
+                                          Create durable review id; copy request to manager
+  formation verdict <review_id> <PASS|BLOCK> <summary>
+                                          Close review; copy verdict to requester + manager
+  formation reviews [--stale-minutes <N>] [--json]
+                                          List unresolved review requests
   formation remote-check                  Detect the installed Codex remote-control capability
   formation reap [--force] <worker_id>    Refuse unresolved ASK by default; then kill/drop
 
@@ -992,6 +1000,166 @@ cmd_msg() {
   fi
 }
 
+signal_review_recipient() {
+  local recipient="$1" pane="$2" seq="$3" from="$4"
+  local row registry_pane
+  row="$(registry_get "$recipient" || true)"
+  if [[ -n "$row" ]]; then
+    registry_pane="$(printf '%s\n' "$row" | jq -r '.pane_id // empty')"
+    if [[ "$registry_pane" =~ ^%[0-9]+$ ]]; then
+      pane="$registry_pane"
+    fi
+  fi
+  mailbox_signal_durable_row "$recipient" "$pane" "$seq" "$from" \
+    "$FORMATION_DIR"
+}
+
+cmd_review_request() {
+  [[ $# -ge 2 ]] || {
+    echo "usage: formation review-request <reviewer_id> <subject>" >&2
+    return 2
+  }
+  local reviewer="$1"; shift
+  local subject="$*"
+  local requester manager requester_pane manager_pane
+  local row result request_id marker body notify_result notified seq signal_rc=0
+  requester="$(self_id)"
+  manager="${FORMATION_PARENT:-$requester}"
+  requester_pane="$(mailbox_resolve_caller_pane || true)"
+  manager_pane=""
+  if [[ "$manager" == "${FORMATION_PARENT:-}" ]]; then
+    manager_pane="${FORMATION_PARENT_PANE:-}"
+  fi
+  if is_credential_like "$subject"; then
+    refuse_credential review-request "$requester" "to=$reviewer"
+    return 3
+  fi
+  if ! mailbox_resolve_recipient "$reviewer" "$REGISTRY" 0; then
+    echo "no such worker: $reviewer" >&2
+    return 2
+  fi
+  reviewer="$MAILBOX_RECIPIENT_LABEL"
+  row="$(registry_get "$reviewer" || true)"
+  result="$(review_create "$reviewer" "$requester" "$manager" \
+    "$requester_pane" "$manager_pane" "$subject")"
+  request_id="$(printf '%s\n' "$result" | jq -r '.request_id')"
+  marker="[REVIEW request_id=$request_id]"
+  body="$marker requester=$requester manager=$manager $subject"
+  notify_result="$(ensure_request_mailbox_message \
+    "$requester" "$reviewer" "$marker" "$body")"
+  read -r notified seq <<<"$notify_result"
+  mailbox_signal_or_defer "$reviewer" \
+    "$(printf '%s\n' "$row" | jq -r '.pane_id // empty')" \
+    "$seq" "$requester" "$FORMATION_DIR" >&2 || signal_rc=$?
+
+  if [[ "$manager" != "$requester" && "$manager" != "$reviewer" ]]; then
+    local copy_marker copy_body copy_result copy_notified copy_seq
+    copy_marker="[REVIEW-COPY request_id=$request_id]"
+    copy_body="$copy_marker requester=$requester reviewer=$reviewer $subject"
+    copy_result="$(ensure_request_mailbox_message \
+      "$requester" "$manager" "$copy_marker" "$copy_body")"
+    read -r copy_notified copy_seq <<<"$copy_result"
+    signal_review_recipient "$manager" "$manager_pane" "$copy_seq" "$requester" \
+      >&2 || signal_rc=$?
+  fi
+  echo "$request_id"
+  return "$signal_rc"
+}
+
+cmd_verdict() {
+  [[ $# -ge 3 ]] || {
+    echo "usage: formation verdict <review_id> <PASS|BLOCK> <summary>" >&2
+    return 2
+  }
+  local request_id="$1" verdict="$2"; shift 2
+  local summary="$*"
+  [[ "$verdict" == "PASS" || "$verdict" == "BLOCK" ]] || {
+    echo "invalid verdict: use PASS or BLOCK" >&2
+    return 2
+  }
+  local actor result transitioned persisted_verdict persisted_summary
+  local requester manager requester_pane manager_pane
+  local marker body notify_result notified seq signal_rc=0
+  local manager_notified="same-recipient"
+  actor="$(self_id)"
+  if is_credential_like "$summary"; then
+    refuse_credential verdict "$actor" "review=$request_id"
+    return 3
+  fi
+  result="$(review_close "$request_id" "$actor" "$verdict" "$summary")" ||
+    return $?
+  transitioned="$(printf '%s\n' "$result" | jq -r '._transitioned // false')"
+  persisted_verdict="$(printf '%s\n' "$result" | jq -r '.verdict')"
+  persisted_summary="$(printf '%s\n' "$result" | jq -r '.summary')"
+  requester="$(printf '%s\n' "$result" | jq -r '.requester_id')"
+  manager="$(printf '%s\n' "$result" | jq -r '.manager_id')"
+  requester_pane="$(printf '%s\n' "$result" | jq -r '.requester_pane // empty')"
+  manager_pane="$(printf '%s\n' "$result" | jq -r '.manager_pane // empty')"
+  marker="[VERDICT request_id=$request_id verdict=$persisted_verdict]"
+  body="$marker reviewer=$actor $persisted_summary"
+  notify_result="$(ensure_request_mailbox_message \
+    "$actor" "$requester" "$marker" "$body")"
+  read -r notified seq <<<"$notify_result"
+  signal_review_recipient "$requester" "$requester_pane" "$seq" "$actor" \
+    >&2 || signal_rc=$?
+  if [[ "$manager" != "$requester" && "$manager" != "$actor" ]]; then
+    local copy_marker copy_body copy_result copy_notified copy_seq
+    copy_marker="[VERDICT-COPY request_id=$request_id verdict=$persisted_verdict]"
+    copy_body="$copy_marker reviewer=$actor requester=$requester $persisted_summary"
+    copy_result="$(ensure_request_mailbox_message \
+      "$actor" "$manager" "$copy_marker" "$copy_body")"
+    read -r copy_notified copy_seq <<<"$copy_result"
+    manager_notified="$copy_notified"
+    signal_review_recipient "$manager" "$manager_pane" "$copy_seq" "$actor" \
+      >&2 || signal_rc=$?
+  fi
+  printf 'review=%s verdict=%s requester_notified=%s manager_notified=%s transitioned=%s\n' \
+    "$request_id" "$persisted_verdict" "$notified" "$manager_notified" "$transitioned"
+  return "$signal_rc"
+}
+
+cmd_reviews() {
+  local stale_minutes=0 json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stale-minutes)
+        [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || {
+          echo "usage: formation reviews [--stale-minutes <N>] [--json]" >&2
+          return 2
+        }
+        stale_minutes="$2"; shift 2 ;;
+      --json) json=1; shift ;;
+      *) echo "usage: formation reviews [--stale-minutes <N>] [--json]" >&2; return 2 ;;
+    esac
+  done
+  local rows
+  rows="$(review_unresolved | jq -sc \
+    --argjson stale "$stale_minutes" '
+    map(
+      (try (.created_at | fromdateiso8601) catch null) as $created
+      | . + {
+          age_seconds:
+            (if $created == null then null else ((now - $created) | floor) end)
+        }
+    )
+    | map(select(
+        $stale == 0
+        or .age_seconds == null
+        or .age_seconds >= ($stale * 60)
+      ))
+  ')"
+  if [[ "$json" -eq 1 ]]; then
+    printf '%s\n' "$rows"
+    return 0
+  fi
+  printf '%s\n' "$rows" | jq -r '
+    if length == 0 then "no unresolved reviews"
+    else .[] |
+      "\(.request_id) reviewer=\(.reviewer_id) requester=\(.requester_id) manager=\(.manager_id) age=\(if .age_seconds == null then "unknown" else "\(.age_seconds)s" end) subject=\(.subject | @json)"
+    end
+  '
+}
+
 clear_mailbox_badge_through() {
   local read_through="$1" self="$2" pane_alias="${3:-}" pane_target="${4:-}"
   [[ "$pane_target" =~ ^%[0-9]+$ ]] || return 0
@@ -1448,6 +1616,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     ask)    cmd_ask    "$@" ;;
     ack)    cmd_ack    "$@" ;;
     resolve) cmd_resolve "$@" ;;
+    review-request) cmd_review_request "$@" ;;
+    verdict) cmd_verdict "$@" ;;
+    reviews) cmd_reviews "$@" ;;
     help|-h|--help) usage ;;
     *) echo "unknown: $cmd" >&2; usage; exit 2 ;;
   esac
