@@ -48,13 +48,35 @@ for hook in "${ALL_HOOKS[@]}"; do
 done
 
 if [[ $LIVE -eq 1 ]]; then
-    # 3. Compare only the marker-bounded block owned by this installer. Hooks
-    # from other sources are valid and intentionally invisible to this check.
+    # 3. Codex merges native plugin hooks with config.toml hooks. Derive enabled
+    # harness plugin manifests first, then require the managed block to contain
+    # only missing-generation fallbacks and genuinely global hooks (#254).
     CODEX_CONFIG="$HOME/.codex/config.toml"
     if [[ -f "$CODEX_CONFIG" ]]; then
+        CODEX_RENDER_ARGS=()
+        if plugin_inventory="$(codex plugin list --json 2>/dev/null)"; then
+            mapfile -t enabled_plugin_roots < <(
+                printf '%s\n' "$plugin_inventory" | jq -r '
+                  .installed[]
+                  | select(
+                      .installed == true and
+                      .enabled == true and
+                      .marketplaceName == "claude-harness" and
+                      (.name | startswith("harness-"))
+                    )
+                  | "\(.name)=\(.source.path)"
+                '
+            )
+            for plugin_root in "${enabled_plugin_roots[@]}"; do
+                CODEX_RENDER_ARGS+=(--enabled-plugin-root "$plugin_root")
+            done
+        else
+            err "unable to read Codex plugin inventory"
+        fi
         want=$(mktemp); got=$(mktemp)
         python3 "$HARNESS_DIR/scripts/lib/render_codex_hooks.py" \
-            commands "$OVERLAY" "$HARNESS_DIR" | sort > "$want"
+            commands "$OVERLAY" "$HARNESS_DIR" "${CODEX_RENDER_ARGS[@]}" \
+            | sort > "$want"
         if ! python3 - "$CODEX_CONFIG" "$HARNESS_DIR/scripts/lib/merge_codex_hooks.py" > "$got" <<'PYEOF'
 import importlib.util, json, pathlib, re, sys
 config_path, helper_path = map(pathlib.Path, sys.argv[1:])

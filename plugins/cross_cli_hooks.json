@@ -45,12 +45,14 @@
         "command": "bash ${HIPPOCAMPUS_HOME}/scripts/hooks/codex_session_start.sh",
         "timeout": 10,
         "optional": true,
+        "unless_native_hook": "harness-core/hooks/codex_hippocampus_session_start.sh",
         "note": "hippocampus-mcp companion context injector; lives in the companion repo, not in claude-harness. optional=true → the installer and drift test auto-skip it when that repo is absent, so a standalone claude-harness install ignores it rather than wiring a dead path. ${HIPPOCAMPUS_HOME} defaults to ${HOME}/projects/hippocampus-mcp and can be overridden at install time."
       },
       {
         "event": "SessionStart",
         "command": "bash ${HARNESS_DIR}/plugins/harness-core/hooks/codex_tmux_self_name.sh",
         "timeout": 5,
+        "unless_native_hook": "harness-core/hooks/tmux_self_name.sh",
         "note": "codex-only (deterministic rename + identity inject); intentionally NOT in hooks.json — Claude uses tmux_self_name.sh instead. ${HARNESS_DIR} is expanded to the cloned repo root at install time, so this works wherever the repo lives."
       },
       {
