@@ -17,6 +17,7 @@
 - `bin/formation` ── worker lifecycle / mailbox / durable request を束ねる CLI:
   `spawn | msg | status | inbox | reap | report | done | ask | ack | resolve | remote-check`
 - `bin/formation-mail-nudge` ── 無視された badge 用の任意 one-shot / watcher。自動起動しない
+- `bin/formation-stall-watch` ── mailbox 沈黙と pane 安定性を組み合わせた structural stall observer
 - `bin/install-formation-mail-nudge-service` ── 任意 watcher の明示的 systemd user service install / uninstall
 - `bin/formation-window-status` ── journal 付き tmux window list の明示的 apply / status / revert
 - `lib/mailbox.sh` ── jsonl append-only の pane 間メッセージバス。recipient 毎カーソル、flock で書き込みガード
