@@ -27,6 +27,11 @@ ALLOW_LIVE_ONLY = {
     ("SessionEnd", "session_end_ingest.sh"),  # hippocampus ingest integration
 }
 
+HOOK_SCRIPT_RE = re.compile(r"/([A-Za-z0-9_]+\.(?:sh|py))")
+HOOK_ENTRYPOINT_RE = re.compile(
+    r"/bin/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=[\s\"';]|$)"
+)
+
 
 def hook_names(hooks: Any) -> set[tuple[str, str]]:
     if not isinstance(hooks, dict):
@@ -47,7 +52,14 @@ def hook_names(hooks: Any) -> set[tuple[str, str]]:
                 command = hook.get("command", "")
                 if not isinstance(command, str):
                     raise ValueError(f"{event} hook command must be a string")
-                match = re.search(r"/([A-Za-z0-9_]+\.(?:sh|py))", command)
+                # Dispatcher commands mention ~/.local/bin/harness-hook before
+                # the actual script. Prefer a script whenever one is present;
+                # only use an extensionless bin entrypoint as the fallback.
+                match = HOOK_SCRIPT_RE.search(command)
+                if match:
+                    found.add((event, match.group(1)))
+                    continue
+                match = HOOK_ENTRYPOINT_RE.search(command)
                 if match:
                     found.add((event, match.group(1)))
     return found
