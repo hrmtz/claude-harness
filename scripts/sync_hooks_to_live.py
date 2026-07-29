@@ -22,9 +22,52 @@ PLUGINS = sorted(
     os.path.basename(os.path.dirname(os.path.dirname(path)))
     for path in glob.glob(f"{PLUG}/harness-*/hooks/hooks.json")
 )
-DRY = "--dry-run" in sys.argv
-TS = (sys.argv[sys.argv.index("--ts") + 1] if "--ts" in sys.argv
-      else datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+USAGE = """usage: sync_hooks_to_live.py [--dry-run] [--ts YYYYmmdd_HHMMSS]
+
+Deploy the plugin hooks as the canonical live artifact.
+
+  --dry-run   print the plan, write nothing
+  --ts TS     backup directory timestamp (default: now)
+  -h, --help  show this message and exit
+
+This writes to ~/.claude/hooks/ and ~/.claude/settings.json, which every
+session loads. Run check_hook_wiring_drift.py afterwards to confirm.
+"""
+
+
+def _parse_argv(argv):
+    """Reject unknown flags instead of running the deploy anyway (gh #243).
+
+    argv was previously read with membership tests, so `--help` matched
+    nothing, fell through, and performed the live deploy. Two people hit that
+    in one day; one of them wired an unmerged hook into every session.
+    """
+    known = {"--dry-run", "--ts"}
+    dry, ts = False, None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(USAGE, end="")
+            sys.exit(0)
+        elif arg == "--dry-run":
+            dry = True
+        elif arg == "--ts":
+            if i + 1 >= len(argv):
+                print("error: --ts requires a value\n", file=sys.stderr)
+                print(USAGE, end="", file=sys.stderr)
+                sys.exit(2)
+            ts = argv[i + 1]
+            i += 1
+        else:
+            print(f"error: unknown argument {arg!r}\n", file=sys.stderr)
+            print(USAGE, end="", file=sys.stderr)
+            sys.exit(2)
+        i += 1
+    return dry, ts or datetime.datetime.now().strftime("%Y%m%d_%H%M%S"), known
+
+
+DRY, TS, _KNOWN = _parse_argv(sys.argv[1:])
 
 def gate():
     fail = []
