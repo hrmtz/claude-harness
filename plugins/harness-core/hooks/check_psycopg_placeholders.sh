@@ -82,7 +82,10 @@ out = []
 # DIFFERENT physical lines — slipped straight through the first version of this hook. Both of
 # the bugs this exists for are multi-line; matching only single-line literals would make the
 # hook decorative.
-STR = r'(?:[rbu]*f?)(?:"""(?:[^\\]|\\.)*?"""|\'\'\'(?:[^\\]|\\.)*?\'\'\'|"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\')'
+# Triple-quoted branches must not backtrack past their first closing delimiter.
+# Otherwise a params-free execute("""...""") can be joined to a later
+# execute("""...%s...""", params), mixing two statements into one finding.
+STR = r'(?:[rbu]*f?)(?:"""(?:(?!""")(?:[^\\]|\\.))*"""|\'\'\'(?:(?!\'\'\')(?:[^\\]|\\.))*\'\'\'|"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\')'
 CALL = re.compile(r'execute(?:many)?\(\s*((?:' + STR + r'\s*)+)\s*,', re.S)
 LIT = re.compile(STR, re.S)
 
