@@ -43,6 +43,16 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Agent|Task|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/fabricated_user_turn_guard.py\" 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/fabricated_user_turn_guard.py 2>/dev/null || exit 0",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -120,6 +130,16 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Agent|Task|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/fabricated_user_turn_guard.py\" 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/fabricated_user_turn_guard.py 2>/dev/null || exit 0",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -136,6 +156,18 @@
             "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/credential_scrub.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/credential_scrub.sh",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Agent|Task|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/fabricated_user_turn_guard.py\" 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/fabricated_user_turn_guard.py 2>/dev/null || exit 0",
+            "timeout": 5
           }
         ]
       }

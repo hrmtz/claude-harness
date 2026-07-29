@@ -35,12 +35,16 @@ def run(records, payload=None):
                 transcript.write("\n")
         hook_payload = dict(payload or {})
         hook_payload["transcript_path"] = path
-        return subprocess.run(
-            ["python3", HOOK],
-            input=json.dumps(hook_payload),
-            capture_output=True,
-            text=True,
-        )
+        with tempfile.TemporaryDirectory() as state_dir:
+            env = os.environ.copy()
+            env["FABRICATED_USER_TURN_GUARD_STATE_DIR"] = state_dir
+            return subprocess.run(
+                ["python3", HOOK],
+                input=json.dumps(hook_payload),
+                capture_output=True,
+                text=True,
+                env=env,
+            )
     finally:
         os.unlink(path)
 
