@@ -63,6 +63,8 @@ jobs:
         run: bash plugins/harness-formation/tests/test_formation_hardening.sh
       - name: Test durable review request tracking
         run: bash plugins/harness-formation/tests/test_reviews.sh
+      - name: Test structural stall watcher
+        run: python3 plugins/harness-formation/tests/test_stall_watch.py
       - name: Test cross-CLI Formation identity
         run: bash plugins/harness-kimi/tests/test_formation_identity.sh
       - name: Test cross-CLI launch guard

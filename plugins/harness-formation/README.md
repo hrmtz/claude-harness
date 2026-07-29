@@ -12,6 +12,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | `skills/babysit-pr/SKILL.md` | Receipt-gated CI monitoring, bounded source repair, and review follow-up for Formation-owned PRs |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
 | `bin/formation-mail-nudge` | Optional one-shot/watching escalation for ignored badges; never starts automatically |
+| `bin/formation-stall-watch` | Structural stall observer using mailbox silence and pane stability |
 | `bin/install-formation-mail-nudge-service` | Explicit systemd user-service install/uninstall for the optional watcher |
 | `bin/formation-window-status` | Explicit journaled tmux window-list apply/status/revert tool |
 | `lib/mailbox.sh` | Durable JSONL storage, locking, sequence allocation, and read cursors |
@@ -137,6 +138,20 @@ formation-window-status status
 formation-window-status apply --lead "$TMUX_PANE" --task "review"
 formation-window-status apply --arrange --dry-run
 formation-window-status revert
+```
+
+`formation-stall-watch` classifies a worker as stalled only when two
+independent clocks have both expired: the worker has emitted no mailbox row,
+and its captured pane hash has not changed. It validates the live pane identity
+against the latest registry row and stores observation state below
+`~/.formation/state/stall-watch/`. Kimi's idle TUI redraw changes its leading
+spinner glyph without doing work, so that glyph is normalized; semantic pane
+text remains part of the hash. Workers with an unresolved ASK report
+`WAITING_PARENT`, not `STALL`.
+
+```bash
+formation-stall-watch --silence 900 --idle 900 --json
+formation-stall-watch --watch --quiet
 ```
 
 ASKs are durable semantic state, stored separately from mailbox transport.
