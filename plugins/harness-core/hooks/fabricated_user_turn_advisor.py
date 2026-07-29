@@ -26,8 +26,16 @@ import sys
 
 
 TAIL_LINES = 12
+# The separator after the marker word is optional, not merely flexible.
+# Japanese does not space words, so a fabricated turn reads `user\u983c\u3093\u3060` with
+# nothing between the label and the speech; requiring whitespace there let the
+# 2026-07-29 occurrence through a detector that had measured 6/6 on the
+# earlier, space-separated ones. An ASCII continuation is still a word
+# (`username`, `user_id`, `users`) and must not match.
 TURN_MARKER = re.compile(
-    r"^[ \t]*(?P<marker>user|ユーザー)(?P<remainder>.*?)[ \t]*$",
+    r"^[ \t]*(?:user|\u30e6\u30fc\u30b6\u30fc)"
+    r"(?![0-9A-Za-z_-])"
+    r"(?:[ \u3000:\uff1a]*(?P<utterance>\S.*?))?[ \t]*$",
     re.IGNORECASE,
 )
 TECHNICAL_TOKEN = re.compile(
@@ -35,6 +43,12 @@ TECHNICAL_TOKEN = re.compile(
     re.IGNORECASE,
 )
 NORMAL_PROSE_PREFIX = re.compile(r"^(?:が|の|指示|判断|要望|承認)")
+# Narration *about* the operator ends like narration: `ユーザーから重要な補足が
+# 入りました:` introduces a list, it is not speech. Keying on the ending is safe
+# where keying on a leading particle is not — a particle prefix also swallows
+# `もう眠くなってきた` (も) and `はい` (は), and the も case silently dropped the
+# worst known occurrence when it was tried.
+NARRATION_TAIL = re.compile(r"(?:ました|ます|です|でした|,|:|：|;|；)$")
 
 
 def _final_text_block(record: dict) -> str | None:
@@ -107,15 +121,7 @@ def has_fabricated_user_turn(text: str) -> bool:
             continue
         if _inside_fence(lines, index):
             continue
-        remainder = match.group("remainder")
-        # Japanese conversational text normally has no word separator:
-        # ``user頼んだ`` is a turn marker followed by speech. Conversely,
-        # ASCII continuations are identifiers/ordinary words (username,
-        # users, user_id), not a marker boundary. Whitespace and a non-ASCII
-        # first character are the only accepted boundaries.
-        if remainder and remainder[0].isascii() and not remainder[0].isspace():
-            continue
-        utterance = remainder.lstrip(" \t\u3000").strip()
+        utterance = (match.group("utterance") or "").strip()
         # Corpus-grounded precision constraints: normal line-leading prose uses
         # a longer subject phrase, attribution prefix, or prose punctuation.
         # Technical vocabulary in the *following fabricated speech* is allowed:
@@ -125,6 +131,8 @@ def has_fabricated_user_turn(text: str) -> bool:
         if NORMAL_PROSE_PREFIX.search(utterance):
             continue
         if utterance.endswith(("。", "、", "デス")):
+            continue
+        if NARRATION_TAIL.search(utterance):
             continue
         # Two or more technical tokens on the marker line itself is much more
         # likely to be prose/metadata than a spoken turn. One token remains
