@@ -15,11 +15,22 @@
 # Exit: 0 in sync, 1 drift found.
 set -uo pipefail
 
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PLUGINS_DIR="$HARNESS_DIR/plugins"
-OVERLAY="$PLUGINS_DIR/cross_cli_hooks.json"
+INVOKED_HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIVE=0
 [[ "${1:-}" == "--live" ]] && LIVE=1
+if [[ $LIVE -eq 1 ]]; then
+    ROOT_RESOLVER="$INVOKED_HARNESS_DIR/scripts/lib/resolve_harness_root.sh"
+    [[ -r "$ROOT_RESOLVER" ]] || {
+        echo "error: canonical-root resolver missing: $ROOT_RESOLVER" >&2
+        exit 1
+    }
+    source "$ROOT_RESOLVER"
+    HARNESS_DIR="$(harness_resolve_canonical_root "$INVOKED_HARNESS_DIR")" || exit 1
+else
+    HARNESS_DIR="$INVOKED_HARNESS_DIR"
+fi
+PLUGINS_DIR="$HARNESS_DIR/plugins"
+OVERLAY="$PLUGINS_DIR/cross_cli_hooks.json"
 
 fail=0
 err() { echo "DRIFT: $*" >&2; fail=1; }
