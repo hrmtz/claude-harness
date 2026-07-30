@@ -24,6 +24,31 @@ FANOUT = PLUGIN / "scripts" / "magi_fanout_codex.sh"
 XFAMILY = PLUGIN / "scripts" / "magi_xfamily.sh"
 VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 SCHEMA = json.loads((PLUGIN / "schemas" / "finding.schema.json").read_text())
+ISSUE_271_LEDGER_FIXTURE = (
+    HERE / "fixtures" / "issue_271_actual_ledger_sanitized.json"
+)
+ISSUE_271_SOURCE_CLAIM = "b1dd62bd-1f56-4fbc-a3cc-d01bdcd2e845"
+ISSUE_271_SANITIZED_HISTORY_SHA256 = (
+    "a59c89ed8254ef49d2bfd1b9312f3620356fa65ca84af05dc094701bc65db174"
+)
+ISSUE_271_ATTESTATION = {
+    "incident_id": "claude-harness-271-hippocampus-262-schema-startup",
+    "issue": "hrmtz/claude-harness#271",
+    "doc_id": "8fe2b3353e5e4a5b",
+    "source_claim_id": ISSUE_271_SOURCE_CLAIM,
+    "source_finished_at": "2026-07-30T06:13:21.767990+00:00",
+    "artifact_sha": "34c165c9c5447fafc2b9e27cc119ef32721fa5022b6e137010d5d8cc131cf59a",
+    "source_protocol_sha": "26d2f729c8b1639e28f176622424608f7c5e1c99e413584cf1953201c3473171",
+    "history_launch_count": 6,
+    "history_gross_model_launches": 14,
+    "history_prefix_sha256": "3edb25a926a9bf6050cd263a0b2402ff5f0eadbd9b24c24a2b4d425e23f10fb7",
+    "credited_model_launches": 3,
+    "provider_stage": "codex-output-schema-validation-before-reviewer-turn",
+    "reviewer_count": 3,
+    "turn_observed": False,
+    "legacy_classification": "provider-exit",
+}
+ISSUE_271_OLD_SOURCE_CLAIM = "0f0bd40b-f015-461d-8f44-fc7e47c4657a"
 sys.path.insert(0, str(PLUGIN / "scripts"))
 from magi_validate_findings import validate as validate_findings  # noqa: E402
 import magi_campaign_guard as campaign_guard  # noqa: E402
@@ -340,6 +365,22 @@ class CampaignGuardTest(unittest.TestCase):
             "legacy_classification": "provider-exit",
         }
         return ledger_path, source_claim, incident
+
+    def issue_271_fixture(
+        self,
+    ) -> tuple[Path, dict[str, object], dict[str, object]]:
+        """Install the sanitized incident ledger without consulting production constants."""
+        ledger = json.loads(ISSUE_271_LEDGER_FIXTURE.read_text())
+        ledger["doc_path"] = str(self.doc.resolve())
+        control = self.doc.parent / ".dual-magi"
+        control.mkdir(exist_ok=True)
+        path = control / f"CAMPAIGN.{ISSUE_271_ATTESTATION['doc_id']}.json"
+        path.write_text(json.dumps(ledger))
+        incident = {
+            **ISSUE_271_ATTESTATION,
+            "history_prefix_sha256": ISSUE_271_SANITIZED_HISTORY_SHA256,
+        }
+        return path, ledger, incident
 
     def start_owned_claim(
         self, *, ignore_term: bool = False
@@ -713,6 +754,153 @@ class CampaignGuardTest(unittest.TestCase):
             self.assertEqual(
                 campaign_guard.model_launches(completed["campaigns"]), 15
             )
+
+    def test_issue_271_closed_attestation_matches_independent_expected_values(
+        self,
+    ) -> None:
+        self.assertEqual(len(campaign_guard.HISTORICAL_STARTUP_INCIDENTS), 1)
+        installed = campaign_guard.HISTORICAL_STARTUP_INCIDENTS[0]
+        self.assertEqual(set(installed), set(ISSUE_271_ATTESTATION))
+        for field, expected in ISSUE_271_ATTESTATION.items():
+            with self.subTest(field=field):
+                self.assertEqual(installed[field], expected)
+
+        fixture = json.loads(ISSUE_271_LEDGER_FIXTURE.read_text())
+        history = [
+            launch
+            for campaign in fixture["campaigns"]
+            for launch in campaign["launches"]
+        ]
+        self.assertEqual(fixture["doc_id"], "8fe2b3353e5e4a5b")
+        self.assertEqual(len(history), 6)
+        self.assertEqual(sum(item["model_launches"] for item in history), 14)
+        self.assertEqual(history[0]["claim_id"], ISSUE_271_SOURCE_CLAIM)
+        self.assertEqual(
+            history[0]["finished_at"], "2026-07-30T06:13:21.767990+00:00"
+        )
+        self.assertEqual(
+            history[0]["artifact_sha"],
+            "34c165c9c5447fafc2b9e27cc119ef32721fa5022b6e137010d5d8cc131cf59a",
+        )
+        self.assertEqual(
+            history[0]["protocol_sha"],
+            "26d2f729c8b1639e28f176622424608f7c5e1c99e413584cf1953201c3473171",
+        )
+        self.assertEqual(
+            campaign_guard.canonical_sha256(history),
+            ISSUE_271_SANITIZED_HISTORY_SHA256,
+        )
+
+    def test_issue_271_fixture_repair_preserves_gross_and_affords_final_reviews(
+        self,
+    ) -> None:
+        ledger_path, _, incident = self.issue_271_fixture()
+        with (
+            mock.patch.object(
+                campaign_guard, "doc_id", return_value=ISSUE_271_ATTESTATION["doc_id"]
+            ),
+            mock.patch.object(
+                campaign_guard, "HISTORICAL_STARTUP_INCIDENTS", (incident,)
+            ),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(
+                str(self.doc), ISSUE_271_SOURCE_CLAIM
+            )
+            repaired = json.loads(ledger_path.read_text())
+            gross = sum(
+                launch["model_launches"]
+                for campaign in repaired["campaigns"]
+                for launch in campaign["launches"]
+            )
+            self.assertEqual(gross, 14)
+            self.assertEqual(campaign_guard.model_launches(repaired["campaigns"]), 11)
+            repairs = [
+                repair
+                for campaign in repaired["campaigns"]
+                for repair in campaign.get("repairs", [])
+            ]
+            self.assertEqual(len(repairs), 1)
+            self.assertEqual(
+                repairs[0]["history_prefix_sha256"],
+                ISSUE_271_SANITIZED_HISTORY_SHA256,
+            )
+
+            campaign_guard.claim(str(self.doc), "1", "fanout", str(self.state))
+            ledger = json.loads(ledger_path.read_text())
+            fanout_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
+            campaign_guard.finish(str(self.doc), fanout_claim, "success")
+            campaign_guard.claim(str(self.doc), "2", "xfamily", str(self.state))
+            ledger = json.loads(ledger_path.read_text())
+            xfamily_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
+            campaign_guard.finish(str(self.doc), xfamily_claim, "success")
+
+            completed = json.loads(ledger_path.read_text())
+            final_gross = sum(
+                launch["model_launches"]
+                for campaign in completed["campaigns"]
+                for launch in campaign["launches"]
+            )
+            self.assertEqual(final_gross, 18)
+            self.assertEqual(
+                campaign_guard.model_launches(completed["campaigns"]), 15
+            )
+
+    def test_installed_attestation_rejects_old_identity_and_accepts_actual(
+        self,
+    ) -> None:
+        artifact_id = str(ISSUE_271_ATTESTATION["doc_id"])
+        with self.assertRaisesRegex(
+            campaign_guard.TransitionError,
+            "no closed historical startup attestation",
+        ):
+            campaign_guard.historical_incident(
+                artifact_id,
+                ISSUE_271_OLD_SOURCE_CLAIM,
+            )
+        accepted = campaign_guard.historical_incident(
+            artifact_id,
+            ISSUE_271_SOURCE_CLAIM,
+        )
+        self.assertIs(accepted, campaign_guard.HISTORICAL_STARTUP_INCIDENTS[0])
+
+    def test_issue_271_fixture_one_field_history_mutations_fail_closed(self) -> None:
+        ledger_path, baseline, incident = self.issue_271_fixture()
+        mutations = (
+            (0, 0, "claim_id", "00000000-0000-4000-8000-000000000000"),
+            (0, 0, "finished_at", "2026-07-30T06:13:21+00:00"),
+            (0, 0, "artifact_sha", "0" * 64),
+            (0, 0, "protocol_sha", "0" * 64),
+            (0, 0, "status", "success"),
+            (0, 0, "attempt", 2),
+            (0, 0, "model_launches", 1),
+            (2, 1, "finished_at", "2026-07-30T07:06:01+00:00"),
+        )
+        with (
+            mock.patch.object(
+                campaign_guard, "doc_id", return_value=ISSUE_271_ATTESTATION["doc_id"]
+            ),
+            mock.patch("builtins.print"),
+        ):
+            for campaign_index, launch_index, field, value in mutations:
+                with self.subTest(field=field, value=value):
+                    changed = json.loads(json.dumps(baseline))
+                    changed["campaigns"][campaign_index]["launches"][launch_index][
+                        field
+                    ] = value
+                    ledger_path.write_text(json.dumps(changed))
+                    with self.assertRaises(
+                        (
+                            campaign_guard.UsageError,
+                            campaign_guard.TransitionError,
+                            campaign_guard.StateError,
+                        )
+                    ):
+                        campaign_guard.repair_historical_startup(
+                            str(self.doc),
+                            ISSUE_271_SOURCE_CLAIM,
+                            (incident,),
+                        )
 
     def test_historical_repair_refuses_unattested_runtime_input(self) -> None:
         ledger_path, source_claim, _ = self.historical_incident()
