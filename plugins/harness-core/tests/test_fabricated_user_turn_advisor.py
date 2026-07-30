@@ -56,6 +56,7 @@ def assert_advisory(text, label):
     output = json.loads(result.stdout)
     assert "systemMessage" in output, (label, result.stdout)
     assert "decision" not in output, (label, result.stdout)
+    return output
 
 
 def assert_silent(text, label):
@@ -124,6 +125,33 @@ user頼んだ
 腹減ったから飯食ってくる""",
     "incident 7: unspaced Japanese fabricated speech",
 )
+
+
+def appended_markdown_document(
+    fragment="univers", expanded="universal", headings=3, repeats=8
+):
+    sections = [
+        f"**Section {index}: generated copy**\n\n"
+        f"{expanded} inference provides a deliberately long paragraph for detector "
+        "calibration. " + ("model routing and observability details. " * repeats)
+        for index in range(headings)
+    ]
+    return (
+        "止めた理由を聞かせてくれ。何が引っかかった？\n\n"
+        f"{fragment}\n\n" + "\n\n".join(sections)
+    )
+
+
+# Issue #167 observed variant: no role marker. A partial-word seam grows into
+# an unrelated long, multi-heading Markdown document.
+orphan_output = assert_advisory(
+    appended_markdown_document(),
+    "incident 10: orphan fragment before appended Markdown document",
+)
+triage = orphan_output["systemMessage"]
+assert "fabricated-tail advisory" in triage
+assert triage.index("message.role") < triage.index("mailbox")
+assert triage.index("message.role") < triage.index("tmux buffer")
 
 # Required false-positive corpus: ordinary references to the user are not turns.
 assert_silent("user 指示に従い、対象 file だけを修正した。", "line-leading prose")
@@ -203,6 +231,100 @@ assert_silent(
 12""",
     "marker outside tail window",
 )
+assert_silent(
+    appended_markdown_document(headings=1, repeats=16),
+    "orphan fragment: one heading is insufficient above the length floor",
+)
+assert_silent(
+    appended_markdown_document(headings=2),
+    "orphan fragment: two headings are insufficient above the length floor",
+)
+assert_silent(
+    appended_markdown_document(expanded="inference"),
+    "orphan fragment: no later expanded fragment",
+)
+assert_silent(
+    appended_markdown_document(fragment="status", expanded="statuses"),
+    "orphan fragment: ordinary inflection is not a truncated-word seam",
+)
+assert_silent(
+    appended_markdown_document(
+        fragment="config", expanded="configuration"
+    ).replace("calibration.", "calibration config."),
+    "orphan fragment: a whole-word label repeated in the document is not a seam",
+)
+assert_silent(
+    ("completed preamble sentence. " * 60)
+    + "\n\n"
+    + appended_markdown_document(headings=10),
+    "orphan fragment: max preamble bound rejects an otherwise dominant document",
+)
+assert_silent(
+    appended_markdown_document().replace(
+        "止めた理由を聞かせてくれ。何が引っかかった？",
+        "unfinished transition",
+    ),
+    "orphan fragment: preceding line must be a completed sentence",
+)
+assert_silent(
+    """通常の説明。
+
+status
+
+**Section one**
+
+Short content.
+
+**Section two**
+
+Still short.
+
+**Section three**
+
+Done.""",
+    "orphan fragment: short Markdown transition",
+)
+assert_silent(
+    """例:
+```text
+Fenced sample completed.
+
+univers
+
+**Section one**
+
+""" + ("universal content. " * 40) + """
+
+**Section two**
+
+More content.
+
+**Section three**
+
+Done.
+```""",
+    "orphan fragment: fenced example",
+)
+assert_silent(
+    """通常応答を完了した？
+
+univers
+
+**Section one**
+
+Outside introduction without the expanded term.
+
+```text
+**Section two**
+
+""" + ("universal fenced evidence. " * 30) + """
+
+**Section three**
+
+More fenced evidence.
+```""",
+    "orphan fragment: fenced headings and expansion do not count as evidence",
+)
 assert_advisory(
     """status 完了。
 
@@ -219,6 +341,14 @@ user
 そこ大事だね""",
     "standalone user marker",
 )
+role_output = assert_advisory(
+    appended_markdown_document() + "\n\nuser 了解",
+    "role marker takes precedence when both detector shapes are present",
+)
+role_triage = role_output["systemMessage"]
+assert "fabricated-user-turn advisory" in role_triage
+assert role_triage.index("message.role") < role_triage.index("mailbox")
+assert role_triage.index("message.role") < role_triage.index("tmux buffer")
 
 # Reviewer recall variants: following technical text/date, polite/case marker,
 # a marker at message end, and actionable technical vocabulary all still fire.
