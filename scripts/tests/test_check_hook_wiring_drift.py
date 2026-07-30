@@ -105,6 +105,21 @@ class HookWiringDriftTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("live-wired: 1  plugin-wired: 1", result.stdout)
 
+    def test_unresolved_plugin_root_is_drift_even_when_entrypoint_matches(self) -> None:
+        unresolved = (
+            '"${CLAUDE_PLUGIN_ROOT}/bin/'
+            'install-cache-safe-entrypoints"'
+        )
+        self.write(
+            live={"SessionStart": [block(unresolved)]},
+            plugin={"SessionStart": [block(unresolved)]},
+        )
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("UNRESOLVED_PLUGIN_ROOT", result.stdout)
+        self.assertIn("install-cache-safe-entrypoints", result.stdout)
+        self.assertNotIn("IN SYNC", result.stdout)
+
     def test_missing_extensionless_bin_entrypoint_is_dormant(self) -> None:
         self.write(
             live={},
