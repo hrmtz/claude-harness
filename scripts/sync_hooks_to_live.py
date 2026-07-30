@@ -17,11 +17,53 @@ import json, os, glob, subprocess, sys, shutil, datetime
 HOME = os.path.expanduser("~")
 LIVE_SETTINGS = f"{HOME}/.claude/settings.json"
 LIVE_HOOKS = f"{HOME}/.claude/hooks"
-PLUG = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/plugins"
+
+
+def resolve_canonical_repo(invoked_repo):
+    """Return the durable primary checkout, never a disposable worktree."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", invoked_repo, "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot run git: {exc}") from exc
+    if result.returncode:
+        raise RuntimeError(
+            f"cannot list worktrees from {invoked_repo}: {result.stderr.strip()}"
+        )
+    first_block = result.stdout.split("\n\n", 1)[0].splitlines()
+    if "bare" in first_block:
+        raise RuntimeError(
+            f"canonical checkout is bare; no durable primary worktree: {invoked_repo}"
+        )
+    first = next(
+        (line.removeprefix("worktree ") for line in first_block
+         if line.startswith("worktree ")),
+        "",
+    )
+    canonical = os.path.realpath(first)
+    if not first or not os.path.isdir(canonical):
+        raise RuntimeError(f"cannot resolve canonical checkout from {invoked_repo}")
+    return canonical
+
+
+INVOKED_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+try:
+    CANONICAL_REPO = resolve_canonical_repo(INVOKED_REPO)
+except RuntimeError as exc:
+    print(f"error: {exc}", file=sys.stderr)
+    sys.exit(2)
+PLUG = f"{CANONICAL_REPO}/plugins"
 PLUGINS = sorted(
     os.path.basename(os.path.dirname(os.path.dirname(path)))
     for path in glob.glob(f"{PLUG}/harness-*/hooks/hooks.json")
 )
+if not PLUGINS:
+    print(f"error: no plugin hook manifests under canonical checkout: {PLUG}", file=sys.stderr)
+    sys.exit(2)
 USAGE = """usage: sync_hooks_to_live.py [--dry-run] [--ts YYYYmmdd_HHMMSS]
 
 Deploy the plugin hooks as the canonical live artifact.
