@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
+      - "plugins/harness-core/hooks/bash_command_guard.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
       - "plugins/harness-core/bin/harness-cross-cli"
       - "plugins/harness-core/tests/test_cross_cli_guard.sh"
+      - "plugins/harness-core/tests/test_credential_guard.sh"
       - "plugins/harness-core/hooks/identity_owner.sh"
       - "plugins/harness-core/hooks/tmux_self_name.sh"
       - "plugins/harness-core/hooks/codex_hippocampus_session_start.sh"
@@ -27,9 +29,11 @@ on:
   push:
     paths:
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
+      - "plugins/harness-core/hooks/bash_command_guard.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
       - "plugins/harness-core/bin/harness-cross-cli"
       - "plugins/harness-core/tests/test_cross_cli_guard.sh"
+      - "plugins/harness-core/tests/test_credential_guard.sh"
       - "plugins/harness-core/hooks/identity_owner.sh"
       - "plugins/harness-core/hooks/tmux_self_name.sh"
       - "plugins/harness-core/hooks/codex_hippocampus_session_start.sh"
@@ -69,6 +73,8 @@ jobs:
         run: bash plugins/harness-kimi/tests/test_formation_identity.sh
       - name: Test cross-CLI launch guard
         run: bash plugins/harness-core/tests/test_cross_cli_guard.sh
+      - name: Test Bash command guard
+        run: bash plugins/harness-core/tests/test_credential_guard.sh
       - name: Test fabricated user-turn advisory
         run: python3 plugins/harness-core/tests/test_fabricated_user_turn_advisor.py
       - name: Test identity ownership core

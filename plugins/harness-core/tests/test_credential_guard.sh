@@ -111,6 +111,38 @@ env_dsn_cmd="sops exec-env '$flat_sops_file' 'psql \"\$POSTGRES_URL\" -tAc \"sel
 expect_allow "$env_dsn_cmd" '#6 env-expanded DSN (no literal pw)'
 expect_allow 'psql postgresql://mars:5434/db -tAc "select 1"' '#6 DSN without password (no creds)'
 
+# --- #262: pkill/pgrep -f self-match ---
+expect_block 'pkill -f _my_collect; tmux new-window -n _my_collect' '#262 pkill literal repeats in later command'
+expect_block 'pgrep -af "_my_collect" && echo _my_collect' '#262 combined pgrep flags repeat literal'
+expect_block 'bash -c "pkill -f worker.py; echo worker.py"' '#262 shell -c executable body'
+expect_block "ssh host 'pkill -f myscript.py; echo myscript.py'" '#262 ssh remote executable body'
+expect_block 'pkill --full worker; ./worker.py --once' '#262 --full substring in later token'
+expect_block 'if ! pkill -f worker; then echo worker; fi' '#262 reserved-word and negation prefix'
+expect_block 'pkill -ft pts/0 worker; echo worker' '#262 bundled value-taking option before pattern'
+expect_block 'pkill -fu root worker; echo worker' '#262 bundled -u value before pattern'
+expect_block 'echo ready
+pkill -f worker; echo worker' '#262 newline starts a new command segment'
+expect_block 'build &&
+pkill -f worker
+echo worker' '#262 operator-newline punctuation run'
+expect_block 'timeout 10 pkill -f worker; echo worker' '#262 timeout duration wrapper'
+expect_block 'sudo -u root pkill -f worker; echo worker' '#262 sudo value option wrapper'
+expect_block 'bash -xc "pkill -f worker; echo worker"' '#262 clustered shell -c option'
+expect_block 'bash --norc -c "pkill -f worker; echo worker"' '#262 long shell option before -c'
+expect_block 'bash -c "pkill -f worker"; echo worker' '#262 shell-body pattern repeated outside body'
+expect_block "eval 'pkill -f worker; echo worker'" '#262 eval executable body'
+expect_block "eval 'pkill -f worker'; echo worker" '#262 eval inherits outer command tokens'
+expect_block "ssh -- host 'pkill -f worker; echo worker'" '#262 ssh option terminator'
+expect_block "pk''ill -f worker; echo worker" '#262 quote-spliced executable'
+expect_block 'pkill -f -O 10 worker; echo worker' '#262 --older short value option'
+expect_block 'pkill -STOP -f worker; echo worker' '#262 signal alias does not consume -f'
+expect_allow "pkill -f 'myscrip[t].py'; echo myscript.py" '#262 bracket pattern avoids literal self-match'
+expect_allow 'pkill -f worker.py' '#262 literal occurs only as pattern operand'
+expect_allow 'pkill -f "$pattern"; echo worker.py' '#262 dynamic pattern is not guessed'
+expect_allow 'pgrep worker.py; echo worker.py' '#262 pgrep without full-argv matching'
+expect_allow "printf '%s\n' 'pkill -f worker; echo worker'" '#262 quoted prose is nonexecuting'
+expect_allow 'kill "$(cat worker.pid)"' '#262 PID-file alternative remains available'
+
 # --- #10: printenv / set target-agnostic ---
 expect_block 'printenv MARS_POSTGRES_URL' '#10 printenv keyword-free secret var'
 expect_block 'printenv | grep -i postgres' '#10 printenv piped to filter'
