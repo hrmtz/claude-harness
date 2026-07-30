@@ -294,23 +294,22 @@ per-finding status も持たず**、magi script 側に producer contract も無�
   受け付ける。`canonical_repo` / `source_relpath` を欠く entry は適用せず `verification_underspecified` に計上する。
 - **0 件 match は counter に載せて次へ。複数 match は「どれも更新せず」 + 非 0 exit** (誤更新を counter で追認しない)。
   `canonical_repo` は sidecar の値と campaign path から解決した repo が一致することを確認してから使う (不一致は非 0 exit)。
-- 消費側 = `scripts/magi_findings_mark_verdict.py --campaign <dir> --round <N>` で自由文は読まない。**`verdict_coverage`**
-  (= parent_verdict NOT NULL 行 / 対象 campaign 行) を毎 run 記録し、04 の撤去判定はこの被覆率を見る (欠測を「無効」と読ませない)。
+- 消費側 = harvester の sidecar 適用 phase。自由文は読まない。**`verdict_coverage`**
+  (= parent_verdict NOT NULL 行 / 対象 campaign 行) を毎 run 記録し、04 の撤去判定はこの被覆率を見る
+  (欠測を「無効」と読ませない)。
 
 **適用順序 = harvester 統合 (r5-3)**。v0.4 は Step 4 synthesis 直後に sidecar を書いて `mark_verdict` を即実行する形だったが、
 finding row を INSERT するのは後から走る日次 harvester なので、**sidecar 実行時点では対象行が存在せず 0-match counter が回るだけで
 永久に verdict が付かなかった**。修正: **harvest の各 run が、upsert 完了後に同一 run / 同一 transaction 内で、走査した campaign dir の
-`verification.json` を読んで適用する** (= `mark_verdict` の適用 logic を harvester から呼ぶ)。sidecar は campaign dir に残り続けるので、
+`verification.json` を読んで適用する**。sidecar は campaign dir に残り続けるので、
 **後から入った行にも次回以降の run で必ず当たる** — pending verification の永続 store は作らない (新 store を足さない側を採る)。
-Step 4 からの即時実行は「早く反映されるだけ」の任意経路として残す (0-match でも失敗ではない)。
+Step 4 は sidecar を書くだけで、DB 適用は次回 harvest に限定する。
 
-**起動者 (NAME THE INVOKER)**: `dual-magi-review` SKILL.md の **Step 4 (Synthesize)** に「`verification.json` を書く」+
-「`magi_findings_mark_verdict.py` を実行する」の 2 行を足す。**verdict が付くことの保証は harvester 側**にあり、Step 4 の実行は
-前倒しにすぎない。
+**起動者 (NAME THE INVOKER)**: `dual-magi-review` SKILL.md の **Step 4 (Synthesize)** が
+`verification.json` を書く。**verdict が付くことの保証と唯一の DB 適用箇所は harvester 側**。
 
-> **この SKILL.md 改訂は slice ② の deliverable**。③ は script を出荷し ② が invocation を配線する (② は元々 dual-magi SKILL.md を
-> v0.11.0 に bump する slice なので同じ bump に相乗りする)。**③ 単独では script は書かれても呼ばれない**ので ③ の checklist (§9-5) は
-> 手動実行で verdict 行が入るところまでを確認する。epic §6 の「magi campaign 本体への変更一切」は fanout CLI / persona set / canonical
+> **この SKILL.md 改訂は slice ② の deliverable**。③ は harvester 側 consumer を出荷し、② が producer を配線する。
+> epic §6 の「magi campaign 本体への変更一切」は fanout CLI / persona set / canonical
 > template / fingerprint を指し、dual-magi-review SKILL.md の散文追記は含まない (epic §2-3)。
 
 ## 7. 成功指標
@@ -337,7 +336,8 @@ Step 4 からの即時実行は「早く反映されるだけ」の任意経路�
    distinct `artifact_key` / tier (a)(b) の group 数 / `doc_slug_underivable` で §2 と §5 の旧値を置換すること (r5-1 + v0.6 裁定)**
 3. `hippocampus migrate` を**新環境で**通し 046 が適用されること (P7) / `crontab -l` に §5.1 の行が 1 本だけ存在
 4. fail-closed の**陽性対照** (1 条件を人工発火 → Discord 着弾) と**陰性対照** (worktree 削除 / 静穏日で発火しないこと) の両方
-5. campaign 1 本で `magi_findings_mark_verdict.py` を**手動実行**し `parent_verdict` NOT NULL 行 + `verdict_coverage` 記録を確認 (SKILL.md への配線は ② の deliverable)
+5. campaign 1 本で sidecar 先行 → harvester 実行後に `parent_verdict` NOT NULL 行 +
+   `verdict_coverage` 記録を確認 (SKILL.md producer 配線は ② の deliverable)
 6. **P14 fixture: 同 relpath / 異 `artifact_digest` の 2 file → 2 sighting (digest 一致時のみ replica skip)** (§3.2/§3.5、r5-2)
 7. **順序 fixture: 空 DB → `verification.json` を先に置く → harvest 1 回 → 当該行の `parent_verdict` が populate される** (§6、r5-3)
 8. **join fixture: 同一 `(campaign_id, reviewer, finding_id)` が 2 repo に在る sidecar → `canonical_repo` + `source_relpath` 完全形なら

@@ -1,7 +1,9 @@
 # slice ② — free-range reviewer (4 体目)
 
-- epic: [REVIEW_FLOW_PORT.md](../REVIEW_FLOW_PORT.md) (gh #233) / status: **v0.5** / 2026-07-28
+- epic: [REVIEW_FLOW_PORT.md](../REVIEW_FLOW_PORT.md) (gh #233) / status: **v0.7** / 2026-07-30
 - state dir (本 doc の review 用): `docs/designs/REVIEW_FLOW_PORT/.dual-magi/04-freerange/`
+- changelog: v0.7 = v0.11.0 activation 実走で free-range 自身が検出した label 自己矛盾、引用 drift、
+  budget 算術、disputed blocker の撤去 bypass を修正。SKILL.md v0.11.1 と acceptance evidence を反映。
 - changelog: v0.5 = R5 8-fix micro-reroll, no new mechanisms; design-done checkpoint。本 doc 該当は r5-8 (撤去 count を round 非依存の
   semantic key の distinct に変更) / r5-3 (verdict 書戻しは harvester 統合なので §7-1 の配線条件を再定義)。
 - changelog: v0.4 = **convergence gate 依存の撤回** (r4-workflow-1 REJECT / codex#4)。gate は Claude-native campaign に構造的に
@@ -17,8 +19,9 @@
 - **dual-magi-review skill (Claude-orchestrated) 内のみ**。magi campaign の fanout CLI / persona set / canonical template には
   **一切触れない**。
 - 3 perspective の**置換でなく追加 4 体目** (round 2 以降で任意起動、`--freerange` flag)。出力 file は
-  `round_<N>_freerange.json` (予約 label `melchior/balthasar/caspar/hornet/gnat/wasp/codex/xfamily` = SKILL.md ln174-179 と
-  衝突しないことを実測済)。
+  `round_<N>_freerange.json`。SKILL.md の **Custom perspective label 予約語禁止**では
+  `freerange` を user-supplied label に使えないが、built-in `--freerange` がその literal を
+  所有する明示的例外。
 - brief は 1 行「この doc の問題点を自由に探せ。checklist はない。」+ 出力契約 (Finding schema + file 返り) のみ。
 
 ## 2. severity の取扱い — 1 文で確定する
@@ -39,12 +42,12 @@ v0.3 は停止判断が `plugins/harness-magi-codex/scripts/magi_design_converge
 
 | 実測 | 帰結 |
 |---|---|
-| gate ln28 `PERSONAS = ('melchior','balthasar','caspar')` は module 定数、fanout phase は `round_<N>_<persona>.json` を 3 本決め打ちで組み立て、1 本でも欠ければ `UnsafeInput('fanout output set is incomplete')` を raise (ln150-199) | Claude-native の per-reviewer file は **定義上 PERSONAS と一致し得ない** |
-| dual-magi SKILL.md **ln174-179** は `melchior` / `balthasar` / `caspar` 等を perspective label として**使用禁止** (companion campaign の完了判定と衝突するため) | 上の一致不能はこの禁止が原因。回避すると別 campaign の状態を壊す |
-| dual-magi SKILL.md **ln531-535**: 「Claude-native workflow の state だけを evaluator に渡してはならない」 | gate を Claude-native state で走らせること自体が**明示的に禁止** |
+| gate の `PERSONAS = ('melchior','balthasar','caspar')` は module 定数、fanout phase は `round_<N>_<persona>.json` を 3 本決め打ちで組み立て、1 本でも欠ければ `UnsafeInput('fanout output set is incomplete')` を raise | Claude-native の per-reviewer file は **定義上 PERSONAS と一致し得ない** |
+| dual-magi SKILL.md **Custom perspective label 予約語禁止**は `melchior` / `balthasar` / `caspar` 等を user-supplied perspective label として**使用禁止** (companion campaign の完了判定と衝突するため) | 上の一致不能はこの禁止が原因。回避すると別 campaign の状態を壊す |
+| dual-magi SKILL.md **Adapters / design convergence**: 「Claude-native workflow の state だけを evaluator に渡してはならない」 | gate を Claude-native state で走らせること自体が**明示的に禁止** |
 | `PHASE_WEIGHT` は `fanout:3` / `targeted:1` / `xfamily:1` のみ。`freerange` を参照する code は 0 hit | freerange は機械予算にも計上されない |
 
-> **機械 gate は Claude-native state を読まない (SKILL.md ln531-535 が渡すことを禁じている)。freerange の severity 拘束は、
+> **機械 gate は Claude-native state を読まない (SKILL.md の design convergence 節が渡すことを禁じている)。freerange の severity 拘束は、
 > 3 perspective の severity を拘束しているのと同じ散文規則 — dual-magi SKILL.md Step 6 の stop criterion 5 (severity-gated
 > terminal) — が担う。**
 
@@ -55,19 +58,19 @@ v0.3 は停止判断が `plugins/harness-magi-codex/scripts/magi_design_converge
 
 ## 4. round budget — SKILL.md 散文予算であって wired enforcement ではない (r4-ops-10 / r4-workflow-10)
 
-ultramagi SKILL.md **ln177 / ln186** に「12 weighted model launches / campaign」「3 full pairs / 12 weighted launches」が実在する
-(実測)。単位は **pair (fan-out + cross-family)**。
+ultramagi SKILL.md の **Runaway guard** に「12 weighted model launches / campaign」
+「3 full pairs / 12 weighted launches」が実在する。単位は **pair (fan-out + cross-family)**。
 
-| 構成 | 1 pair の launch | 12 予算内の pair 数 |
-|---|---|---|
-| 3 perspective + cross-family (v0.6.0 以降の既定) | 4 | 3 |
-| 3 + cross-family + **freerange** | **5** | **2** (端数 2) |
+| 構成 | campaign 累計 |
+|---|---|
+| round 1: 3 perspective + cross-family | 4 |
+| round 2: 3 + cross-family + **freerange** | +5 = **9** (残り 3 は retry) |
 
 - v0.3 にあった「3 perspective のみ = 3 launch / 4 round」の行は**削除**した。plateau 条件 3 (現 revision に対して cross-family
   round が走っていること) により、cross-family 抜きの構成は plateau を名乗れず**到達可能な運用構成ではない**。
-- **これは discipline target であって強制ではない**: 実測で campaign ごとの max round 分布 (n=91) は median 1 / mean 3.79 /
-  p90 8 / max 41 で、**round ≥4 に達した campaign は 32/91 = 35%**。本 campaign 自身も round 4。12 launch ceiling は運用上 soft。
-- 端数 2 の扱い: **retry に回す** (cross-family 単独 round には使わない)。
+- **これは discipline target であって強制ではない**。round 1 を必ず通常構成で走らせるため、
+  12 launch 内で full freerange round は 1 回だけ。残り 3 は retry に回す
+  (cross-family 単独 round には使わない)。
 - したがって**任意起動の根拠を budget 算術に置かない**。根拠は §2 のコスト論 — freerange の open な CRITICAL/HIGH が campaign を
   延長するので、統括が round 2 以降で明示的に付ける時だけ回す。
 
@@ -75,7 +78,9 @@ ultramagi SKILL.md **ln177 / ln186** に「12 weighted model launches / campaign
 
 ### 5.1 計算経路
 
-判定材料は `personal.magi_findings` で閉じる:
+判定材料は `personal.magi_findings` で閉じる。完全な selection / coverage /
+`HOLD_DISPUTE` query の SoT は dual-magi-review SKILL.md
+**Operational procedure: freerange retirement**。以下は semantic blocker count の核だけ:
 
 ```sql
 SELECT count(DISTINCT (title_norm, location_norm, severity_norm)) FROM personal.magi_findings
@@ -95,34 +100,41 @@ WHERE reviewer = 'freerange' AND severity_norm IN ('REJECT','CRITICAL','HIGH')
   **適用の保証は harvester 側** (01 §6 / §5.1、r5-3) — sidecar が harvest より先に書かれても、次の harvest run が
   upsert 後に同一 run 内で適用するので late row にも verdict が付く。
   **v0.6 訂正**: v0.5 までは適用者を `magi_findings_mark_verdict.py` という独立 script として書いていたが、
-  slice ③ の実装 (PR #265) では **harvester の `apply_verifications()` に統合**され、その名の script は存在しない。
+  slice ③ の実装 (hippocampus-mcp PR #265、
+  `scripts/magi_findings_daily.py::apply_verifications`) では **harvester に統合**され、
+  その名の script は存在しない。
   **doc も SKILL.md も script 名に依存させない** — 契約は「sidecar を書けば次回 harvest が適用する」であり、
   適用がどの entrypoint に住むかは実装の自由。
 
 ### 5.2 判定規則
 
 1. **起動下限 (floor)**: freerange を起動した campaign が 3 本たまるまで判定しない。
-2. **撤去 (非有効)**: 3 campaign 連続で上記 count が 0、**かつ その 3 campaign の `verdict_coverage` が 100%** なら撤去。
+2. **撤去候補 (非有効)**: 3 campaign 連続で verified blocker count が 0、disputed blocker
+   count も 0、**かつ その 3 campaign の `verdict_coverage` が 100%**なら `RETIRE` 候補。
+   zero-finding campaign は coverage complete とする。
    **被覆率が 100% 未満の間は判定を保留**し telemetry を上げる (r4-workflow-12: writer が動いていないだけの欠測を
-   「freerange は無効」と読ませない)。
+   「freerange は無効」と読ませない)。`HOLD_COVERAGE` が 7 日を超えたら measurement-path
+   incident として escalation、修復まで判定凍結。
 3. **撤去 (非使用)**: 6 ヶ月経っても 3 campaign たまらなければ「使われていない」を理由に撤去。これで「任意起動が続かず判定が
    永久に発火しない」という反証不能を閉じる。
 
 `severity` は freerange 自身が書く field なので単独では判定材料にしない。**外部信号 = `parent_verdict = 'verified'`** が必ず
-AND で入る。ただしその外部信号の強度は 01 §10 の未強制 convention に等しい (`verification.json` は campaign dir 内にある)。
+AND で入る。HIGH+ の `disputed` は `HOLD_DISPUTE` で撤去不可。ただし外部信号の強度は
+01 §10 の未強制 convention に等しい (`verification.json` は campaign dir 内にある)。
+`RETIRE` は自動撤去権限でなく operator が PR/review 履歴と 3 campaign を照合する advisory。
 
 ## 6. probe
 
 | # | 対象 | 確認事項 | 状態 |
 |---|---|---|---|
-| P13 | `magi_validate_findings.py` | reviewer label `freerange` が validation を通ること | 未 |
+| P13 | `magi_validate_findings.py` | reviewer label `freerange` が validation を通ること | **green** (`test_dual_magi_freerange.py`; validator に allowlist はなく compatibility probe としては trivial) |
 
 v0.3 の P12 (`magi_design_convergence_gate.py` dry-run で decision 不変を確認) は **ill-posed なので破棄**した — gate は
 Claude-native の per-reviewer file 集合が揃わない時点で例外を投げるので、4 本目を置く以前に decision は観測されない (§3)。
 
 ## 7. activation checklist (epic §5 に加えて)
 
-1. dual-magi-review SKILL.md v0.10.1 → **v0.11.0** に bump し、(i) `--freerange` の起動規約 (ii) §2 の severity 1 文
+1. dual-magi-review SKILL.md v0.10.1 → **v0.11.0 以上**に bump し、(i) `--freerange` の起動規約 (ii) §2 の severity 1 文
    (iii) **Step 4 (Synthesize) に `verification.json` の書出し 1 行** (01 §6) を入れる。
    **v0.6 訂正**: v0.5 は「書出し + `magi_findings_mark_verdict.py` 実行の 2 行」としていたが、統括裁定 (2026-07-28、
    req-20a6f6f5) により **skill は sidecar を書くだけ**、適用は次回 harvest に委ねる。理由: 即時実行は review という
@@ -137,6 +149,17 @@ Claude-native の per-reviewer file 集合が揃わない時点で例外を投�
    (空 DB → sidecar 先行 → harvest → `parent_verdict` populate、01 §9-7 と同じ経路。r5-3)
 6. **retirement count fixture: 同一 finding を round 2/3/4 に再掲した campaign で §5.1 の count が 1 になること** (r5-8)
 
+### 7.1 activation evidence (2026-07-30)
+
+| item | evidence | state |
+|---|---|---|
+| 1 | PR #251 / commit `ec59ab0`; activation review fix は SKILL.md v0.11.1 | done |
+| 2 | `readlink -f ~/.claude/skills/dual-magi-review` → repo の `plugins/harness-magi/skills/dual-magi-review` | done |
+| 3 | new Claude session で明示 `/dual-magi-review ... --round 2 --freerange`; v0.11.0 load receipt | done |
+| 4 | `python3 plugins/harness-magi/tests/test_dual_magi_freerange.py` | green |
+| 5 | v0.11.0 run: `round_2_freerange.json` 10 findings + `verification.json` 10 freerange entries。hippocampus harvester run_id `7`: `findings_new=40`, `verification_applied=40`, `verification_nomatch=0`, exit 0。DB の freerange 行 `10/10` に `parent_verdict` (`verified=3`, `unreviewed=7`) | done |
+| 6 | SQLite fixture: round 2/3/4 の同一 verified HIGH → distinct semantic blocker count `1` | green |
+
 ## 8. やらないこと
 
 - 3 perspective の置換 (常に追加 4 体目) / 全 round での常時起動 (§4 より round 2 以降の任意起動)
@@ -146,5 +169,5 @@ Claude-native の per-reviewer file 集合が揃わない時点で例外を投�
 - `magi_design_convergence_gate.py` の変更 (本 slice は gate を読まない設計に変わったので、変更の必要自体が無い)
 - freerange 自身が書く field (severity / dup_flag) だけによる撤去判定
 - **未強制の convention**: 「統括が freerange を起動しすぎない」は運用規律であって、budget を強制する機構は無い
-  (実測で 35% の campaign が既に 12 launch ceiling を超えている = §4)
+  (§4)
 - **未強制の convention**: §2 の severity 拘束は SKILL.md 散文であり、script が freerange の CRITICAL を数える経路は無い
