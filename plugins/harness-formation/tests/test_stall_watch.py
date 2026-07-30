@@ -39,6 +39,9 @@ class StallWatchTest(unittest.TestCase):
 import json, os, sys
 from pathlib import Path
 cfg = json.loads(Path(os.environ["TMUX_FIXTURE"]).read_text())
+if call_log := os.environ.get("TMUX_CALL_LOG"):
+    with Path(call_log).open("a", encoding="utf-8") as handle:
+        handle.write(sys.argv[1] + "\\n")
 if sys.argv[1] == "list-panes":
     expected = "#{pane_id}|#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}"
     if "-F" not in sys.argv or sys.argv[sys.argv.index("-F") + 1] != expected:
@@ -130,6 +133,7 @@ else:
         stalled = self.result(161)
         self.assertTrue(stalled["mailbox_silent"])
         self.assertTrue(stalled["pane_stable"])
+        self.assertEqual(stalled["prompt_state"], "UNKNOWN")
         self.assertTrue(stalled["stalled"])
 
         self.mailbox.write_text(
@@ -157,6 +161,27 @@ else:
         self.assertTrue(changed["mailbox_silent"])
         self.assertFalse(changed["pane_stable"])
         self.assertFalse(changed["stalled"])
+
+    def test_visible_prompt_text_never_claims_editable_draft(self) -> None:
+        call_log = self.root / "tmux-calls.log"
+        self.env["TMUX_CALL_LOG"] = str(call_log)
+        variants = (
+            "❯ owner draft",
+            "❯ last-input ghost",
+            "❯ chassis follow-up suggestion",
+        )
+        for index, snapshot in enumerate(variants):
+            with self.subTest(snapshot=snapshot):
+                self.write_worker(cli="claude", snapshot=snapshot)
+                result = self.result(100 + index)
+                self.assertEqual(result["prompt_state"], "UNKNOWN")
+        self.assertEqual(
+            set(call_log.read_text(encoding="utf-8").splitlines()),
+            {"list-panes", "capture-pane"},
+        )
+
+    def test_observer_has_no_prompt_keystroke_primitive(self) -> None:
+        self.assertNotIn('"send-keys"', WATCHER.read_text(encoding="utf-8"))
 
     def test_codex_busy_duration_counts_as_activity(self) -> None:
         self.result(100)
@@ -213,6 +238,7 @@ else:
         result = json.loads(completed.stdout)
         self.assertEqual(result[0]["status"], "UNKNOWN")
         self.assertEqual(result[0]["reason"], "identity-mismatch")
+        self.assertEqual(result[0]["prompt_state"], "UNKNOWN")
         self.assertTrue(state.exists())
 
     def test_transient_capture_failure_preserves_observation_clock(self) -> None:
@@ -415,12 +441,19 @@ else:
             process.terminate()
             stdout, stderr = process.communicate(timeout=3)
         self.assertEqual(process.returncode, 0, stderr)
-        self.assertIn("STALL worker=worker-a", stdout)
+        self.assertRegex(
+            stdout,
+            r"STALL worker=worker-a[^\n]*prompt_state=UNKNOWN",
+        )
         self.assertIn(
-            "UNKNOWN worker=worker-a pane=%42 cli=codex reason=pane-missing",
+            "UNKNOWN worker=worker-a pane=%42 cli=codex reason=pane-missing "
+            "prompt_state=UNKNOWN",
             stdout,
         )
-        self.assertIn("ACTIVE worker=worker-a", stdout)
+        self.assertRegex(
+            stdout,
+            r"ACTIVE worker=worker-a[^\n]*prompt_state=UNKNOWN",
+        )
         self.assertEqual(self.registry.read_bytes(), registry_before)
         self.assertEqual(self.mailbox.read_bytes(), mailbox_before)
 

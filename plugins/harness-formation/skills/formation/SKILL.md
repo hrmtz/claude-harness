@@ -380,6 +380,14 @@ pane. `formation msg` is mailbox-first: it appends the durable body and lets the
 relay set a non-destructive badge with zero keystrokes into the prompt. An idle
 agent is not proof that its draft is empty. **Never hand-roll a raw
 `tmux send-keys -l "<text>" && tmux send-keys Enter` to nudge a peer pane.**
+`tmux capture-pane` exposes rendered output, not the editor buffer. Prompt text
+may be a draft, a last-input ghost, or a chassis-generated auto-suggestion;
+therefore prompt state from a capture is **UNKNOWN**. Do not label a pane
+"un-submitted" or "stuck", and do not send `Enter`, `C-u`, or a character
+probe, based on that appearance. `C-u` can destroy a real draft and still
+cannot distinguish a ghost from an auto-suggestion. Mailbox cursors, ASK
+state, process liveness, and pane-hash change are structural activity signals,
+not evidence that the prompt buffer is empty.
 Only a worker spawned with `formation spawn --exclusive-input` may use
 `formation msg --inject <worker_id> <body>` or
 `mailbox-send <pane> <body> --inject`; even then the output remains
@@ -593,8 +601,12 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).
-- **Worker pane un-submitted, or jumps into slash/file "search-mode"**:
-  the dominant cause is the **target pane being in tmux copy-mode** (the user
+- **A known injected message remains un-submitted, or the pane jumps into
+  slash/file "search-mode"**:
+  First establish the failure from the injection event and downstream
+  activity, not from input-box text in `capture-pane`. A capture cannot
+  distinguish an editable draft, a last-input ghost, or an auto-suggestion.
+  The dominant cause is the **target pane being in tmux copy-mode** (the user
   scrolled up to read, or a prior action left it there). In copy-mode,
   `send-keys` is consumed by copy-mode, not the app: the submit `Enter` copies
   the selection and exits instead of submitting (message sits un-submitted),

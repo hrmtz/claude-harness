@@ -29,6 +29,7 @@ KIMI_LEADING_SPINNER_RE = re.compile(
     r"^(\s*)[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒](?=\s)"
 )
 STOP = False
+PROMPT_STATE_UNKNOWN = "UNKNOWN"
 
 
 class TmuxUnavailable(RuntimeError):
@@ -151,6 +152,10 @@ def normalized_snapshot(pane: str, cli: str) -> str | None:
     result = run_tmux("capture-pane", "-p", "-S", "-80", "-t", pane)
     if result.returncode:
         return None
+    # capture-pane is a rendered snapshot, not an editor-buffer API. Visible
+    # prompt text can be an editable draft, a last-input ghost, or a
+    # chassis-generated follow-up suggestion. This observer uses it only for
+    # activity-change detection; prompt/input state remains UNKNOWN (#215).
     text = ANSI_RE.sub("", result.stdout.replace("\r", ""))
     lines = [line.rstrip() for line in text.splitlines()]
     if cli == "kimi":
@@ -366,6 +371,7 @@ def worker_result(
         "pane_stable_seconds": pane_idle_age,
         "mailbox_silent": silence_age >= silence_required,
         "pane_stable": pane_idle_age >= idle_required,
+        "prompt_state": PROMPT_STATE_UNKNOWN,
         "stalled": stalled,
     }
 
@@ -385,6 +391,7 @@ def unknown_result(
         "pane_stable_seconds": None,
         "mailbox_silent": False,
         "pane_stable": False,
+        "prompt_state": PROMPT_STATE_UNKNOWN,
         "stalled": False,
     }
 
@@ -472,14 +479,16 @@ def render(results: list[dict[str, object]], as_json: bool, quiet: bool) -> None
         if status == "UNKNOWN":
             print(
                 f"UNKNOWN worker={result['worker_id']} pane={result['pane_id']} "
-                f"cli={result['cli']} reason={result['reason']}",
+                f"cli={result['cli']} reason={result['reason']} "
+                f"prompt_state={result['prompt_state']}",
                 flush=True,
             )
             continue
         print(
             f"{status} worker={result['worker_id']} pane={result['pane_id']} "
             f"cli={result['cli']} mailbox_silence={result['mailbox_silence_seconds']}s "
-            f"pane_stable={result['pane_stable_seconds']}s",
+            f"pane_stable={result['pane_stable_seconds']}s "
+            f"prompt_state={result['prompt_state']}",
             flush=True,
         )
 

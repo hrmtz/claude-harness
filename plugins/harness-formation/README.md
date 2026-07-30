@@ -188,7 +188,11 @@ against the latest registry row and stores observation state below
 `~/.formation/state/stall-watch/`. Kimi's idle TUI redraw changes its leading
 spinner glyph without doing work, so that glyph is normalized; semantic pane
 text remains part of the hash. Workers with an unresolved ASK report
-`WAITING_PARENT`, not `STALL`.
+`WAITING_PARENT`, not `STALL`. Every result reports
+`prompt_state=UNKNOWN`: `capture-pane` cannot distinguish an editable draft,
+a last-input ghost, or a chassis-generated auto-suggestion. `STALL` therefore
+means only that the two structural clocks expired; it never claims that an
+input box is blocked or safe to modify.
 
 ```bash
 formation-stall-watch --silence 900 --idle 900 --json
