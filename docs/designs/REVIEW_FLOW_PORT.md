@@ -76,10 +76,10 @@ graph LR
 
 | slice | acceptance = sub-doc checklist の全項 | gate 項 (これが欠けたら close 不可) | rollback 境界 | #233 |
 |---|---|---|---|---|
-| ③ | [01](REVIEW_FLOW_PORT/01-sedimentation.md) §9-1..§9-9 | **§9-2** (dryrun 分布を doc に貼付 + doc_slug 再測、migration より前) / **§9-4** (fail-closed の陽性 + 陰性対照) / **§9-5** (mark_verdict 手動実行で parent_verdict 行) / **§9-6** (同 relpath・異 digest → 2 sighting) / **§9-7** (sidecar 先行 → harvest で verdict 付与) / **§9-8** (join 非一意 → 無更新 + 非 0 exit) + cron 3 日連続 exit 0 | `046_magi_findings_down.sql` + crontab 行削除。script は corpus から冪等再計算可 | [ ] #233 ③ |
+| ③ | [01](REVIEW_FLOW_PORT/01-sedimentation.md) §9-1..§9-9 | **§9-2** (dryrun 分布を doc に貼付 + doc_slug 再測、migration より前) / **§9-4** (fail-closed の陽性 + 陰性対照) / **§9-5/7** (sidecar 先行 → harvest で parent_verdict 行) / **§9-6** (同 relpath・異 digest → 2 sighting) / **§9-8** (join 非一意 → 無更新 + 非 0 exit) + cron 3 日連続 exit 0 | `046_magi_findings_down.sql` + crontab 行削除。script は corpus から冪等再計算可 | [ ] #233 ③ |
 | ① | [02](REVIEW_FLOW_PORT/02-grill.md) §7-1..§7-5 | **§7-1** (P9 完了 = 挿入位置を行番号で確定) / **§7-5** (実走 1 campaign で premise_id + evidence receipt 付き memo) | SKILL.md を直前 tag に revert (PR body に sha 記録) | [ ] #233 ① |
 | ④ | [03](REVIEW_FLOW_PORT/03-babysit-pr.md) §9-1..§9-11 | **§9-4/§9-5** (receipt hook の登録 + live sync + drift 沈黙 + receipt/marker fixture) / **§9-6** (CI matcher fixture) / **§9-8** (非空 check-set の PR で実戦 1 回) / **§9-9** (PASS→push が not-green) / **§9-10** (anchor..head の他者 commit で hand-back) / **§9-11** (registry 5 ケース + receipt 不在で no-op) | skill dir + symlink 削除、hooks.json entry 削除 + `~/.claude/pr_receipts/` 掃除。積んだ fix commit は revert 手順を完了報告に添付 | [ ] #233 ④ |
-| ② | [04](REVIEW_FLOW_PORT/04-freerange.md) §7-1..§7-6 | **§7-1** (SKILL.md v0.11.0 に severity 1 文 + Step 4 の mark_verdict 配線) / **§7-5** (freerange campaign 1 本で `reviewer='freerange'` 行 + sidecar → harvest で parent_verdict が自動で入る) / **§7-6** (round 再掲 finding が count=1) | SKILL.md revert | [ ] #233 ② |
+| ② | [04](REVIEW_FLOW_PORT/04-freerange.md) §7-1..§7-6 | **§7-1** (SKILL.md v0.11.0+ に severity 1 文 + Step 4 の sidecar producer 配線) / **§7-5** (freerange campaign 1 本で `reviewer='freerange'` 行 + sidecar → harvest で parent_verdict が自動で入る) / **§7-6** (round 再掲 finding が count=1) | SKILL.md revert | [ ] #233 ② |
 
 probe は各 sub-doc §6/§8 の表が SoT。④ の gate には **P11 / P15** が、① の gate には **P9** が含まれる (§2-5 の probe 先行)。
 
@@ -130,6 +130,6 @@ probe P6 は「installed skill の SHA 突合」(symlink 相手には恒真) を
 | r4-workflow-7(a)(d) | #233 body の Epic 契約形への書換えと anchor link 化は **plateau 到達後**に行う (design が確定する前に tracker を書き換えない) |
 | **r5-6** (receipt lineage の永続 append-only chain) | v1 は **creation anchor + in-run push list** に縮約 (03 §5)。append-only chain / ack record / durable ownership 機構 (= 第三者 commit の恒久排除) は **v2**。帰結として「別 agent の commit」と「再起動後の自分の commit」は区別できず、どちらも hand-back に倒れる (安全側) |
 | **r5-1 残** (plain `.dual-magi/` 直下 file の doc 帰属復元) | body に exact artifact identity が無い file は `doc_slug=NULL` のまま recurrence 対象外。parent-dir 推測での復元は **採らない** (異 doc を 1 bucket に潰す)。件数は `doc_slug_underivable` で可視化し、必要なら v2 で producer 側に `doc` field を書かせる |
-| **r5-3 残** (Step 4 即時 mark_verdict の 0-match) | 即時実行は「早く反映されるだけ」の任意経路として残し、0-match を失敗扱いしない。保証は harvester 統合側 (01 §6)。pending verification の永続 store は **作らない** |
+| **r5-3 残** (sidecar 先行時の 0-match) | Step 4 は sidecar を書くだけ。保証と DB 適用は harvester 統合側 (01 §6) に一本化。pending verification の永続 store は **作らない** |
 | **dup_flag を recurrence signal に使う案** (統括裁定 2026-07-28 で却下) | 実測: present かつ非 new の 797 行中 positive な dup marker は **47** のみ、explicit nondup 298 / free-text 452 に汚染。signal として成立しないので **採らない**。recurrence は `title_norm` group × distinct `artifact_key` で取る (01 §5)。producer 側に構造化 dup field を書かせる案は v2 |
 | **r5-5 残** (marker を書かせる強制機構) | OID 付き marker 文法は契約だが、reviewer に書かせる機構は無い (03 §10 の未強制 convention)。marker 不在 / OID 不一致は `REVIEW_UNRECORDED` で hand-back に倒す |

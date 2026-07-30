@@ -1,6 +1,6 @@
 ---
 name: dual-magi-review
-version: 0.11.0
+version: 0.11.1
 description: |
   Independent multi-perspective peer review for large design docs.
   Spawn 3 same-family sub-agent reviewers AND a cross-family reviewer
@@ -178,10 +178,12 @@ round). This avoids context exhaustion + makes state explicit in user transcript
   round file が居る場合も自分の書込みは必ず subdir 側に行う
 - Load prior-round findings if round > 1 (= from `${magi_dir}/round_<N-1>.json`)
 
-**Perspective label 予約語禁止**: perspective label (= file 名 `round_<N>_<perspective>.json` に使う)
+**Custom perspective label 予約語禁止**: user が `--perspectives` で指定する label
+(= file 名 `round_<N>_<perspective>.json` に使う)
 として `melchior` / `balthasar` / `caspar` / `hornet` / `gnat` / `wasp` / `codex` /
 `xfamily` / `freerange` は
-**使用禁止**。`magi_campaign_guard.py` (= harness-magi-codex) が同名 file
+**使用禁止**。ただし built-in `--freerange` だけはこの予約語を所有する明示的例外であり、
+literal `round_<N>_freerange.json` を必ず使う。`magi_campaign_guard.py` (= harness-magi-codex) が同名 file
 `round_<N>_<persona>.json` の存在で companion campaign の完了判定を行うため、この skill の
 per-reviewer file が同名だと campaign 状態を誤判定する。default perspectives
 (`algorithm` / `adversarial` / `business`) は非衝突。custom perspective 指定時も同様に検査し、
@@ -411,7 +413,11 @@ write は v0.10.0 でも**維持** — Step 1 の round 継続性はこの file 
 `campaign_id` と、最初の reviewer batch 起動時に UTC で実測して以後の round へそのまま
 引き継ぐ RFC3339 UTC `campaign_launched_at` (`%Y-%m-%dT%H:%M:%SZ`) も記録する。
 `--freerange` round は reviewer artifact の `.findings | length` を
-`freerange_finding_count` として記録する。
+`freerange_finding_count` として記録する。さらに raw
+`round_<N>_freerange.json` bytes の sha256 を `freerange_artifact_digest`、
+severity 別件数を `freerange_severity_counts`
+(`REJECT` / `CRITICAL` / `HIGH` / `MED` / `LOW` / `nit`) として merged file に必ず記録する。
+`schema_grounding_verdict=FAIL` は artifact の破棄理由でなく round の HOLD signal。
 
 親 synthesis は各 finding の evidence を確認し、`${magi_dir}/verification.json` に
 `verified` / `disputed` / `unreviewed` を finding 単位で Write する。Step 3 で reviewer
@@ -488,9 +494,11 @@ auto-dup 扱い)。
 enumerable detail (= grant list / opclass / column list 等) を prose で列挙する doc は altitude
 違反 — 修正は追記でなく executable gate 化 (= ultramagi § Convergence economics 参照)。
 
-`--freerange` round は 3 perspective + cross-family + freerange = 5 launches。12 launch の
-散文予算では full pair 2 回、端数 2 は retry 用となる。これは wired enforcement ではなく
-discipline target (`未強制の convention`)。freerange は round 2 以降に統括が明示した時だけ回す。
+`--freerange` round は 3 perspective + cross-family + freerange = 5 launches。round 1 は
+freerange 禁止なので、12 launch の campaign 累計は通常 round 1 の 4 + freerange round 2 の 5
+= 9。残り 3 は retry 用で、2 回目の full freerange round は予算外。これは wired enforcement
+ではなく discipline target (`未強制の convention`)。freerange は round 2 以降に統括が
+明示した時だけ回す。
 
 ### Step 7: Mutation (= only if --apply-local or --commit-push)
 
@@ -614,7 +622,12 @@ campaign_stats AS (
       WHERE NOT f.dropped
         AND f.severity_norm IN ('REJECT', 'CRITICAL', 'HIGH')
         AND f.parent_verdict = 'verified'
-    ) AS verified_blockers
+    ) AS verified_blockers,
+    count(DISTINCT (f.title_norm, f.location_norm, f.severity_norm)) FILTER (
+      WHERE NOT f.dropped
+        AND f.severity_norm IN ('REJECT', 'CRITICAL', 'HIGH')
+        AND f.parent_verdict = 'disputed'
+    ) AS disputed_blockers
   FROM selected s
   LEFT JOIN personal.magi_findings f
     ON f.canonical_repo = s.canonical_repo
@@ -630,12 +643,14 @@ SELECT
     AND (finding_count = 0 OR verdict_coverage = 1)
   ) AS coverage_complete,
   coalesce(sum(verified_blockers), 0) AS verified_blockers,
+  coalesce(sum(disputed_blockers), 0) AS disputed_blockers,
   CASE
     WHEN count(DISTINCT (canonical_repo, campaign_id)) <> 3
       OR bool_or(
         coalesce(canonical_repo, '') = ''
         OR coalesce(campaign_id, '') = ''
       ) THEN 'KEEP_FLOOR'
+    WHEN coalesce(sum(disputed_blockers), 0) > 0 THEN 'HOLD_DISPUTE'
     WHEN bool_and(
       observed_findings = expected_findings
       AND (finding_count = 0 OR verdict_coverage = 1)
@@ -651,13 +666,20 @@ FROM campaign_stats;
 ```
 
 coverage numerator は `verified` / `disputed` のみ。`unreviewed` は coverage に数えない。
+ただし disputed な REJECT / CRITICAL / HIGH は `HOLD_DISPUTE` であり、coverage を満たしても
+`RETIRE` へ進めない。各 disputed blocker は non-empty `note`、判定 round、freerange reviewer
+とは別の検証者 identity を sidecar に残す。これらは自己申告 metadata なので operator が
+根拠を確認する。
 filesystem の expected count と DB の observed count が一致するまで未 harvest / 部分 harvest
 として `HOLD_COVERAGE`。expected count が 0 の真正 zero-finding campaign だけ coverage
 complete と扱う。
 semantic blocker は campaign 内の
 `(title_norm, location_norm, severity_norm)` distinct。判定は repository-local でなく global。
-`verification.json` は authenticated でない (`written_by` は自己申告)。`RETIRE` 前に対象
-3 campaign の sidecar が親 synthesis の出力であることを operator が確認する。
+`verification.json` は authenticated でない (`written_by` は自己申告)。`RETIRE` は
+advisory candidate にすぎず自動撤去権限を持たない。operator は対象 3 campaign を PR/review
+履歴と照合し、未来 timestamp / v0.11.0 release 前 timestamp を拒否し、各 sidecar が親
+synthesis の出力であることを確認してから人間判断する。`HOLD_COVERAGE` が 7 日を超えたら
+measurement-path incident として escalation し、修復するまで撤去判定を凍結する。
 
 v0.11.0 release 日 2026-07-28 から 6 か月後の 2027-01-28 に 3 campaign 未満なら、
 「使われていない」を理由に撤去する。
@@ -1015,6 +1037,7 @@ These are not prerequisites for skill function. Pattern is self-contained in thi
 
 | date | version | change |
 |---|---|---|
+| 2026-07-30 | 0.11.1 | **Activation review fixes** — built-in freerange label の予約語例外を明文化、merged artifact に freerange digest/severity counts を追加、round 1 を含む 12-launch 算術を修正、disputed blocker を `HOLD_DISPUTE` 化、RETIRE を人間確認必須の advisory に限定 |
 | 2026-07-28 | 0.11.0 | **Optional free-range reviewer (claude-harness#233 slice ②)** — round 2+ の `--freerange` で checklist-free reviewer を追加 4 体目として起動。per-doc file contract、≤200-word receipt、Step 6 severity-gated terminal、12-launch 散文予算、非同期 `verification.json` sidecar、3-campaign retirement SQL を追加。companion mechanical gate / persona set / fanout CLI は不変 |
 | 2026-05-14 | 0.1.0 | Initial skeleton |
 | 2026-05-14 | 0.3.0 | Isolation pattern canonical化、 user feedback 「session 濁る」 反映:<br>- adapter `codex-mailbox` に `--codex-pane` / `--mailbox-path` / `--spawn-via` options 追加<br>- β isolation pattern (= 専用 pane + 専用 mailbox channel) を recommended default<br>- γ ephemeral spawn pattern (= formation skill 経由 都度 spawn / kill) 追加<br>- shared pane pattern (= v0.2.0 default) deprecated、 v0.4.0 で削除候補<br>- request schema に `project_slug` 追加 (= context 切替明示)<br>- Codex side responsibility 明示 (= skill scope 外、 Codex repo で別 implement) |
