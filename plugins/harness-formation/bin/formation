@@ -526,7 +526,7 @@ Parent (lead) commands:
   formation reviews [--stale-minutes <N>] [--json]
                                           List unresolved review requests
   formation remote-check                  Detect the installed Codex remote-control capability
-  formation reap [--force] <worker_id>    Refuse unresolved ASK by default; then kill/drop
+  formation reap [--force] <worker_id>    Refuse unresolved ASK/review by default; then kill/drop
 
 Worker-side commands (invoked by the worker agent via Bash):
   formation report <text>                 Append status to parent mailbox + own pane border
@@ -1153,9 +1153,10 @@ cmd_reviews() {
     return 0
   fi
   printf '%s\n' "$rows" | jq -r '
+    def ch: tostring | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "");
     if length == 0 then "no unresolved reviews"
     else .[] |
-      "\(.request_id) reviewer=\(.reviewer_id) requester=\(.requester_id) manager=\(.manager_id) age=\(if .age_seconds == null then "unknown" else "\(.age_seconds)s" end) subject=\(.subject | @json)"
+      "\(.request_id|ch) reviewer=\(.reviewer_id|ch) requester=\(.requester_id|ch) manager=\(.manager_id|ch) age=\(if .age_seconds == null then "unknown" else "\(.age_seconds)s" end) subject=\(.subject | @json)"
     end
   '
 }
@@ -1424,10 +1425,12 @@ cmd_reap() {
   local force=0
   if [[ "${1:-}" == "--force" ]]; then force=1; shift; fi
   [[ $# -eq 1 ]] || { echo "usage: formation reap [--force] <worker_id>" >&2; exit 2; }
-  local worker_id="$1" unresolved
+  local worker_id="$1" unresolved unresolved_reviews
   local row; row="$(registry_get "$worker_id")"
   [[ -n "$row" ]] || { echo "no such worker: $worker_id" >&2; exit 2; }
   unresolved="$(request_unresolved "$worker_id" "" || true)"
+  unresolved_reviews="$(review_unresolved |
+    jq -c --arg worker "$worker_id" 'select(.reviewer_id == $worker)' || true)"
   if [[ -n "$unresolved" && "$force" != "1" ]]; then
     echo "REFUSED (exit 6): $worker_id has unresolved ASK request(s):" >&2
     printf '%s\n' "$unresolved" | jq -r '"  \(.request_id): \((.question // "") | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "") | .[0:120])"' >&2
@@ -1435,6 +1438,15 @@ cmd_reap() {
     return 6
   elif [[ -n "$unresolved" ]]; then
     echo "warn: force-reaping $worker_id with unresolved ASK state preserved in the request log" >&2
+  fi
+  if [[ -n "$unresolved_reviews" && "$force" != "1" ]]; then
+    echo "REFUSED (exit 6): $worker_id has unresolved assigned review(s):" >&2
+    printf '%s\n' "$unresolved_reviews" | jq -r \
+      '"  \((.request_id // "") | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "")): \((.subject // "") | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "") | .[0:120])"' >&2
+    echo "submit verdicts first, or use formation reap --force $worker_id" >&2
+    return 6
+  elif [[ -n "$unresolved_reviews" ]]; then
+    echo "warn: force-reaping $worker_id with unresolved review state preserved in the review log" >&2
   fi
   local pane_id; pane_id="$(echo "$row" | jq -r '.pane_id // empty')"
 

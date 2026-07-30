@@ -82,15 +82,15 @@ cmd_reviews --stale-minutes 999999 | grep -qx 'no unresolved reviews'
 # A type-valid but unparsable timestamp cannot hide healthy requests or fail
 # open as "no unresolved reviews"; unknown age is conservatively stale.
 jq -cn '{
-  request_id:"review-corrupt-time",event:"request",state:"WAITING_REVIEW",
-  closed:false,reviewer_id:"reviewer-b",requester_id:"requester-b",
-  manager_id:"manager-b",subject:"Timestamp fixture\u001b[31m",
+  request_id:"review-corrupt\u001b-time",event:"request",state:"WAITING_REVIEW",
+  closed:false,reviewer_id:"reviewer-b\nspoof",requester_id:"requester-b\u0007",
+  manager_id:"manager-b\rspoof",subject:"Timestamp fixture\u001b[31m",
   created_at:"not-a-date",updated_at:"not-a-date"
 }' >>"$FORMATION_REVIEW_LOG"
 printf '%s\n' '{malformed review row' >>"$FORMATION_REVIEW_LOG"
 cmd_reviews --stale-minutes 999999 --json | jq -e '
   length == 1
-  and .[0].request_id == "review-corrupt-time"
+  and .[0].request_id == "review-corrupt\u001b-time"
   and .[0].age_seconds == null
 ' >/dev/null
 if cmd_reviews | grep -q $'\033'; then
@@ -145,7 +145,22 @@ if grep -Fq 'Conflicting retry' "$MAILBOX_LOG"; then
   exit 1
 fi
 cmd_reviews --json | jq -e '
-  length == 1 and .[0].request_id == "review-corrupt-time"
+  length == 1 and .[0].request_id == "review-corrupt\u001b-time"
 ' >/dev/null
+
+# A reviewer cannot be reaped while its assigned review has no terminal
+# verdict. --force remains an explicit escape hatch and preserves durable state.
+FORMATION_SELF=requester-a
+pending_review_id="$(cmd_review_request reviewer-a 'Review PR head def456')"
+set +e
+cmd_reap reviewer-a >"$FIXTURE/reap-reviewer.out" 2>&1
+reap_rc=$?
+set -e
+[[ "$reap_rc" -eq 6 ]]
+grep -Fq "$pending_review_id" "$FIXTURE/reap-reviewer.out"
+cmd_reap --force reviewer-a >"$FIXTURE/reap-reviewer-force.out" 2>&1
+grep -Fq 'unresolved review state preserved' "$FIXTURE/reap-reviewer-force.out"
+review_current_one "$pending_review_id" |
+  jq -e '.closed == false and .state == "WAITING_REVIEW"' >/dev/null
 
 echo "PASS: durable review request/verdict tracking"
