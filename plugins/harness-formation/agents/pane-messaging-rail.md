@@ -52,3 +52,10 @@ durable request id and `WAITING_PARENT` state in a separate request event
 store. Transport receipt and semantic acknowledgement are not interchangeable:
 only `formation ack <request-id>` or `formation resolve <request-id> <summary>`
 closes an ASK. Ordinary reports and messages never clear it.
+
+Review requests use their own durable ids. Send work with
+`formation review-request <reviewer-id> <subject>` and return the decision with
+`formation verdict <review-id> <PASS|BLOCK> <summary>`. A verdict is incomplete
+until it carries the original id; Formation then copies it to both the
+requester and the requester's manager. Use
+`formation reviews --stale-minutes <N>` to detect unanswered review work.

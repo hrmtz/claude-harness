@@ -228,6 +228,9 @@ formation msg <id> "<x>"  # send instruction to worker
 formation msg --inject <id> "<x>" # exclusive worker only; short pull nudge
 formation ack <request-id> ["summary"]
 formation resolve <request-id> "<summary>"
+formation review-request <reviewer-id> "<subject>"
+formation verdict <review-id> <PASS|BLOCK> "<summary>"
+formation reviews --stale-minutes <N>
 formation reap <id>       # stop relay daemon, close pane, drop registry row
 ```
 
@@ -287,6 +290,12 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   Use `formation status`, whose sticky ASK row remains caller-independent and
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
+- When assigning a review, use
+  `formation review-request <reviewer-id> "<subject>"`. The reviewer must
+  answer with `formation verdict <review-id> <PASS|BLOCK> "<summary>"`.
+  Formation copies the verdict to both requester and manager. A free-form
+  report does not close the review request; unresolved work remains visible
+  through `formation reviews --stale-minutes <N>`.
 - **Reading the delivery line. Never re-send on the strength of it.** Every
   `msg` / `report` / `done` / `ask` prints one of four outcomes. Three of them
   mean the send is finished and the body is durable either way — a re-send only
