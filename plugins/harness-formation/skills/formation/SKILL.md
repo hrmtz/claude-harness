@@ -78,6 +78,40 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   <path/to/briefing.md> [worker_name]
 ```
 
+#### Registering a pre-existing pane
+
+When the current tmux pane was not spawned by Formation, or survived an
+approved registry reset, register it from inside that pane:
+
+```bash
+formation register --cli claude|codex|kimi|grok \
+  [--task <label>] [--goal <text>] <id>
+```
+
+This command is self-registration only. It requires `$TMUX_PANE` to match both
+process-ancestry/TTY resolution and a targeted tmux lookup. It fails closed on
+duplicate ids or panes, inherited `FORMATION_SELF` mismatch, and existing pane
+identity conflicts. Never substitute untargeted
+`tmux display-message -p '#{pane_id}'`; that reports the session's active pane
+and can silently register a sibling agent.
+
+Registered panes are always nonexclusive: the row stores
+`exclusive_input=false` and the live `@formation_exclusive_input` option is
+removed. The row records `relay=DEAD` with
+`manual-registration-no-relay`, so delivery uses the zero-keystroke direct
+signal fallback. Credential-shaped `--task` or `--goal` metadata is refused
+before registry or pane mutation. Registration preserves the existing window
+name; locked pane identity remains the routing source of truth. If
+`FORMATION_PARENT` and
+`FORMATION_PARENT_PANE` are present, register the parent first; both the parent
+registry row and locked pane identity must agree. With neither variable,
+registration is intentionally `parent=UNROUTABLE` and does not invent a
+reverse route. Option-update failure restores every captured option and
+appends no row; after fixing the cause, re-run the same id. A different locked
+identity remains fail-closed pending inspection and an approved registry reset.
+If rollback itself fails, exit 8 reports `PARTIAL REGISTRATION`; inspect the
+named pane and registry before retrying.
+
 #### Choosing the CLI (subscription quotas are the constraint)
 
 Claude, Codex and Kimi are separate paid quotas that refill on separate clocks.
