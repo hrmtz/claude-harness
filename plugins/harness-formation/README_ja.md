@@ -83,6 +83,9 @@ formation spawn ./briefing.md refactor-1
 # spawn — codex worker
 formation spawn --cli codex --model gpt-4.1-mini ./briefing.md refactor-1
 
+# Formation 外で起動済みの現在 pane を登録
+formation register --cli claude --task coordination lead
+
 # 監視
 formation status              # 全 worker と最新 pane 行
 formation inbox               # worker からの未読報告
@@ -93,6 +96,30 @@ formation msg refactor-1 "approach B に切り替えて"
 # 畳む
 formation reap refactor-1
 ```
+
+`formation register` は pane-local な `$TMUX_PANE` と、process ancestry /
+controlling TTY から独立解決した pane、targeted tmux lookup の一致を要求する。
+重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity との衝突は
+fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
+live `@formation_exclusive_input` option も解除する。relay は
+`DEAD/manual-registration-no-relay` と記録し、sender は既存の
+zero-keystroke direct signal fallback を使う。credential-shaped な `--task`
+または `--goal` は registry/pane 更新前に拒否する。既存 window name は維持し、
+mutable な表示名ではなく locked pane identity を routing source of truth とする。
+
+`FORMATION_PARENT` と `FORMATION_PARENT_PANE` を継承している場合は parent を
+先に登録する。parent の最新 registry row、pane id、locked identity が一致した
+時だけ route を採用する。両変数が無い pane は意図的に
+`parent=UNROUTABLE` となり、`formation msg` 受信と `formation inbox` は使えるが
+report 先を推測しない。untargeted な
+`tmux display-message -p '#{pane_id}'` は session の active pane を返し得るため、
+自己 pane の根拠に使わない。
+
+option 更新失敗時は取得済みの全 pane option を復元し、row を追加しない。
+原因修正後は同じ id で再実行できる。異なる locked identity との衝突は
+fail-closed のまま残し、調査後の approved registry reset を要求する。rollback
+自体が失敗した場合は `PARTIAL REGISTRATION` と exit 8 を返す。表示された pane
+と registry を調査してから再実行する。
 
 ### 任意の ignored-badge escalation / window status
 

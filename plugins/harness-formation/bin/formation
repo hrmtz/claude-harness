@@ -57,33 +57,45 @@ self_id() {
   TMUX_PANE="$pane" mailbox_resolve_sender "" "shell-$$" 0 0
 }
 
-registry_add() {
+registry_row_json() {
   local worker_id="$1" pane_id="$2" session_name="$3" briefing="$4" session_id="${5:-}" cli="${6:-claude}" task="${7:-}" goal="${8:-}" exclusive_input="${9:-0}"
   local parent_id="${10:-}" parent_pane="${11:-}"
+  local relay_state="${12:-STARTING}" relay_reason="${13:-}"
   local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
+         --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
+         --arg sid "$session_id" --arg cli "$cli" \
+         --arg task "$task" --arg goal "$goal" --arg exclusive "$exclusive_input" \
+         --arg parent_id "$parent_id" --arg parent_pane "$parent_pane" \
+         --arg relay_state "$relay_state" --arg relay_reason "$relay_reason" \
+    '{id: $id, pane_id: $pane, session_name: $sess,
+      briefing: $brief, spawned: $ts,
+      session_id: (if $sid == "" then null else $sid end), cli: $cli,
+      task: (if $task == "" then null else $task end),
+      goal: (if $goal == "" then null else $goal end),
+      exclusive_input: ($exclusive == "1"),
+      parent_id: (if $parent_id == "" then null else $parent_id end),
+      parent_pane: (if $parent_pane == "" then null else $parent_pane end),
+      parent_route_state:
+        (if $parent_id != "" and $parent_pane != "" then "ROUTABLE"
+         else "UNROUTABLE" end),
+      parent_route_reason:
+        (if $parent_id != "" and $parent_pane != "" then null
+         else "missing-parent-route" end),
+      relay_state: $relay_state, relay_pid: null,
+      relay_reason: (if $relay_reason == "" then null else $relay_reason end),
+      relay_log: null, relay_updated: $ts}'
+}
+
+registry_add() {
+  local row
+  if ! row="$(registry_row_json "$@")" || [[ -z "$row" ]]; then
+    echo "formation: registry row generation failed" >&2
+    return 2
+  fi
   (
     flock -x 202
-    jq -cn --arg id "$worker_id" --arg pane "$pane_id" \
-           --arg sess "$session_name" --arg brief "$briefing" --arg ts "$ts" \
-           --arg sid "$session_id" --arg cli "$cli" \
-           --arg task "$task" --arg goal "$goal" --arg exclusive "$exclusive_input" \
-           --arg parent_id "$parent_id" --arg parent_pane "$parent_pane" \
-      '{id: $id, pane_id: $pane, session_name: $sess, briefing: $brief, spawned: $ts,
-        session_id: (if $sid == "" then null else $sid end), cli: $cli,
-        task: (if $task == "" then null else $task end),
-        goal: (if $goal == "" then null else $goal end),
-        exclusive_input: ($exclusive == "1"),
-        parent_id: (if $parent_id == "" then null else $parent_id end),
-        parent_pane: (if $parent_pane == "" then null else $parent_pane end),
-        parent_route_state:
-          (if $parent_id != "" and $parent_pane != "" then "ROUTABLE"
-           else "UNROUTABLE" end),
-        parent_route_reason:
-          (if $parent_id != "" and $parent_pane != "" then null
-           else "missing-parent-route" end),
-        relay_state: "STARTING", relay_pid: null, relay_reason: null,
-        relay_log: null, relay_updated: $ts}' \
-      >> "$REGISTRY"
+    printf '%s\n' "$row" >> "$REGISTRY"
   ) 202>"$REGISTRY_LOCK"
 }
 
@@ -116,6 +128,21 @@ restore_pane_option() {
   else
     tmux set-option -p -u -t "$pane" "$option" >/dev/null
   fi
+}
+
+restore_registration_options() {
+  local pane="$1"
+  shift
+  local option snapshot was_set value failed=0
+  while [[ $# -ge 2 ]]; do
+    option="$1"
+    snapshot="$2"
+    shift 2
+    was_set="${snapshot%%|*}"
+    value="${snapshot#*|}"
+    restore_pane_option "$pane" "$option" "$was_set" "$value" || failed=1
+  done
+  [[ "$failed" -eq 0 ]]
 }
 
 rollback_parent_pane_options() {
@@ -505,6 +532,13 @@ Parent (lead) commands:
                                             picks the tier (opus vs fable) by live headroom — fable only
                                             for a heavy orchestration with ample quota. Fail-open to the
                                             default tier if the oracle is absent.
+  formation register --cli claude|codex|kimi|grok [--task <label>] [--goal <text>] <id>
+                                          Register the current pre-existing tmux pane.
+                                          Requires $TMUX_PANE to agree with process
+                                          ancestry/TTY resolution; refuses duplicate ids,
+                                          duplicate panes, and identity conflicts.
+                                          Manual panes are always nonexclusive and have
+                                          relay=DEAD until separately spawned/recovered.
   formation msg [--inject] <worker_id> <text>
                                           Append durably and signal without prompt
                                           keystrokes. --inject sends only a short
@@ -537,6 +571,7 @@ Worker-side commands (invoked by the worker agent via Bash):
 Env:
   FORMATION_HOME   default ~/.formation
   FORMATION_SELF   override caller id (else tmux @formation_id, else pane-%N)
+  TMUX_PANE        register requires this pane id to match ancestry/TTY proof
 
 Credential safety:
   spawn / msg / report / done / ask all run is_credential_like on their body.
@@ -568,6 +603,241 @@ cmd_remote_check() {
   [[ "$help" == *"[experimental]"* ]] && maturity="experimental"
   echo "codex remote-control: $maturity ($version)"
   echo "formation attach: unsupported; use tmux or formation msg for existing Codex workers"
+}
+
+cmd_register() {
+  local cli="" task="" goal=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cli)
+        [[ $# -ge 2 ]] || {
+          echo "usage: formation register --cli claude|codex|kimi|grok [--task <label>] [--goal <text>] <id>" >&2
+          return 2
+        }
+        cli="$2"
+        shift 2
+        ;;
+      --task)
+        [[ $# -ge 2 ]] || {
+          echo "formation: --task requires a value" >&2
+          return 2
+        }
+        task="$2"
+        shift 2
+        ;;
+      --goal)
+        [[ $# -ge 2 ]] || {
+          echo "formation: --goal requires a value" >&2
+          return 2
+        }
+        goal="$2"
+        shift 2
+        ;;
+      --exclusive-input)
+        echo "formation: register refuses --exclusive-input; a pre-existing pane is nonexclusive" >&2
+        return 2
+        ;;
+      --*)
+        echo "formation: unknown register option: $1" >&2
+        return 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ "$cli" =~ ^(claude|codex|kimi|grok)$ && $# -eq 1 ]] || {
+    echo "usage: formation register --cli claude|codex|kimi|grok [--task <label>] [--goal <text>] <id>" >&2
+    return 2
+  }
+  local worker_id="$1"
+  [[ "$worker_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+    echo "formation: invalid registration id: $worker_id" >&2
+    return 2
+  }
+  if is_credential_like "$task" || is_credential_like "$goal"; then
+    refuse_credential register "$worker_id" "task/goal metadata refused"
+    return 3
+  fi
+  if [[ -n "${FORMATION_SELF:-}" && "$FORMATION_SELF" != "$worker_id" ]]; then
+    echo "formation: refusing registration: FORMATION_SELF=$FORMATION_SELF does not match requested id=$worker_id" >&2
+    return 2
+  fi
+  [[ "${TMUX_PANE:-}" =~ ^%[0-9]+$ ]] || {
+    echo "formation: register requires a valid TMUX_PANE from the current pane" >&2
+    return 2
+  }
+
+  local pane="$TMUX_PANE" verified_pane reported_pane session_name session_id
+  verified_pane="$(mailbox_resolve_caller_pane || true)"
+  [[ "$verified_pane" == "$pane" ]] || {
+    echo "formation: refusing registration: TMUX_PANE=$pane disagrees with ancestry/TTY pane=${verified_pane:-unresolved}" >&2
+    return 2
+  }
+  reported_pane="$(tmux display-message -p -t "$pane" '#{pane_id}' 2>/dev/null || true)"
+  [[ "$reported_pane" == "$pane" ]] || {
+    echo "formation: refusing registration: targeted tmux pane did not confirm $pane" >&2
+    return 2
+  }
+
+  session_name="$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null |
+    tr -d '\000-\037\177' || true)"
+  [[ -n "$session_name" ]] || {
+    echo "formation: refusing registration: cannot resolve tmux session for $pane" >&2
+    return 2
+  }
+  session_name="${session_name:0:128}"
+  session_id="${FORMATION_SESSION_ID:-}"
+  [[ "$session_id" =~ ^[A-Za-z0-9._-]{0,128}$ ]] || {
+    echo "formation: invalid FORMATION_SESSION_ID" >&2
+    return 2
+  }
+  task="$(printf '%s' "$task" | tr -d '\000-\037\177')"
+  goal="$(printf '%s' "$goal" | tr -d '\000-\037\177')"
+  task="${task:0:28}"
+  goal="${goal:0:160}"
+
+  local parent_id="${FORMATION_PARENT:-}" parent_pane="${FORMATION_PARENT_PANE:-}"
+  if [[ -n "$parent_id" || -n "$parent_pane" ]]; then
+    [[ "$parent_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ &&
+          "$parent_pane" =~ ^%[0-9]+$ && "$parent_id" != "$worker_id" ]] || {
+      echo "formation: refusing registration: FORMATION_PARENT and FORMATION_PARENT_PANE must form a valid non-self route" >&2
+      return 2
+    }
+  fi
+
+  local row
+  if ! row="$(registry_row_json "$worker_id" "$pane" "$session_name" "" \
+      "$session_id" "$cli" "$task" "$goal" 0 "$parent_id" "$parent_pane" \
+      DEAD manual-registration-no-relay)" || [[ -z "$row" ]]; then
+    echo "formation: registration row generation failed" >&2
+    return 2
+  fi
+
+  (
+    flock -x 202
+    local conflicts parent_row parent_locked registry_size
+    if ! conflicts="$(jq -rc --arg id "$worker_id" --arg pane "$pane" \
+        'select(.id == $id or .pane_id == $pane)
+         | "id=\(.id // "?") pane=\(.pane_id // "?")"' "$REGISTRY" 2>/dev/null)"; then
+      echo "formation: refusing registration: registry is unreadable" >&2
+      exit 2
+    fi
+    if [[ -n "$conflicts" ]]; then
+      echo "formation: refusing registration: id or pane already registered ($conflicts); inspect/reap it, or use an approved registry reset for stale rows from a dead tmux server" >&2
+      exit 2
+    fi
+
+    if [[ -n "$parent_id" ]]; then
+      parent_row="$(jq -c --arg id "$parent_id" 'select(.id == $id)' \
+        "$REGISTRY" 2>/dev/null | tail -n1)"
+      [[ -n "$parent_row" &&
+            "$(printf '%s\n' "$parent_row" | jq -r '.pane_id // empty')" == "$parent_pane" ]] || {
+        echo "formation: refusing registration: parent route is absent or disagrees with registry; register the parent first" >&2
+        exit 2
+      }
+      parent_locked="$(mailbox_resolve_locked_pane_identity "$parent_pane" || true)"
+      [[ "$parent_locked" == "$parent_id" ]] || {
+        echo "formation: refusing registration: parent pane identity does not confirm $parent_id" >&2
+        exit 2
+      }
+    fi
+
+    registry_size="$(stat -c %s "$REGISTRY" 2>/dev/null)" || {
+      echo "formation: refusing registration: cannot snapshot registry size" >&2
+      exit 2
+    }
+
+    local identity_locked id_legacy exclusive cli_before task_before status_before
+    local parent_id_before parent_pane_before
+    identity_locked="$(pane_option_snapshot "$pane" @formation_identity_locked)" || exit 2
+    id_legacy="$(pane_option_snapshot "$pane" @formation_id)" || exit 2
+    exclusive="$(pane_option_snapshot "$pane" @formation_exclusive_input)" || exit 2
+    cli_before="$(pane_option_snapshot "$pane" @formation_cli)" || exit 2
+    task_before="$(pane_option_snapshot "$pane" @formation_task)" || exit 2
+    status_before="$(pane_option_snapshot "$pane" @formation_status)" || exit 2
+    parent_id_before="$(pane_option_snapshot "$pane" @formation_parent_id)" || exit 2
+    parent_pane_before="$(pane_option_snapshot "$pane" @formation_parent_pane)" || exit 2
+
+    local locked_value="${identity_locked#*|}" legacy_value="${id_legacy#*|}"
+    if [[ ("${identity_locked%%|*}" == "1" && "$locked_value" != "$worker_id") ||
+          ("${id_legacy%%|*}" == "1" && "$legacy_value" != "$worker_id") ]]; then
+      echo "formation: refusing registration: pane identity conflicts with requested id=$worker_id" >&2
+      exit 2
+    fi
+
+    local pane_update_failed=0
+    tmux set-option -p -t "$pane" @formation_identity_locked "$worker_id" >/dev/null ||
+      pane_update_failed=1
+    tmux set-option -p -t "$pane" @formation_id "$worker_id" >/dev/null ||
+      pane_update_failed=1
+    tmux set-option -p -t "$pane" @formation_cli "$cli" >/dev/null ||
+      pane_update_failed=1
+    tmux set-option -p -t "$pane" @formation_status registered >/dev/null ||
+      pane_update_failed=1
+    tmux set-option -p -u -t "$pane" @formation_exclusive_input >/dev/null ||
+      pane_update_failed=1
+    if [[ -n "$task" ]]; then
+      tmux set-option -p -t "$pane" @formation_task "$task" >/dev/null ||
+        pane_update_failed=1
+    else
+      tmux set-option -p -u -t "$pane" @formation_task >/dev/null ||
+        pane_update_failed=1
+    fi
+    if [[ -n "$parent_id" ]]; then
+      tmux set-option -p -t "$pane" @formation_parent_id "$parent_id" >/dev/null ||
+        pane_update_failed=1
+      tmux set-option -p -t "$pane" @formation_parent_pane "$parent_pane" >/dev/null ||
+        pane_update_failed=1
+    else
+      tmux set-option -p -u -t "$pane" @formation_parent_id >/dev/null ||
+        pane_update_failed=1
+      tmux set-option -p -u -t "$pane" @formation_parent_pane >/dev/null ||
+        pane_update_failed=1
+    fi
+    if [[ "$pane_update_failed" -ne 0 ]]; then
+      local rollback_failed=0
+      restore_registration_options "$pane" \
+        @formation_identity_locked "$identity_locked" \
+        @formation_id "$id_legacy" \
+        @formation_exclusive_input "$exclusive" \
+        @formation_cli "$cli_before" \
+        @formation_task "$task_before" \
+        @formation_status "$status_before" \
+        @formation_parent_id "$parent_id_before" \
+        @formation_parent_pane "$parent_pane_before" || rollback_failed=1
+      if [[ "$rollback_failed" -ne 0 ]]; then
+        echo "formation: PARTIAL REGISTRATION: pane-option update and rollback failed for pane=$pane; inspect locked identity before retry" >&2
+        exit 8
+      fi
+      echo "formation: registration pane-option update failed; rolled back" >&2
+      exit 2
+    fi
+
+    if ! printf '%s\n' "$row" >> "$REGISTRY"; then
+      local rollback_failed=0 registry_restore_failed=0
+      truncate -s "$registry_size" "$REGISTRY" 2>/dev/null ||
+        registry_restore_failed=1
+      restore_registration_options "$pane" \
+        @formation_identity_locked "$identity_locked" @formation_id "$id_legacy" \
+        @formation_exclusive_input "$exclusive" @formation_cli "$cli_before" \
+        @formation_task "$task_before" @formation_status "$status_before" \
+        @formation_parent_id "$parent_id_before" @formation_parent_pane "$parent_pane_before" ||
+        rollback_failed=1
+      if [[ "$rollback_failed" -ne 0 || "$registry_restore_failed" -ne 0 ]]; then
+        echo "formation: PARTIAL REGISTRATION: registry append failed and rollback was incomplete for pane=$pane; inspect registry and locked identity before retry" >&2
+        exit 8
+      fi
+      echo "formation: registry append failed; pane options rolled back" >&2
+      exit 2
+    fi
+  ) 202>"$REGISTRY_LOCK" || return $?
+
+  echo "registered id=$worker_id pane=$pane cli=$cli relay=DEAD reason=manual-registration-no-relay"
+  if [[ -z "$parent_id" ]]; then
+    echo "formation: warning: parent route is UNROUTABLE; this pane can receive msg/inbox but report requires an explicit parent route" >&2
+  fi
 }
 
 # Resolve the sandbox bypass mode from the tri-state flag and the cli (#38).
@@ -1617,6 +1887,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   cmd="${1:-help}"; shift || true
   case "$cmd" in
     spawn)  cmd_spawn  "$@" ;;
+    register) cmd_register "$@" ;;
     msg)    cmd_msg    "$@" ;;
     status) cmd_status "$@" ;;
     repair-parent) cmd_repair_parent "$@" ;;

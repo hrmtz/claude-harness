@@ -97,6 +97,42 @@ short pull nudge. The durable body always remains in the mailbox.
 Every injection remains `receipt unconfirmed` and uses the shared delayed-submit
 primitive.
 
+### Registering an existing pane
+
+Use `formation register` inside a tmux pane that Formation did not spawn, or
+inside a surviving pane after an approved registry reset:
+
+```bash
+formation register --cli claude --task coordination lead
+```
+
+Registration requires the pane-local `$TMUX_PANE` to agree with independent
+process-ancestry/TTY resolution and with a targeted tmux lookup. It refuses a
+duplicate id, duplicate pane, inherited `FORMATION_SELF` mismatch, or existing
+pane identity conflict. A pre-existing pane is always registered with
+`exclusive_input=false`, and the live `@formation_exclusive_input` option is
+removed. Its relay state is explicitly `DEAD` with reason
+`manual-registration-no-relay`; mailbox senders therefore use the existing
+zero-keystroke direct signal fallback. Credential-shaped `--task` or `--goal`
+metadata is refused before registry or pane mutation. Registration preserves
+the existing window name; locked pane identity, not mutable display text,
+remains the routing source of truth.
+
+If the pane inherited both `FORMATION_PARENT` and `FORMATION_PARENT_PANE`,
+register the parent first. Registration accepts that route only when the latest
+parent registry row and its locked pane identity agree. With neither variable,
+the row is intentionally `parent=UNROUTABLE`: it can receive `formation msg`
+and read `formation inbox`, but has no inferred report destination.
+Never derive the caller pane with untargeted
+`tmux display-message -p '#{pane_id}'`; that returns the session's active pane,
+which may belong to another agent.
+
+If option update fails, registration restores every captured pane option and
+does not append a row. Re-run the same id after fixing the cause. A conflicting
+locked identity remains fail-closed and requires inspection before an approved
+registry reset. If rollback itself fails, the command exits 8 with
+`PARTIAL REGISTRATION`; inspect the named pane and registry before retrying.
+
 ### Optional ignored-badge escalation
 
 `formation-mail-nudge` is exceptional, opt-in automation for an exclusive

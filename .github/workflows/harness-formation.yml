@@ -82,6 +82,8 @@ jobs:
           command -v tmux >/dev/null 2>&1 || { sudo apt-get update -qq && sudo apt-get install -y -qq tmux; }
           tmux -f /dev/null new-session -d -s ci-bootstrap
           tmux ls
+      - name: Test post-hoc Formation registration (real tmux)
+        run: bash plugins/harness-formation/tests/test_register_real_tmux.sh
       - name: Test hook dispatch chassis (real panes)
         env:
           HARNESS_TEST_REQUIRE_TMUX: "1"
