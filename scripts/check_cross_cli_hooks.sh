@@ -147,22 +147,16 @@ PYEOF
         echo "skip: $GROK_HOOKS not present"
     fi
 
-    # 4. kimi config.toml marker block carries exactly the overlay set (commands only)
+    # 4. Kimi config must carry exactly one full-file owned registration per
+    # overlay tuple. Marker-only comparison misses legacy duplicates (#199).
     KIMI_CONFIG="${KIMI_CODE_HOME:-$HOME/.kimi-code}/config.toml"
-    if [[ -f "$KIMI_CONFIG" ]] && grep -qF '# >>> harness-kimi hooks' "$KIMI_CONFIG"; then
-        want=$(mktemp); got=$(mktemp)
-        jq -r '.kimi.hooks[] | if type == "object" then .path else . end' "$OVERLAY" \
-            | awk -v root="$PLUGINS_DIR" '{ runner = ($1 ~ /\.py$/ ? "python3" : "bash"); print runner " " root "/" $0 }' \
-            | sort > "$want"
-        sed -n '/# >>> harness-kimi hooks/,/# <<< harness-kimi hooks <<</p' "$KIMI_CONFIG" \
-            | sed -n "s/^command = ['\"]\\(.*\\)['\"]$/\\1/p" \
-            | python3 "$HARNESS_DIR/scripts/lib/chassis_stamp.py" --unstamp | sort > "$got"
-        if ! diff -u "$want" "$got" >&2; then
-            err "kimi config.toml hook block differs from overlay (run install-kimi-hooks.sh)"
+    if [[ -f "$KIMI_CONFIG" ]]; then
+        if ! python3 "$HARNESS_DIR/scripts/lib/render_kimi_hooks.py" \
+            check "$OVERLAY" "$HARNESS_DIR" "$KIMI_CONFIG"; then
+            err "kimi config.toml owned hook registry differs from overlay (run install-kimi-hooks.sh)"
         fi
-        rm -f "$want" "$got"
     else
-        echo "skip: no harness-kimi hook block in $KIMI_CONFIG"
+        echo "skip: $KIMI_CONFIG not present"
     fi
 fi
 
