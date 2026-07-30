@@ -5,6 +5,7 @@ are untouched. 'backed up' == a file matching the target appears under
 import subprocess, json, os, tempfile, shutil, glob, sys
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "hooks", "sanada_autobackup.sh")
+PATTERNS = os.path.join(os.path.dirname(__file__), "..", "hooks", "credential_patterns.sh")
 
 def run(cmd, files=("target.txt",), make=True, content=None):
     home = tempfile.mkdtemp(); work = tempfile.mkdtemp()
@@ -61,6 +62,71 @@ expect("sed -i s/Z/X/ target.txt", False, "credential-shaped redact suppressed",
 synthetic_name = f"session-{synthetic}.jsonl"
 expect(f"rm {synthetic_name}", False, "credential-shaped filename suppressed",
        target=synthetic_name, files=(synthetic_name,), content="safe")
+
+# Issue #203: filesystems cannot preserve `://`, so DSN-derived basenames use
+# mangled separators.  Safe content must not let those filenames enter backup.
+for scheme in ("postgresql", "postgres", "mysql", "mongodb", "mongodb+srv",
+               "redis", "amqp", "libsql"):
+    for separator in ("::", "--", ":--"):
+        synthetic_name = (
+            f"{scheme}{separator}fixture_user:fixture_password@db.invalid-dump.sql"
+        )
+        expect(
+            f"rm {synthetic_name}",
+            False,
+            f"mangled {scheme} DSN filename suppressed ({separator})",
+            target=synthetic_name,
+            files=(synthetic_name,),
+            content="safe",
+        )
+
+expect(
+    "rm postgresql-backup@2026.txt",
+    True,
+    "scheme-prefixed ordinary filename remains backup eligible",
+    target="postgresql-backup@2026.txt",
+    files=("postgresql-backup@2026.txt",),
+    content="safe",
+)
+
+redacted = subprocess.run(
+    [
+        "bash",
+        "-c",
+        'source "$1"; credential_redact_text "$2"',
+        "credential-redact-test",
+        PATTERNS,
+        "postgresql::fixture_user:fixture_password@db.invalid-dump.sql",
+    ],
+    capture_output=True,
+    text=True,
+    check=True,
+).stdout
+if "fixture_user" in redacted or "fixture_password" in redacted or "<REDACTED>" not in redacted:
+    ok = False
+    print("  ✗ FAIL mangled DSN diagnostic label must be redacted")
+
+with tempfile.TemporaryDirectory() as scan_dir:
+    scan_error = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                'source "$1"; '
+                "grep() { return 2; }; "
+                'credential_path_name_has_shape "$2"'
+            ),
+            "credential-name-scan-test",
+            PATTERNS,
+            scan_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if scan_error.returncode != 0:
+        ok = False
+        print("  ✗ FAIL pathname grep error must fail closed")
+
 expect("rm target.txt", True, "lowercase CMCP identifier is not a credential",
        content="cmcp_check_config_fw_match")
 expect("rm target.txt", True, "allowlisted placeholder is not a credential",
@@ -104,6 +170,26 @@ names, _ = run_setup("rm -rf leakdir", build_synthetic_credential_dir)
 if names:
     ok = False
     print("  ✗ FAIL credential-shaped directory must not be copied")
+
+def build_named_child(name):
+    def builder(work):
+        path = os.path.join(work, "leakdir")
+        os.makedirs(path)
+        open(os.path.join(path, name), "w").write("safe")
+    return builder
+
+for separator in ("::", "--", ":--"):
+    name = f"postgresql{separator}fixture_user:fixture_password@db.invalid-dump.sql"
+    names, _ = run_setup("rm -rf leakdir", build_named_child(name))
+    if names:
+        ok = False
+        print(f"  ✗ FAIL directory containing {separator} DSN filename must not be copied")
+
+ordinary_name = "postgresql-backup@2026.txt"
+names, _ = run_setup("rm -rf leakdir", build_named_child(ordinary_name))
+if ordinary_name not in names:
+    ok = False
+    print("  ✗ FAIL directory with ordinary scheme-prefixed child must be copied")
 
 print("sanada_autobackup: ALL PASS ✓" if ok else "sanada_autobackup: FAILURES ✗")
 sys.exit(0 if ok else 1)

@@ -76,7 +76,7 @@ _remaining() {     # bytes left under TOTAL_CAP for this invocation (0 if over)
 }
 
 _backup() {   # $1 = path to snapshot if it exists, named (no glob), size/time-bounded
-    local p="$1" sz
+    local p="$1" safe_p sz
     [ -z "$p" ] && return 0
     p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"          # strip surrounding quotes
     case "$p" in *[\*\?\[\]\{\}\$\~\`]*) return 0 ;; esac        # skip glob/expansion
@@ -85,9 +85,10 @@ _backup() {   # $1 = path to snapshot if it exists, named (no glob), size/time-b
     # Issue #155: deletion/overwrite cannot eradicate a leaked value if this
     # hook recreates the plaintext in its persistent backup. Scan with the same
     # catalog as the transcript scrubber and fail closed on scan errors. Log the
-    # path only; matched values never leave credential_path_has_shape's pipe.
+    # path only; matched values never leave the credential path/name scanners.
     safe_p=$(credential_redact_text "$p")
-    if [ "$safe_p" != "$p" ] || credential_path_has_shape "$p"; then
+    if credential_path_name_has_shape "$p" "$safe_p" \
+        || credential_path_has_shape "$p"; then
         hook_log "sanada_autobackup" "credential-shaped target: backup suppressed: $safe_p"
         return 0
     fi

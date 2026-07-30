@@ -58,6 +58,18 @@ except Exception as e:  # noqa
     ok = False
     print(f"  ✗ FAIL: scrub corrupted chat_history.jsonl JSON: {e}")
 
+# 3. Issue #203 filename-safe DSN shapes use the same shared scrub catalog.
+fake_dsn_name = (
+    "postgresql::fixture_user:fixture_password@db.invalid-dump.sql"
+)
+out = run_grok(f"backup filename: {fake_dsn_name}")
+if "fixture_user" in out or "fixture_password" in out:
+    ok = False
+    print("  ✗ FAIL: mangled DSN filename survived shared value scrub")
+if "postgresql::<REDACTED>:<REDACTED>@" not in out:
+    ok = False
+    print("  ✗ FAIL: mangled DSN filename replacement missing")
+
 print("value_scrub Grok payload (#55): ALL PASS ✓" if ok
       else "value_scrub Grok payload (#55): FAILURES ✗")
 raise SystemExit(0 if ok else 1)
