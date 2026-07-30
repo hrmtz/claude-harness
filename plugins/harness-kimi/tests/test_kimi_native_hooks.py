@@ -174,7 +174,7 @@ class TestInstaller(unittest.TestCase):
         tomllib.loads(text)  # still valid TOML
 
     def test_dispatcher_trailing_args_do_not_enter_hook_name(self):
-        repo = self.tmp / "repo"
+        repo = (self.tmp / "repo").resolve()
         repo.mkdir()
         shutil.copy2(INSTALLER, repo / "install-kimi-hooks.sh")
         # The generator imports the shared chassis stamp helper (#177), so a
@@ -183,6 +183,10 @@ class TestInstaller(unittest.TestCase):
         lib = repo / "scripts" / "lib"
         lib.mkdir(parents=True)
         shutil.copy2(REPO / "scripts" / "lib" / "chassis_stamp.py", lib / "chassis_stamp.py")
+        shutil.copy2(
+            REPO / "scripts" / "lib" / "resolve_harness_root.sh",
+            lib / "resolve_harness_root.sh",
+        )
         plugins = repo / "plugins"
         plugins.mkdir(parents=True)
         shutil.copy2(
@@ -218,6 +222,7 @@ class TestInstaller(unittest.TestCase):
                         " --snapshot 2>/dev/null || exit 0"
                     )
         core_hooks_path.write_text(json.dumps(core_hooks))
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
 
         kimi_home = self.tmp / "trailing-args-kimi-home"
         kimi_home.mkdir()

@@ -21,7 +21,14 @@
 
 set -euo pipefail
 
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INVOKED_HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_RESOLVER="$INVOKED_HARNESS_DIR/scripts/lib/resolve_harness_root.sh"
+[[ -r "$ROOT_RESOLVER" ]] || {
+    echo "error: canonical-root resolver missing: $ROOT_RESOLVER" >&2
+    exit 1
+}
+source "$ROOT_RESOLVER"
+HARNESS_DIR="$(harness_resolve_canonical_root "$INVOKED_HARNESS_DIR")" || exit 1
 KIMI_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
 CONFIG="$KIMI_HOME/config.toml"
 OVERLAY="$HARNESS_DIR/plugins/cross_cli_hooks.json"
