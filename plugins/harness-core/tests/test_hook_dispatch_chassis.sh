@@ -217,6 +217,14 @@ for f in install-codex-hooks.sh install-grok-hooks.sh install-kimi-hooks.sh; do
             bad "$f stamps through the shared renderer/helper" \
                 "installer no longer delegates to the stamped renderer"
         fi
+    elif [ "$f" = "install-kimi-hooks.sh" ]; then
+        if grep -q "render_kimi_hooks.py" "$ROOT/$f" \
+           && grep -q "chassis_stamp.stamp(" "$ROOT/scripts/lib/render_kimi_hooks.py"; then
+            ok "$f stamps through the shared renderer/helper"
+        else
+            bad "$f stamps through the shared renderer/helper" \
+                "installer no longer delegates to the stamped renderer"
+        fi
     elif grep -q "chassis_stamp.stamp(" "$ROOT/$f"; then
         ok "$f stamps through the shared helper"
     else
@@ -239,7 +247,13 @@ UNSTAMPED=$(printf 'export HARNESS_CHASSIS=codex; bash /x/y.sh\nHARNESS_CHASSIS=
 check "unstamp reverses both the current and the previous stamp forms" \
     "bash /x/y.sh|bash /a/b.sh|bash /plain.sh|" "$UNSTAMPED"
 UNSTAMP_SITES=$(grep -c -- '--unstamp' "$ROOT/scripts/check_cross_cli_hooks.sh")
-check "the drift checker normalises all three CLI sections" "3" "$UNSTAMP_SITES"
+if [ "$UNSTAMP_SITES" = 2 ] \
+   && grep -q "chassis_stamp.unstamp(" "$ROOT/scripts/lib/render_kimi_hooks.py"; then
+    ok "the drift checker normalises all three CLI sections"
+else
+    bad "the drift checker normalises all three CLI sections" \
+        "expected two inline filters plus Kimi renderer delegation"
+fi
 
 # ── the direct fallback must still find the codex adapter ───────────────────
 # Config-layer hooks get no plugin-root injection, so this path runs with both
