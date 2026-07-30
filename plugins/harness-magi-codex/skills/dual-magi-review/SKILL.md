@@ -164,6 +164,17 @@ changed, the guard automatically rolls over without user acknowledgement. Every 
 shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
 result; never pause for an acknowledgement and never reset history through a fresh state directory.
 
+The finalized #271 incident predates the trustworthy `turn_observed` classification. Its only
+historical repair is the reviewed closed attestation in `magi_campaign_guard.py`, invoked through
+`scripts/magi_campaign_guard.py repair-historical-startup <doc> <claim-id>`. The attestation pins
+the canonical document/claim/artifact/protocol identity and the exact six-launch, gross-14 history
+prefix plus the known three-reviewer pre-turn provider stage. Runtime/operator-authored evidence is
+not accepted. The guard preserves gross launch entries, records a distinct transition, revalidates
+the embedded attestation tombstone and prefix at rest, and permits only this one repair. Later
+allowlist cleanup cannot orphan an existing repaired ledger. Unknown or changed history, an
+already-consumed replacement, and a second repair stay charged. Adding another incident
+requires a reviewed protocol/code change; this is not acknowledgement or fuse extension.
+
 If requirements change while a claim is live, do not start another adapter, edit the document, or
 abandon the ledger entry implicitly. First run:
 

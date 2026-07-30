@@ -65,9 +65,7 @@
         },
         "required": [
           "finding_id", "severity", "title", "location", "rationale",
-          "required_fix", "confidence", "dup_flag", "missed_angle",
-          "subsystem", "root_cause_id", "affected_invariant",
-          "changes_design_invariant", "relation_to_prior"
+          "required_fix", "confidence", "dup_flag", "missed_angle"
         ],
         "additionalProperties": false
       }

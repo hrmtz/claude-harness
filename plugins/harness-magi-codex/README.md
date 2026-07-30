@@ -32,9 +32,10 @@ same-family reviewers read the same text and found none of them.
 ## What's inside
 
 ```
-schemas/finding.schema.json   Provider-compatible local SSOT; cross-field rules stay in validator.
+schemas/finding.schema.json   Backward-compatible local SSOT; cross-field rules stay in validator.
 schemas/finding.codex.schema.json
-                              Provider subset for Codex constrained decoding; deliberately stricter.
+                              Provider response schema for Codex and cross-family constrained
+                              decoding; deliberately stricter than persisted artifacts.
 schemas/implementation-convergence.schema.json
                               opt-in report-only implementation manifest
 schemas/preflight-{review,decision}.schema.json
@@ -280,6 +281,21 @@ exit, cancellation, or non-adapter request remains charged and cannot chain cred
 then invoke round 1. A changed document or review-protocol SHA rolls into the next campaign
 automatically, without acknowledgement. The bounded replacement is the deliberate protocol-only
 exception: it may run the corrected provider contract against the exact same artifact SHA.
+
+The finalized #271 incident predates claim-scoped recovery and its legacy bounded artifact cannot
+prove the newer `turn_observed` classification. It is repaired only by the reviewed closed
+attestation in `magi_campaign_guard.py`, invoked as
+`magi_campaign_guard.py repair-historical-startup <doc> <claim-id>`. This is not a generic
+operator-evidence or acknowledgement path: the attestation pins the one canonical document ID,
+claim, artifact SHA, original protocol SHA, completion time, six-launch history prefix hash, gross
+usage 14/16, three-reviewer pre-turn provider stage, and three-unit credit. Any runtime-authored
+JSON is ignored. The exact pre-repair history must match before a distinct `repairs` transition is
+appended; launch entries remain unchanged. The selected attestation is embedded as an immutable
+tombstone in that transition, so later allowlist cleanup cannot orphan the ledger; at-rest
+validation rechecks its digest and history prefix after later launches. Unknown documents/claims,
+changed history or identity, a live
+claim, unchanged protocol, an existing replacement, or any second repair remain charged. Adding
+another historical incident requires a reviewed protocol/code change.
 
 `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the per-campaign ceiling of 12; it cannot extend it.
 All revision campaigns share a separate fixed global allowance of 16 weighted model launches.

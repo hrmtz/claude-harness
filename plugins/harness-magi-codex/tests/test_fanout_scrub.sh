@@ -67,20 +67,20 @@ pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-# The shared validation schema must remain usable as a Codex response schema. This pins the local
-# preflight while live provider drift is covered below at the claim-scoped recovery boundary.
+# The strict provider schema, not the backward-compatible local schema, must pass Codex preflight.
+# Live provider drift is covered below at the claim-scoped recovery boundary.
 INCOMPAT_DOC="$TMP/incompatible.md"; printf '%s\n' 'unsupported schema fixture' > "$INCOMPAT_DOC"
 INCOMPAT_OUT="$TMP/incompatible-out"; mkdir -p "$INCOMPAT_OUT"
 python3 "$HERE/../scripts/magi_codex_schema_preflight.py" \
-  "$HERE/../schemas/finding.schema.json" \
+  "$HERE/../schemas/finding.codex.schema.json" \
   >"$TMP/incompatible.stdout" 2>"$TMP/incompatible.stderr"
 incompat_rc=$?
 if [ "$incompat_rc" -eq 0 ] \
     && [ ! -s "$TMP/incompatible.stderr" ] \
     && [ ! -d "$TMP/.dual-magi" ]; then
-  ok "shared finding schema passes deterministic provider-schema preflight"
+  ok "strict Codex finding schema passes deterministic provider-schema preflight"
 else
-  bad "shared finding schema failed deterministic preflight (rc=$incompat_rc)"
+  bad "strict Codex finding schema failed deterministic preflight (rc=$incompat_rc)"
 fi
 
 DEPENDENT_SCHEMA="$TMP/dependent-schema.json"

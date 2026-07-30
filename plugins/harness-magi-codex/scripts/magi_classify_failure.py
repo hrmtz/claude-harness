@@ -53,16 +53,49 @@ def codex_log_observation(log: Path) -> tuple[bool, bool]:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(event, dict) or not str(event.get("type", "")).startswith("item."):
+        if not isinstance(event, dict):
             continue
-        item = event.get("item")
-        if isinstance(item, dict) and item.get("type") in {
+        event_type = str(event.get("type", ""))
+        payload = event.get("payload")
+        if event_type in {"thread.started", "session.started", "error"}:
+            continue
+        if (
+            event_type == "event_msg"
+            and isinstance(payload, dict)
+            and payload.get("type") == "user_message"
+        ):
+            continue
+        if (
+            event_type == "response_item"
+            and isinstance(payload, dict)
+            and payload.get("type") == "message"
+            and payload.get("role") == "user"
+        ):
+            continue
+        item = event.get("item") if event_type.startswith("item.") else None
+        if event_type in {"event_msg", "response_item"}:
+            item = payload
+        if event_type in {"turn.started", "turn.completed"}:
+            turn_observed = True
+        elif isinstance(item, dict) and item.get("type") in {
             "agent_message",
             "reasoning",
             "command_execution",
             "mcp_tool_call",
             "web_search",
+            "custom_tool_call",
+            "function_call",
         }:
+            turn_observed = True
+        elif (
+            event_type == "response_item"
+            and isinstance(item, dict)
+            and item.get("type") == "message"
+            and item.get("role") == "assistant"
+        ):
+            turn_observed = True
+        else:
+            # Unknown JSONL is not evidence that the provider stayed pre-turn.
             turn_observed = True
     return signature, turn_observed
 

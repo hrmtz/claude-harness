@@ -14,6 +14,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
 SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.schema.json"
+PROVIDER_SCHEMA_FILE="$PLUGIN_DIR/schemas/finding.codex.schema.json"
 SCRUB="$SELF_DIR/magi_scrub.py"
 GUARD="$SELF_DIR/magi_campaign_guard.py"
 VALIDATOR="$SELF_DIR/magi_validate_findings.py"
@@ -81,6 +82,10 @@ ARTIFACT_BYTES="$(stat -c %s -- "$DOC_PATH")" || {
     exit 64
 }
 [ -f "$SCHEMA_FILE" ] || { echo "magi-xfamily: schema not found: $SCHEMA_FILE" >&2; exit 64; }
+[ -f "$PROVIDER_SCHEMA_FILE" ] || {
+    echo "magi-xfamily: provider schema not found: $PROVIDER_SCHEMA_FILE" >&2
+    exit 64
+}
 case "$ROUND" in ''|*[!0-9]*) echo "magi-xfamily: round must be an integer: $ROUND" >&2; exit 64 ;; esac
 [ "$ROUND" -ge 1 ] || { echo "magi-xfamily: round must be at least 1" >&2; exit 64; }
 if [ "$ROUND" -gt 1 ] && [ "$PRIOR" = "-" ]; then
@@ -316,6 +321,7 @@ python3 "$PROTOCOL" snapshot "$SNAPSHOT_ROOT" "$CLAIM_PROTOCOL_SHA" >/dev/null |
 }
 SNAPSHOT_PLUGIN="$SNAPSHOT_ROOT/plugins/harness-magi-codex"
 SCHEMA_FILE="$SNAPSHOT_PLUGIN/schemas/finding.schema.json"
+PROVIDER_SCHEMA_FILE="$SNAPSHOT_PLUGIN/schemas/finding.codex.schema.json"
 SCRUB="$SNAPSHOT_PLUGIN/scripts/magi_scrub.py"
 GUARD="$SNAPSHOT_PLUGIN/scripts/magi_campaign_guard.py"
 VALIDATOR="$SNAPSHOT_PLUGIN/scripts/magi_validate_findings.py"
@@ -414,7 +420,9 @@ RAW_FILE="$(mktemp)"
 # the launch subshell must chdir into the target repository. Resolve everything the exec line
 # still needs (guard binary, schema bytes) before that chdir — after it, a relative path would
 # resolve inside the target repository instead of the caller's cwd.
-SCHEMA_JSON="$(cat "$SCHEMA_FILE")"
+# Provider output is stricter than the backward-compatible persisted artifact schema:
+# all convergence fields are required before a cross-family launch can be charged.
+SCHEMA_JSON="$(cat "$PROVIDER_SCHEMA_FILE")"
 case "$CROSS_CLI_GUARD" in
     /*) ;;
     *) CROSS_CLI_GUARD="$(cd "$(dirname "$CROSS_CLI_GUARD")" && pwd)/$(basename "$CROSS_CLI_GUARD")" ;;

@@ -82,6 +82,31 @@ PROTOCOL_FILES = (
     "scripts/magi_xfamily.sh",
     "scripts/magi_xfamily_claude.sh",
 )
+# Closed one-time compatibility attestations for incidents that predate the
+# claim-scoped recovery state.  Runtime/operator-authored evidence is
+# deliberately unsupported: adding an incident requires a reviewed protocol
+# change, so an arbitrary failed ledger cannot mint credit.  The selected
+# attestation is copied into the durable repair transition: later cleanup of
+# this allowlist must not make an already-repaired ledger unreadable.
+HISTORICAL_STARTUP_INCIDENTS: tuple[dict[str, object], ...] = (
+    {
+        "incident_id": "claude-harness-271-hippocampus-262-schema-startup",
+        "issue": "hrmtz/claude-harness#271",
+        "doc_id": "5c8e85fd709b23cc",
+        "source_claim_id": "0f0bd40b-f015-461d-8f44-fc7e47c4657a",
+        "source_finished_at": "2026-07-30T01:52:24.251065+00:00",
+        "artifact_sha": "f04d2112d4fa3b6c3c1e4dd7cff1fd94778954a7d242a73ab3673678486084a6",
+        "source_protocol_sha": "26d2f729c8b1639e28f176622424608f7c5e1c99e413584cf1953201c3473171",
+        "history_launch_count": 6,
+        "history_gross_model_launches": 14,
+        "history_prefix_sha256": "ab3881716d5efd2e359f069bb37a98e4321e0d554b54a3b74fd3316eea4ff770",
+        "credited_model_launches": 3,
+        "provider_stage": "codex-output-schema-validation-before-reviewer-turn",
+        "reviewer_count": 3,
+        "turn_observed": False,
+        "legacy_classification": "provider-exit",
+    },
+)
 
 
 class UsageError(ValueError):
@@ -313,6 +338,39 @@ def new_campaign(*, operator: str, reason: str) -> dict[str, object]:
     }
 
 
+def is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def canonical_sha256(value: object) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def historical_incident(
+    artifact_id: str,
+    claim_id: str,
+    incidents: tuple[dict[str, object], ...] | None = None,
+) -> dict[str, object]:
+    if incidents is None:
+        incidents = HISTORICAL_STARTUP_INCIDENTS
+    matches = [
+        incident
+        for incident in incidents
+        if incident.get("doc_id") == artifact_id
+        and incident.get("source_claim_id") == claim_id
+    ]
+    if len(matches) != 1:
+        raise TransitionError(
+            "no closed historical startup attestation matches this document and claim"
+        )
+    return matches[0]
+
+
 def new_ledger(doc: Path) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -345,7 +403,22 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
     if not isinstance(campaigns, list) or not campaigns:
         raise StateError("campaign ledger has no active campaign")
     for campaign in campaigns:
-        if not isinstance(campaign, dict) or not isinstance(campaign.get("launches"), list):
+        campaign_fields = {
+            "campaign_id",
+            "started_at",
+            "started_by",
+            "reason",
+            "launches",
+        }
+        if (
+            not isinstance(campaign, dict)
+            or set(campaign) not in (campaign_fields, campaign_fields | {"repairs"})
+            or not isinstance(campaign.get("launches"), list)
+            or (
+                "repairs" in campaign
+                and not isinstance(campaign.get("repairs"), list)
+            )
+        ):
             raise StateError("campaign ledger contains a malformed campaign")
         for index, launch in enumerate(campaign["launches"], start=1):
             if not isinstance(launch, dict):
@@ -449,12 +522,7 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                     or not isinstance(recovery.get("evidence_path"), str)
                     or not recovery.get("evidence_path")
                     or any(
-                        not isinstance(recovery.get(field), str)
-                        or len(str(recovery.get(field))) != 64
-                        or any(
-                            char not in "0123456789abcdef"
-                            for char in str(recovery.get(field))
-                        )
+                        not is_sha256(recovery.get(field))
                         for field in ("evidence_sha256", "adapter_script_sha256")
                     )
                     or not isinstance(recovery_reviewers, list)
@@ -496,6 +564,14 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                 raise StateError("non-recoverable campaign launch unexpectedly has recovery state")
     claims: dict[str, tuple[str, int, dict[str, object]]] = {}
     consumers: set[str] = set()
+    historical_repair_sources: set[str] = set()
+    ordered_launches = [
+        launch
+        for campaign in campaigns
+        if isinstance(campaign, dict)
+        for launch in campaign.get("launches", [])
+        if isinstance(launch, dict)
+    ]
     for campaign in campaigns:
         assert isinstance(campaign, dict)
         campaign_id = str(campaign.get("campaign_id"))
@@ -528,6 +604,141 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                     raise StateError("campaign replacement does not match its recovery source")
                 consumers.add(replacement_for)
             claims[claim_id] = (campaign_id, index, launch)
+        repairs = campaign.get("repairs", [])
+        assert isinstance(repairs, list)
+        for repair in repairs:
+            required_repair = {
+                "kind",
+                "repair_id",
+                "incident_id",
+                "source_claim_id",
+                "reason_code",
+                "recorded_at",
+                "source_finished_at",
+                "artifact_sha",
+                "source_protocol_sha",
+                "repair_protocol_sha",
+                "attestation",
+                "attestation_sha256",
+                "history_prefix_sha256",
+                "history_launch_count",
+                "credited_model_launches",
+            }
+            if not isinstance(repair, dict) or set(repair) != required_repair:
+                raise StateError("campaign historical repair is malformed")
+            source_claim_id = repair.get("source_claim_id")
+            source_record = claims.get(str(source_claim_id))
+            incident = repair.get("attestation")
+            incident_fields = {
+                "incident_id",
+                "issue",
+                "doc_id",
+                "source_claim_id",
+                "source_finished_at",
+                "artifact_sha",
+                "source_protocol_sha",
+                "history_launch_count",
+                "history_gross_model_launches",
+                "history_prefix_sha256",
+                "credited_model_launches",
+                "provider_stage",
+                "reviewer_count",
+                "turn_observed",
+                "legacy_classification",
+            }
+            if not isinstance(incident, dict) or set(incident) != incident_fields:
+                raise StateError(
+                    "campaign historical repair lacks its immutable attestation"
+                )
+            history_count = incident.get("history_launch_count")
+            credited_model_launches = repair.get("credited_model_launches")
+            history_prefix = (
+                ordered_launches[:history_count]
+                if type(history_count) is int and history_count >= 1
+                else []
+            )
+            source_global_index = (
+                next(
+                    (
+                        index
+                        for index, item in enumerate(ordered_launches)
+                        if source_record is not None and item is source_record[2]
+                    ),
+                    -1,
+                )
+            )
+            try:
+                uuid.UUID(str(repair.get("repair_id")))
+            except (ValueError, AttributeError):
+                raise StateError("campaign historical repair has an invalid repair_id")
+            if (
+                repair.get("kind") != "historical-startup-credit"
+                or repair.get("incident_id") != incident.get("incident_id")
+                or incident.get("doc_id") != payload.get("doc_id")
+                or repair.get("reason_code")
+                != "PROVIDER_SCHEMA_STARTUP_REJECTION"
+                or not isinstance(source_claim_id, str)
+                or source_claim_id in historical_repair_sources
+                or source_claim_id in consumers
+                or source_record is None
+                or source_record[0] != campaign_id
+                or source_record[2].get("status") != "failed"
+                or source_record[2].get("phase") != "fanout"
+                or source_record[2].get("attempt") != 1
+                or type(credited_model_launches) is not int
+                or credited_model_launches != PHASE_WEIGHT["fanout"]
+                or credited_model_launches
+                != source_record[2].get("model_launches")
+                or type(history_count) is not int
+                or history_count < 1
+                or source_global_index < 0
+                or source_global_index >= history_count
+                or source_record[2].get("finished_at")
+                != repair.get("source_finished_at")
+                or source_record[2].get("artifact_sha")
+                != repair.get("artifact_sha")
+                or source_record[2].get("protocol_sha")
+                != repair.get("source_protocol_sha")
+                or repair.get("source_protocol_sha")
+                == repair.get("repair_protocol_sha")
+                or repair.get("source_claim_id")
+                != incident.get("source_claim_id")
+                or repair.get("source_finished_at")
+                != incident.get("source_finished_at")
+                or repair.get("artifact_sha") != incident.get("artifact_sha")
+                or repair.get("source_protocol_sha")
+                != incident.get("source_protocol_sha")
+                or repair.get("credited_model_launches")
+                != incident.get("credited_model_launches")
+                or repair.get("history_launch_count") != history_count
+                or repair.get("history_prefix_sha256")
+                != incident.get("history_prefix_sha256")
+                or canonical_sha256(history_prefix)
+                != incident.get("history_prefix_sha256")
+                or sum(
+                    int(item.get("model_launches", 0))
+                    for item in history_prefix
+                )
+                != incident.get("history_gross_model_launches")
+                or repair.get("attestation_sha256")
+                != canonical_sha256(incident)
+                or not isinstance(repair.get("recorded_at"), str)
+                or not repair.get("recorded_at")
+                or any(
+                    not is_sha256(repair.get(field))
+                    for field in (
+                        "artifact_sha",
+                        "source_protocol_sha",
+                        "repair_protocol_sha",
+                        "attestation_sha256",
+                        "history_prefix_sha256",
+                    )
+                )
+            ):
+                raise StateError("campaign historical repair does not match its source")
+            historical_repair_sources.add(source_claim_id)
+    if len(historical_repair_sources) > 1:
+        raise StateError("campaign ledger contains more than one historical startup repair")
     return payload
 
 
@@ -536,7 +747,11 @@ def active_campaign(ledger: dict[str, object]) -> dict[str, object]:
     if not isinstance(campaign, dict):
         raise StateError("active campaign is malformed")
     expected = {"campaign_id", "started_at", "started_by", "reason", "launches"}
-    if set(campaign) != expected or not isinstance(campaign.get("launches"), list):
+    if (
+        set(campaign) not in (expected, expected | {"repairs"})
+        or not isinstance(campaign.get("launches"), list)
+        or ("repairs" in campaign and not isinstance(campaign.get("repairs"), list))
+    ):
         raise StateError("active campaign fields do not match schema version 1")
     return campaign
 
@@ -622,6 +837,23 @@ def next_transition(launches: list[object]) -> dict[str, object]:
         "phase": expected_phase,
         "attempt": 1,
     }
+
+
+def replacement_source(
+    launches: list[object], phase: str
+) -> dict[str, object] | None:
+    """Return the one claim whose immediately-next phase carries zero weight."""
+    transition = next_transition(launches)
+    if (
+        transition.get("kind") != "candidate"
+        or transition.get("phase") != phase
+        or transition.get("attempt") != 2
+        or not launches
+        or not isinstance(launches[-1], dict)
+        or launches[-1].get("status") != "startup-failed-recoverable"
+    ):
+        return None
+    return launches[-1]
 
 
 def validate_transition(launches: list[object], round_no: int, phase: str) -> int:
@@ -726,7 +958,7 @@ def bounded_admission_decision(
 
 
 def model_launches(campaigns: list[object]) -> int:
-    return sum(
+    gross = sum(
         0
         if launch.get("replacement_for") is not None
         else launch.get("model_launches", PHASE_WEIGHT.get(str(launch.get("phase")), 0))
@@ -735,6 +967,14 @@ def model_launches(campaigns: list[object]) -> int:
         for launch in campaign.get("launches", [])
         if isinstance(launch, dict)
     )
+    historical_credits = sum(
+        repair.get("credited_model_launches", 0)
+        for campaign in campaigns
+        if isinstance(campaign, dict)
+        for repair in campaign.get("repairs", [])
+        if isinstance(repair, dict)
+    )
+    return int(gross) - int(historical_credits)
 
 
 def verified_recovery_adapter(
@@ -764,7 +1004,7 @@ def verified_recovery_adapter(
 
 
 def load_startup_evidence(
-    evidence_raw: str, launch: dict[str, object]
+    evidence_raw: str, launch: dict[str, object], expected_artifact_id: str
 ) -> tuple[Path, dict[str, object], str]:
     state = Path(str(launch.get("state_dir"))).resolve()
     evidence = Path(evidence_raw).expanduser().resolve()
@@ -808,6 +1048,7 @@ def load_startup_evidence(
         or payload.get("classification") != "reviewer-fanout-failure"
         or payload.get("round") != launch.get("round")
         or payload.get("claim_id") != launch.get("claim_id")
+        or payload.get("artifact_id") != expected_artifact_id
         or payload.get("artifact_sha") != launch.get("artifact_sha")
     ):
         raise TransitionError("startup evidence identity does not match the claim")
@@ -843,13 +1084,16 @@ def load_startup_evidence(
             or type(provider_exit) is not int
             or provider_exit in {0, 124, 137}
             or item.get("scrubber_exit_code") != 0
+            or type(item.get("output_bytes")) is not int
             or item.get("output_bytes") != 0
+            or type(item.get("input_bytes")) is not int
             or item.get("input_bytes") != 0
             or item.get("input_parsed_json") is not False
             or item.get("turn_observed") is not False
             or type(item.get("log_bytes")) is not int
             or item.get("log_bytes") < 1
             or type(item.get("redactions")) is not int
+            or item.get("redactions") < 0
         ):
             raise TransitionError("reviewer evidence does not prove a startup rejection")
     return evidence, payload, hashlib.sha256(raw).hexdigest()
@@ -890,7 +1134,7 @@ def recover_startup(doc_raw: str, claim_id: str, evidence_raw: str) -> None:
         if unexpected:
             raise TransitionError("provider process tree is still live")
         evidence, evidence_payload, evidence_sha = load_startup_evidence(
-            evidence_raw, launch
+            evidence_raw, launch, doc_id(doc)
         )
         if launch.get("attempt") != 1:
             raise TransitionError(
@@ -925,6 +1169,125 @@ def recover_startup(doc_raw: str, claim_id: str, evidence_raw: str) -> None:
     print(
         f"CAMPAIGN STARTUP RECOVERY AUTHORIZED: CLAIM_ID={claim_id} "
         f"replacement weight={launch['model_launches']}"
+    )
+
+
+def repair_historical_startup(
+    doc_raw: str,
+    claim_id: str,
+    incidents: tuple[dict[str, object], ...] | None = None,
+) -> None:
+    """Apply one reviewed, closed attestation for a pre-recovery incident."""
+    doc = canonical_doc(doc_raw)
+    with document_lock(doc):
+        path = ledger_path(doc)
+        if not path.is_file():
+            raise UsageError(f"no campaign ledger exists for {doc}")
+        try:
+            original_payload = strict_json_loads(path.read_bytes())
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise StateError(f"campaign ledger is unreadable: {path}: {exc}") from exc
+        ledger = load_ledger(doc, create=False)
+        if not isinstance(original_payload, dict) or original_payload.get(
+            "campaigns"
+        ) != ledger.get("campaigns"):
+            raise TransitionError(
+                "historical repair requires fully materialized immutable launch history"
+            )
+        campaigns = ledger["campaigns"]
+        assert isinstance(campaigns, list)
+        incident = historical_incident(doc_id(doc), claim_id, incidents)
+        flattened: list[tuple[int, int, dict[str, object]]] = [
+            (campaign_index, launch_index, launch)
+            for campaign_index, campaign in enumerate(campaigns)
+            if isinstance(campaign, dict)
+            for launch_index, launch in enumerate(campaign.get("launches", []))
+            if isinstance(launch, dict)
+        ]
+        matches = [
+            (campaign_index, launch_index, launch)
+            for campaign_index, launch_index, launch in flattened
+            if launch.get("claim_id") == claim_id
+        ]
+        if len(matches) != 1:
+            raise UsageError(f"claim_id resolves to {len(matches)} launches")
+        campaign_index, launch_index, launch = matches[0]
+        if any(
+            isinstance(campaign, dict) and campaign.get("repairs")
+            for campaign in campaigns
+        ):
+            raise TransitionError(
+                "historical startup repair was already consumed for this ledger"
+            )
+        if any(
+            item.get("status") in NONTERMINAL_STATUSES
+            for _, _, item in flattened
+        ):
+            raise TransitionError("historical repair requires a fully terminal ledger")
+        history_count = incident.get("history_launch_count")
+        history_launches = [item for _, _, item in flattened]
+        if (
+            type(history_count) is not int
+            or history_count < 1
+            or len(history_launches) != history_count
+            or canonical_sha256(history_launches)
+            != incident.get("history_prefix_sha256")
+            or sum(int(item.get("model_launches", 0)) for item in history_launches)
+            != incident.get("history_gross_model_launches")
+            or launch.get("status") != "failed"
+            or launch.get("phase") != "fanout"
+            or launch.get("attempt") != 1
+            or launch.get("model_launches") != PHASE_WEIGHT["fanout"]
+            or launch.get("claim_id") != incident.get("source_claim_id")
+            or launch.get("finished_at") != incident.get("source_finished_at")
+            or launch.get("artifact_sha") != incident.get("artifact_sha")
+            or launch.get("protocol_sha") != incident.get("source_protocol_sha")
+            or launch.get("model_launches")
+            != incident.get("credited_model_launches")
+            or incident.get("provider_stage")
+            != "codex-output-schema-validation-before-reviewer-turn"
+            or incident.get("reviewer_count") != 3
+            or incident.get("turn_observed") is not False
+            or incident.get("legacy_classification") != "provider-exit"
+        ):
+            raise TransitionError(
+                "historical ledger does not match its closed incident attestation"
+            )
+        if any(
+            item.get("replacement_for") == claim_id for _, _, item in flattened
+        ):
+            raise TransitionError("startup recovery for this claim was already consumed")
+        repair_protocol_sha = protocol_sha()
+        if launch.get("protocol_sha") == repair_protocol_sha:
+            raise TransitionError(
+                "historical repair requires a changed review protocol"
+            )
+        campaign = campaigns[campaign_index]
+        assert isinstance(campaign, dict)
+        repairs = campaign.setdefault("repairs", [])
+        assert isinstance(repairs, list)
+        repair = {
+            "kind": "historical-startup-credit",
+            "repair_id": str(uuid.uuid4()),
+            "incident_id": incident["incident_id"],
+            "source_claim_id": claim_id,
+            "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+            "recorded_at": now(),
+            "source_finished_at": launch["finished_at"],
+            "artifact_sha": launch["artifact_sha"],
+            "source_protocol_sha": launch["protocol_sha"],
+            "repair_protocol_sha": repair_protocol_sha,
+            "attestation": incident,
+            "attestation_sha256": canonical_sha256(incident),
+            "history_prefix_sha256": incident["history_prefix_sha256"],
+            "history_launch_count": history_count,
+            "credited_model_launches": launch["model_launches"],
+        }
+        repairs.append(repair)
+        atomic_json(ledger_path(doc), ledger)
+    print(
+        f"CAMPAIGN HISTORICAL STARTUP REPAIR RECORDED: CLAIM_ID={claim_id} "
+        f"REPAIR_ID={repair['repair_id']} credit={repair['credited_model_launches']}"
     )
 
 
@@ -981,11 +1344,9 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
             }
         campaign_used = 0 if rollover_available else model_launches([campaign])
         replacement = (
-            last
-            if isinstance(last, dict)
-            and last.get("status") == "startup-failed-recoverable"
-            and transition.get("attempt") == 2
-            else None
+            None
+            if rollover_available
+            else replacement_source(launches, str(transition["phase"]))
         )
         admission = bounded_admission_decision(
             campaign_used,
@@ -1133,14 +1494,7 @@ def claim(
         campaign_used = model_launches([campaign])
         total_used = model_launches(campaigns)
         global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
-        replacement = (
-            launches[-1]
-            if launches
-            and isinstance(launches[-1], dict)
-            and launches[-1].get("status") == "startup-failed-recoverable"
-            and attempt == 2
-            else None
-        )
+        replacement = replacement_source(launches, phase)
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,
@@ -1503,6 +1857,9 @@ def parser() -> argparse.ArgumentParser:
     recover_parser.add_argument("doc")
     recover_parser.add_argument("claim_id")
     recover_parser.add_argument("evidence")
+    historical_parser = commands.add_parser("repair-historical-startup")
+    historical_parser.add_argument("doc")
+    historical_parser.add_argument("claim_id")
     status_parser = commands.add_parser("claim-status")
     status_parser.add_argument("doc")
     status_parser.add_argument("claim_id")
@@ -1536,6 +1893,8 @@ def main() -> int:
             finish(args.doc, args.claim_id, args.status)
         elif args.command == "recover-startup":
             recover_startup(args.doc, args.claim_id, args.evidence)
+        elif args.command == "repair-historical-startup":
+            repair_historical_startup(args.doc, args.claim_id)
         elif args.command == "claim-status":
             claim_status(args.doc, args.claim_id)
         elif args.command == "cancel-revision":
