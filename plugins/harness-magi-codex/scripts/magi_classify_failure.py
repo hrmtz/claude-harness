@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import jsonschema
@@ -29,6 +30,43 @@ def load_scrub_meta(path: Path) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
+def codex_log_observation(log: Path) -> tuple[bool, bool]:
+    """Return (schema refusal signature, substantive JSONL item observed)."""
+    try:
+        raw = log.read_bytes()
+    except OSError:
+        return False, True
+    if len(raw) > 65536:
+        return False, True
+    text = raw.decode("utf-8", errors="replace")
+    signatures = (
+        r"(?m)^(?:error:\s*)?invalid_json_schema:.*"
+        r"(?:not permitted|required|additionalProperties)",
+        r"(?m)^Error:.*Invalid schema for response_format",
+    )
+    signature = any(
+        re.search(pattern, text, re.IGNORECASE | re.DOTALL) for pattern in signatures
+    )
+    turn_observed = False
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or not str(event.get("type", "")).startswith("item."):
+            continue
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") in {
+            "agent_message",
+            "reasoning",
+            "command_execution",
+            "mcp_tool_call",
+            "web_search",
+        }:
+            turn_observed = True
+    return signature, turn_observed
+
+
 def classify(
     *,
     output: Path,
@@ -46,6 +84,7 @@ def classify(
     validator_error: Path | None = None,
 ) -> dict[str, object]:
     meta = load_scrub_meta(scrub_meta)
+    schema_refusal, turn_observed = codex_log_observation(log)
     result: dict[str, object] = {
         "reviewer": reviewer,
         "round": round_number,
@@ -57,6 +96,7 @@ def classify(
         "input_bytes": meta.get("input_bytes", 0),
         "input_parsed_json": meta.get("parsed_json", False),
         "redactions": meta.get("redactions", 0),
+        "turn_observed": turn_observed,
     }
     if not status_valid:
         result["classification"] = "status-missing-or-invalid"
@@ -66,6 +106,16 @@ def classify(
         return result
     if provider_exit in {124, 137}:
         result["classification"] = "provider-timeout"
+        return result
+    if (
+        provider_exit != 0
+        and result["output_bytes"] == 0
+        and result["input_bytes"] == 0
+        and meta.get("parsed_json") is False
+        and schema_refusal
+        and not turn_observed
+    ):
+        result["classification"] = "provider-schema-startup-rejection"
         return result
     if provider_exit != 0:
         result["classification"] = "provider-exit"

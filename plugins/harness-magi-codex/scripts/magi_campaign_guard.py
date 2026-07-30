@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import signal
+import stat
 import sys
 import tempfile
 import time
@@ -54,6 +55,7 @@ TERMINAL_STATUSES = {
     "success",
     "failed",
     "abandoned",
+    "startup-failed-recoverable",
     "superseded-by-requirement-revision",
 }
 NONTERMINAL_STATUSES = {"running", "cancellation_in_progress"}
@@ -172,6 +174,23 @@ def matching_process(identity: dict[str, object]) -> bool:
         and current["start_ticks"] == start_ticks
         and current["state"] != "Z"
     )
+
+
+def process_cmdline(pid: int) -> list[str]:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    except OSError as exc:
+        raise StateError(f"cannot inspect process {pid} command line: {exc}") from exc
+    try:
+        return [
+            field.decode("utf-8")
+            for field in raw.rstrip(b"\0").split(b"\0")
+            if field
+        ]
+    except UnicodeDecodeError as exc:
+        raise StateError(f"process {pid} command line is not UTF-8") from exc
 
 
 def process_snapshot() -> dict[int, dict[str, object]]:
@@ -403,6 +422,112 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                     or not isinstance(cancellation.get("inventory"), list)
                 ):
                     raise StateError("campaign launch has malformed cancellation state")
+            recovery = launch.get("recovery")
+            if launch.get("status") == "startup-failed-recoverable":
+                required_recovery = {
+                    "kind",
+                    "reason_code",
+                    "requested_at",
+                    "evidence_path",
+                    "evidence_sha256",
+                    "adapter_script_sha256",
+                    "process_cleanup",
+                    "reviewers",
+                }
+                recovery_reviewers = (
+                    recovery.get("reviewers") if isinstance(recovery, dict) else None
+                )
+                if (
+                    not isinstance(recovery, dict)
+                    or set(recovery) != required_recovery
+                    or recovery.get("kind") != "claim-scoped-credit"
+                    or recovery.get("reason_code")
+                    != "PROVIDER_SCHEMA_STARTUP_REJECTION"
+                    or recovery.get("process_cleanup") != "verified-no-descendants"
+                    or not isinstance(recovery.get("requested_at"), str)
+                    or not recovery.get("requested_at")
+                    or not isinstance(recovery.get("evidence_path"), str)
+                    or not recovery.get("evidence_path")
+                    or any(
+                        not isinstance(recovery.get(field), str)
+                        or len(str(recovery.get(field))) != 64
+                        or any(
+                            char not in "0123456789abcdef"
+                            for char in str(recovery.get(field))
+                        )
+                        for field in ("evidence_sha256", "adapter_script_sha256")
+                    )
+                    or not isinstance(recovery_reviewers, list)
+                    or len(recovery_reviewers) != 3
+                    or {
+                        item.get("reviewer")
+                        for item in recovery_reviewers
+                        if isinstance(item, dict)
+                    }
+                    not in (
+                        {"MELCHIOR", "BALTHASAR", "CASPAR"},
+                        {"HORNET", "GNAT", "WASP"},
+                    )
+                    or any(
+                        not isinstance(item, dict)
+                        or set(item)
+                        != {
+                            "reviewer",
+                            "classification",
+                            "provider_exit_code",
+                            "output_bytes",
+                            "input_bytes",
+                            "turn_observed",
+                        }
+                        or item.get("classification")
+                        != "provider-schema-startup-rejection"
+                        or type(item.get("provider_exit_code")) is not int
+                        or item.get("provider_exit_code") in {0, 124, 137}
+                        or type(item.get("output_bytes")) is not int
+                        or item.get("output_bytes") != 0
+                        or type(item.get("input_bytes")) is not int
+                        or item.get("input_bytes") != 0
+                        or item.get("turn_observed") is not False
+                        for item in recovery_reviewers
+                    )
+                ):
+                    raise StateError("recoverable campaign launch has malformed recovery state")
+            elif recovery is not None:
+                raise StateError("non-recoverable campaign launch unexpectedly has recovery state")
+    claims: dict[str, tuple[str, int, dict[str, object]]] = {}
+    consumers: set[str] = set()
+    for campaign in campaigns:
+        assert isinstance(campaign, dict)
+        campaign_id = str(campaign.get("campaign_id"))
+        launches = campaign["launches"]
+        assert isinstance(launches, list)
+        for index, launch in enumerate(launches):
+            assert isinstance(launch, dict)
+            claim_id = str(launch["claim_id"])
+            if claim_id in claims:
+                raise StateError("campaign ledger contains a duplicate claim_id")
+            replacement_for = launch.get("replacement_for")
+            if replacement_for is not None:
+                if not isinstance(replacement_for, str) or replacement_for in consumers:
+                    raise StateError("campaign replacement credit is duplicated or malformed")
+                source_record = claims.get(replacement_for)
+                if source_record is None:
+                    raise StateError("campaign replacement source does not precede its consumer")
+                source_campaign, source_index, source = source_record
+                if (
+                    source_campaign != campaign_id
+                    or source_index + 1 != index
+                    or source.get("status") != "startup-failed-recoverable"
+                    or source.get("attempt") != 1
+                    or launch.get("attempt") != 2
+                    or any(
+                        source.get(field) != launch.get(field)
+                        for field in ("round", "phase", "artifact_sha", "model_launches")
+                    )
+                ):
+                    raise StateError("campaign replacement does not match its recovery source")
+                consumers.add(replacement_for)
+            claims[claim_id] = (campaign_id, index, launch)
     return payload
 
 
@@ -473,7 +598,7 @@ def next_transition(launches: list[object]) -> dict[str, object]:
             "attempt": same_attempts,
             "reason": "requirement-revision supersession requires a changed artifact",
         }
-    if status in {"failed", "abandoned"}:
+    if status in {"failed", "abandoned", "startup-failed-recoverable"}:
         if same_attempts >= 2:
             return {
                 "kind": "transition-blocked",
@@ -531,9 +656,14 @@ def validate_transition(launches: list[object], round_no: int, phase: str) -> in
 
 
 def admission_decision(
-    total_used: int, ceiling: int, phase: str, *, scope: str = "global campaign history"
+    total_used: int,
+    ceiling: int,
+    phase: str,
+    *,
+    launch_weight: int | None = None,
+    scope: str = "global campaign history",
 ) -> dict[str, object]:
-    weight = PHASE_WEIGHT[phase]
+    weight = PHASE_WEIGHT[phase] if launch_weight is None else launch_weight
     reserve = FINAL_XFAMILY_RESERVE if phase in {"fanout", "targeted"} else 0
     arithmetic = kernel.launch_affordability(
         total_used,
@@ -563,15 +693,20 @@ def bounded_admission_decision(
     total_used: int,
     global_ceiling: int,
     phase: str,
+    *,
+    launch_weight: int | None = None,
 ) -> dict[str, object]:
     """Require both the per-campaign allowance and the task-global fuse."""
     campaign = admission_decision(
         campaign_used,
         campaign_ceiling,
         phase,
+        launch_weight=launch_weight,
         scope="active campaign",
     )
-    global_history = admission_decision(total_used, global_ceiling, phase)
+    global_history = admission_decision(
+        total_used, global_ceiling, phase, launch_weight=launch_weight
+    )
     affordable = bool(campaign["affordable"]) and bool(global_history["affordable"])
     if not campaign["affordable"]:
         reason = str(campaign["reason"])
@@ -592,11 +727,204 @@ def bounded_admission_decision(
 
 def model_launches(campaigns: list[object]) -> int:
     return sum(
-        launch.get("model_launches", PHASE_WEIGHT.get(str(launch.get("phase")), 0))
+        0
+        if launch.get("replacement_for") is not None
+        else launch.get("model_launches", PHASE_WEIGHT.get(str(launch.get("phase")), 0))
         for campaign in campaigns
         if isinstance(campaign, dict)
         for launch in campaign.get("launches", [])
         if isinstance(launch, dict)
+    )
+
+
+def verified_recovery_adapter(
+    owner: dict[str, object], phase: str
+) -> tuple[Path, str]:
+    """Bind startup credit to the closed, official fanout adapter process."""
+    if phase not in {"fanout", "targeted"}:
+        raise TransitionError("startup credit is only supported for Codex fanout")
+    pid = owner.get("pid")
+    if type(pid) is not int or not matching_process(owner):
+        raise TransitionError("claim owner is not live with its registered identity")
+    cmdline = process_cmdline(pid)
+    if len(cmdline) < 2 or Path(cmdline[0]).name not in {"bash", "sh"}:
+        raise TransitionError("claim owner is not the official shell adapter")
+    if cmdline[1] == "-c":
+        raise TransitionError("inline shell owners cannot request startup credit")
+    candidate = Path(cmdline[1]).expanduser().resolve()
+    expected = Path(__file__).resolve().with_name("magi_fanout_codex.sh")
+    try:
+        candidate_sha = sha256_file(candidate)
+        expected_sha = sha256_file(expected)
+    except OSError as exc:
+        raise TransitionError(f"cannot verify recovery adapter identity: {exc}") from exc
+    if candidate_sha != expected_sha:
+        raise TransitionError("claim owner does not match the closed fanout adapter")
+    return candidate, candidate_sha
+
+
+def load_startup_evidence(
+    evidence_raw: str, launch: dict[str, object]
+) -> tuple[Path, dict[str, object], str]:
+    state = Path(str(launch.get("state_dir"))).resolve()
+    evidence = Path(evidence_raw).expanduser().resolve()
+    expected_name = (
+        f"round_{launch.get('round')}_fanout.{launch.get('claim_id')}.FAILED.json"
+    )
+    if evidence.parent != state or evidence.name != expected_name:
+        raise TransitionError("startup evidence is not the claim-scoped failure artifact")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(evidence, flags)
+    except OSError as exc:
+        raise TransitionError(f"cannot open startup evidence: {exc}") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size < 1 or info.st_size > 65536:
+            raise TransitionError("startup evidence is not a bounded regular file")
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read(65537)
+    finally:
+        os.close(fd)
+    try:
+        payload = strict_json_loads(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise TransitionError(f"startup evidence is invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise TransitionError("startup evidence must be an object")
+    expected_top = {
+        "status",
+        "classification",
+        "round",
+        "claim_id",
+        "artifact_id",
+        "artifact_sha",
+        "reviewers",
+    }
+    if set(payload) != expected_top:
+        raise TransitionError("startup evidence fields do not match the closed contract")
+    if (
+        payload.get("status") != "failed"
+        or payload.get("classification") != "reviewer-fanout-failure"
+        or payload.get("round") != launch.get("round")
+        or payload.get("claim_id") != launch.get("claim_id")
+        or payload.get("artifact_sha") != launch.get("artifact_sha")
+    ):
+        raise TransitionError("startup evidence identity does not match the claim")
+    reviewers = payload.get("reviewers")
+    if not isinstance(reviewers, list) or len(reviewers) != 3:
+        raise TransitionError("startup evidence must cover exactly three reviewers")
+    names = {item.get("reviewer") for item in reviewers if isinstance(item, dict)}
+    if names not in (
+        {"MELCHIOR", "BALTHASAR", "CASPAR"},
+        {"HORNET", "GNAT", "WASP"},
+    ):
+        raise TransitionError("startup evidence reviewer set is invalid")
+    required_item = {
+        "reviewer",
+        "round",
+        "classification",
+        "provider_exit_code",
+        "scrubber_exit_code",
+        "output_bytes",
+        "log_bytes",
+        "input_bytes",
+        "input_parsed_json",
+        "redactions",
+        "turn_observed",
+    }
+    for item in reviewers:
+        if not isinstance(item, dict) or set(item) != required_item:
+            raise TransitionError("startup reviewer evidence fields are invalid")
+        provider_exit = item.get("provider_exit_code")
+        if (
+            item.get("round") != launch.get("round")
+            or item.get("classification") != "provider-schema-startup-rejection"
+            or type(provider_exit) is not int
+            or provider_exit in {0, 124, 137}
+            or item.get("scrubber_exit_code") != 0
+            or item.get("output_bytes") != 0
+            or item.get("input_bytes") != 0
+            or item.get("input_parsed_json") is not False
+            or item.get("turn_observed") is not False
+            or type(item.get("log_bytes")) is not int
+            or item.get("log_bytes") < 1
+            or type(item.get("redactions")) is not int
+        ):
+            raise TransitionError("reviewer evidence does not prove a startup rejection")
+    return evidence, payload, hashlib.sha256(raw).hexdigest()
+
+
+def recover_startup(doc_raw: str, claim_id: str, evidence_raw: str) -> None:
+    """Credit one claim only when the closed adapter proves no reviewer turn began."""
+    doc = canonical_doc(doc_raw)
+    with document_lock(doc):
+        ledger = load_ledger(doc, create=False)
+        matches = [
+            launch
+            for campaign in ledger["campaigns"]  # type: ignore[index]
+            if isinstance(campaign, dict)
+            for launch in campaign.get("launches", [])
+            if isinstance(launch, dict) and launch.get("claim_id") == claim_id
+        ]
+        if len(matches) != 1:
+            raise UsageError(f"claim_id resolves to {len(matches)} launches")
+        launch = matches[0]
+        if launch.get("status") == "startup-failed-recoverable":
+            print(f"CAMPAIGN STARTUP CREDIT CONFIRMED: CLAIM_ID={claim_id}")
+            return
+        if launch.get("status") != "running":
+            raise TransitionError(
+                f"claim {claim_id} is not running and cannot receive startup credit"
+            )
+        owner = launch.get("owner")
+        if not isinstance(owner, dict) or owner.get("pid") != os.getppid():
+            raise TransitionError("startup credit caller is not the registered claim owner")
+        _, adapter_sha = verified_recovery_adapter(owner, str(launch.get("phase")))
+        live_tree = owned_processes(owner)
+        unexpected = [
+            item
+            for item in live_tree
+            if item.get("pid") not in {owner.get("pid"), os.getpid()}
+        ]
+        if unexpected:
+            raise TransitionError("provider process tree is still live")
+        evidence, evidence_payload, evidence_sha = load_startup_evidence(
+            evidence_raw, launch
+        )
+        if launch.get("attempt") != 1:
+            raise TransitionError(
+                "only the first attempt can authorize one replacement launch"
+            )
+        launch["status"] = "startup-failed-recoverable"
+        launch["finished_at"] = now()
+        launch["recovery"] = {
+            "kind": "claim-scoped-credit",
+            "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+            "requested_at": now(),
+            "evidence_path": str(evidence),
+            "evidence_sha256": evidence_sha,
+            "adapter_script_sha256": adapter_sha,
+            "process_cleanup": "verified-no-descendants",
+            "reviewers": [
+                {
+                    key: item[key]
+                    for key in (
+                        "reviewer",
+                        "classification",
+                        "provider_exit_code",
+                        "output_bytes",
+                        "input_bytes",
+                        "turn_observed",
+                    )
+                }
+                for item in evidence_payload["reviewers"]  # type: ignore[index]
+            ],
+        }
+        atomic_json(ledger_path(doc), ledger)
+    print(
+        f"CAMPAIGN STARTUP RECOVERY AUTHORIZED: CLAIM_ID={claim_id} "
+        f"replacement weight={launch['model_launches']}"
     )
 
 
@@ -620,11 +948,20 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
         campaign_ceiling = base_ceiling()
         global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
         last = launches[-1] if launches else None
+        current_artifact_sha = file_sha(doc)
+        current_protocol_sha = protocol_sha()
         rollover_available = (
             isinstance(last, dict)
-            and last.get("artifact_sha") != file_sha(doc)
+            and last.get("artifact_sha") != current_artifact_sha
             and last.get("status") not in NONTERMINAL_STATUSES
-            and may_rollover(ledger, campaign, doc, 1, "fanout")
+            and may_rollover(
+                ledger,
+                campaign,
+                1,
+                "fanout",
+                artifact_sha=current_artifact_sha,
+                review_protocol_sha=current_protocol_sha,
+            )
         )
         if rollover_available:
             transition = {
@@ -643,12 +980,20 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
                 "campaign_ceiling": campaign_ceiling,
             }
         campaign_used = 0 if rollover_available else model_launches([campaign])
+        replacement = (
+            last
+            if isinstance(last, dict)
+            and last.get("status") == "startup-failed-recoverable"
+            and transition.get("attempt") == 2
+            else None
+        )
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,
             total_used,
             global_ceiling,
             str(transition["phase"]),
+            launch_weight=0 if replacement is not None else None,
         )
         return {
             **transition,
@@ -661,7 +1006,13 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
 
 
 def may_rollover(
-    ledger: dict[str, object], campaign: dict[str, object], doc: Path, round_no: int, phase: str
+    ledger: dict[str, object],
+    campaign: dict[str, object],
+    round_no: int,
+    phase: str,
+    *,
+    artifact_sha: str,
+    review_protocol_sha: str,
 ) -> bool:
     campaigns = ledger["campaigns"]
     assert isinstance(campaigns, list)
@@ -675,12 +1026,12 @@ def may_rollover(
     if last.get("status") in NONTERMINAL_STATUSES:
         return False
     if last.get("status") == "superseded-by-requirement-revision":
-        return phase == "fanout" and last.get("artifact_sha") != file_sha(doc)
+        return phase == "fanout" and last.get("artifact_sha") != artifact_sha
     if phase == "targeted":
-        return last.get("artifact_sha") != file_sha(doc)
+        return last.get("artifact_sha") != artifact_sha
     return (
-        last.get("artifact_sha") != file_sha(doc)
-        or last.get("protocol_sha") != protocol_sha()
+        last.get("artifact_sha") != artifact_sha
+        or last.get("protocol_sha") != review_protocol_sha
     )
 
 
@@ -714,9 +1065,14 @@ def claim(
     state = Path(state_raw).expanduser().resolve()
     state.mkdir(parents=True, exist_ok=True)
     with document_lock(doc):
-        if expected_artifact_sha is not None and expected_artifact_sha != file_sha(doc):
+        current_artifact_sha = file_sha(doc)
+        if (
+            expected_artifact_sha is not None
+            and expected_artifact_sha != current_artifact_sha
+        ):
             raise TransitionError("claim artifact changed after its authorization decision")
         ledger = load_ledger(doc, create=True)
+        current_protocol_sha = protocol_sha()
         nonterminal = [
             launch
             for existing_campaign in ledger["campaigns"]  # type: ignore[index]
@@ -736,12 +1092,34 @@ def claim(
         assert isinstance(campaigns, list)
         transition_error = None
         planned_rollover = False
-        try:
-            attempt = validate_transition(launches, round_no, phase)
-        except TransitionError as exc:
-            transition_error = exc
+        last_launch = launches[-1] if launches else None
+        recovery_revision_changed = (
+            isinstance(last_launch, dict)
+            and last_launch.get("status") == "startup-failed-recoverable"
+            and last_launch.get("artifact_sha") != current_artifact_sha
+        )
+        if recovery_revision_changed:
+            transition_error = TransitionError(
+                "startup replacement belongs to the prior artifact revision"
+            )
+        else:
+            try:
+                attempt = validate_transition(launches, round_no, phase)
+            except TransitionError as exc:
+                transition_error = exc
         if transition_error is not None:
-            if not may_rollover(ledger, campaign, doc, round_no, phase):
+            if not may_rollover(
+                ledger,
+                campaign,
+                round_no,
+                phase,
+                artifact_sha=current_artifact_sha,
+                review_protocol_sha=current_protocol_sha,
+            ):
+                if recovery_revision_changed:
+                    raise TransitionError(
+                        "changed artifact after startup failure requires round 1 fanout"
+                    )
                 raise transition_error
             campaign = new_campaign(
                 operator="automatic-rollover",
@@ -755,20 +1133,30 @@ def claim(
         campaign_used = model_launches([campaign])
         total_used = model_launches(campaigns)
         global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
+        replacement = (
+            launches[-1]
+            if launches
+            and isinstance(launches[-1], dict)
+            and launches[-1].get("status") == "startup-failed-recoverable"
+            and attempt == 2
+            else None
+        )
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,
             total_used,
             global_ceiling,
             phase,
+            launch_weight=0 if replacement is not None else None,
         )
         if not admission["affordable"]:
             raise BudgetDenied(str(admission["reason"]))
-        weight = int(admission["weight"])
+        charged_weight = int(admission["weight"])
+        weight = PHASE_WEIGHT[phase]
         if planned_rollover:
             campaigns.append(campaign)
         claim_id = str(uuid.uuid4())
-        claim_protocol_sha = protocol_sha()
+        claim_protocol_sha = current_protocol_sha
         launch_payload = {
             "claim_id": claim_id,
             "sequence": len(launches) + 1,
@@ -777,19 +1165,21 @@ def claim(
             "attempt": attempt,
             "model_launches": weight,
             "state_dir": str(state),
-            "artifact_sha": file_sha(doc),
+            "artifact_sha": current_artifact_sha,
             "protocol_sha": claim_protocol_sha,
             "claimed_at": now(),
             "status": "running",
         }
         if owner is not None:
             launch_payload["owner"] = owner
+        if replacement is not None:
+            launch_payload["replacement_for"] = replacement["claim_id"]
         launches.append(launch_payload)
         atomic_json(ledger_path(doc), ledger)
     print(
         f"CAMPAIGN CLAIMED: {campaign['campaign_id']} global model launches "
-        f"{total_used + weight}/{global_ceiling}, "
-        f"campaign model launches {campaign_used + weight}/{campaign_ceiling}, "
+        f"{total_used + charged_weight}/{global_ceiling}, "
+        f"campaign model launches {campaign_used + charged_weight}/{campaign_ceiling}, "
         f"round {round_no} {phase}, attempt {attempt}; "
         f"PROTOCOL_SHA={claim_protocol_sha}; CLAIM_ID={claim_id}"
     )
@@ -822,6 +1212,12 @@ def finish(doc_raw: str, claim_id: str, status: str) -> None:
             raise TransitionError(
                 f"claim {claim_id} is under requirement-revision cancellation"
             )
+        if launch.get("status") == "startup-failed-recoverable" and status == "failed":
+            print(
+                f"CAMPAIGN FINISH CONFIRMED: CLAIM_ID={claim_id} "
+                "status=startup-failed-recoverable"
+            )
+            return
         if launch.get("status") != "running":
             raise TransitionError(
                 f"claim {claim_id} is already terminal with status {launch.get('status')!r}"
@@ -1103,6 +1499,10 @@ def parser() -> argparse.ArgumentParser:
     finish_parser.add_argument("doc")
     finish_parser.add_argument("claim_id")
     finish_parser.add_argument("status", choices=("success", "failed"))
+    recover_parser = commands.add_parser("recover-startup")
+    recover_parser.add_argument("doc")
+    recover_parser.add_argument("claim_id")
+    recover_parser.add_argument("evidence")
     status_parser = commands.add_parser("claim-status")
     status_parser.add_argument("doc")
     status_parser.add_argument("claim_id")
@@ -1134,6 +1534,8 @@ def main() -> int:
             )
         elif args.command == "finish":
             finish(args.doc, args.claim_id, args.status)
+        elif args.command == "recover-startup":
+            recover_startup(args.doc, args.claim_id, args.evidence)
         elif args.command == "claim-status":
             claim_status(args.doc, args.claim_id)
         elif args.command == "cancel-revision":

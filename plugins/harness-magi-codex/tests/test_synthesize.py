@@ -42,6 +42,9 @@ def finding(reviewer: str, artifact_id: str, artifact_sha: str, severity: str) -
                 "missed_angle": reviewer,
                 "subsystem": "synthesis-fixture",
                 "root_cause_id": f"fixture-{reviewer.lower()}",
+                "affected_invariant": "lossless synthesis",
+                "changes_design_invariant": False,
+                "relation_to_prior": "none",
             }
         ],
     }

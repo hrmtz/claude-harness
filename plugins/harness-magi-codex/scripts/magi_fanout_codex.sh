@@ -221,7 +221,8 @@ cli_help="$(timeout 10 codex exec --help 2>&1)" || cli_help_rc=$?
 if [ "$cli_help_rc" -ne 0 ] \
     || ! grep -q -- '--output-schema' <<<"$cli_help" \
     || ! grep -q -- '--output-last-message' <<<"$cli_help" \
-    || ! grep -q -- '--ephemeral' <<<"$cli_help"
+    || ! grep -q -- '--ephemeral' <<<"$cli_help" \
+    || ! grep -q -- '--json' <<<"$cli_help"
 then
     preflight_tmp="$(mktemp "$OUT_DIR/.round_${ROUND}_fanout.PREFLIGHT_FAILED.XXXXXX")"
     if ! python3 - "$preflight_tmp" "$ROUND" "$ARTIFACT_ID" "$ARTIFACT_SHA" "$cli_help_rc" <<'PY'
@@ -573,6 +574,7 @@ for p in "${PERSONAS[@]}"; do
       "$CROSS_CLI_GUARD" --isolate-tmux -- \
         timeout --signal=TERM --kill-after=2s "$FANOUT_TIMEOUT_S" \
         codex exec --skip-git-repo-check -s read-only --ephemeral \
+        --json \
         -C "$TARGET_ROOT" \
         --output-schema "$PROVIDER_SCHEMA_FILE" \
         -o "$raw_fifo" \
@@ -676,7 +678,7 @@ allowed = {
     "reviewer", "round", "classification", "provider_exit_code",
     "scrubber_exit_code", "output_bytes", "log_bytes", "input_bytes",
     "input_parsed_json", "redactions", "identity_field", "diagnostic",
-    "diagnostic_truncated", "diagnostic_unavailable",
+    "diagnostic_truncated", "diagnostic_unavailable", "turn_observed",
 }
 reviewers = []
 for path in sys.argv[6:]:
@@ -697,10 +699,38 @@ PY
         echo "fanout: could not aggregate bounded reviewer diagnostics" >&2
         exit 1
     fi
-    if ! mv -- "$failure_stage" "$OUT_DIR/round_${ROUND}_fanout.${CLAIM_ID}.FAILED.json"; then
+    failure_out="$OUT_DIR/round_${ROUND}_fanout.${CLAIM_ID}.FAILED.json"
+    if ! mv -- "$failure_stage" "$failure_out"; then
         rm -f -- "$failure_stage"
         echo "fanout: could not publish bounded reviewer diagnostics" >&2
         exit 1
+    fi
+    startup_only=0
+    if python3 - "$failure_out" <<'PY'
+import json, pathlib, sys
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+reviewers = payload.get("reviewers")
+raise SystemExit(
+    0 if isinstance(reviewers, list) and len(reviewers) == 3
+    and all(
+        isinstance(item, dict)
+        and item.get("classification") == "provider-schema-startup-rejection"
+        for item in reviewers
+    )
+    else 1
+)
+PY
+    then
+        startup_only=1
+    fi
+    if [ "$startup_only" -eq 1 ]; then
+        if python3 "$GUARD" recover-startup "$DOC_PATH" "$CLAIM_ID" "$failure_out" \
+                >/dev/null; then
+            CLAIM_FINISHED=1
+            echo "fanout: startup-only schema rejection authorized one replacement attempt" >&2
+        else
+            echo "fanout: startup recovery denied; claim remains charged" >&2
+        fi
     fi
     echo "fanout: clearing claim-scoped staging for failed round $ROUND" >&2
     exit $rc

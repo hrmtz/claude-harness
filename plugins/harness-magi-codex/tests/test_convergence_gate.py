@@ -888,7 +888,7 @@ class ConvergenceGateTest(unittest.TestCase):
 import json, re, sys
 args = sys.argv[1:]
 if args == ["exec", "--help"]:
-    print("--output-schema --output-last-message --ephemeral")
+    print("--output-schema --output-last-message --ephemeral --json")
     raise SystemExit(0)
 out = args[args.index("-o") + 1]
 prompt = sys.stdin.read()

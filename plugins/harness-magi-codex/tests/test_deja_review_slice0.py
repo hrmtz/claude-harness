@@ -197,7 +197,7 @@ class Slice0IntegrationTest(unittest.TestCase):
         self.assertTrue(any(item["stage"] == "normalize" and item["completed"] == 1 for item in progress))
         self.assertTrue(any(item["stage"] == "publish" and item["completed"] == 5 for item in progress))
 
-    def test_optional_convergence_fields_may_be_absent_on_nonblocking_findings(self) -> None:
+    def test_missing_convergence_fields_fail_closed_on_nonblocking_findings(self) -> None:
         low = finding("LOW-OPTIONAL", severity="LOW")
         for field in (
             "subsystem",
@@ -210,15 +210,11 @@ class Slice0IntegrationTest(unittest.TestCase):
         write_json(self.source, artifact(low))
 
         result = self.prepare("optional-convergence")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        record = json.loads(
-            (self.campaign("optional-convergence") / "normalized-findings.jsonl").read_text()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "source artifact cannot be safely decoded or validated",
+            result.stderr,
         )
-        self.assertNotIn("subsystem", record)
-        self.assertNotIn("root_cause_id", record)
-        self.assertNotIn("affected_invariant", record)
-        self.assertNotIn("changes_design_invariant", record)
-        self.assertNotIn("relation_to_prior", record)
 
     def test_changed_source_on_completed_campaign_returns_four(self) -> None:
         self.assertEqual(self.prepare().returncode, 0)
