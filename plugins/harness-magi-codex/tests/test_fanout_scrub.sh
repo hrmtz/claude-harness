@@ -14,7 +14,7 @@ DOC="$TMP/design.md"; printf '%s\n' 'a test design' > "$DOC"
 cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then
-  printf '%s\n' '--output-schema --output-last-message --ephemeral'
+  printf '%s\n' '--output-schema --output-last-message --ephemeral --json'
   exit 0
 fi
 if [ -n "${STUB_TMUX_LOG:-}" ]; then
@@ -34,6 +34,10 @@ done
 [ -z "${STUB_CALLED:-}" ] || printf 'called\n' >> "$STUB_CALLED"
 [ -z "$schema" ] || ! grep -q '"allOf"' "$schema" || {
   printf '%s\n' "invalid_json_schema: In context=('properties', 'findings', 'items'), 'allOf' is not permitted." >&2
+  exit 1
+}
+[ -z "${STUB_SCHEMA_REJECT:-}" ] || {
+  printf '%s\n' "invalid_json_schema: In context=('properties', 'findings', 'items'), 'required' is invalid." >&2
   exit 1
 }
 [ -n "$out" ] || exit 64
@@ -63,20 +67,20 @@ pass=0; fail=0
 ok()  { echo "  ok   - $1"; pass=$((pass+1)); }
 bad() { echo "  FAIL - $1"; fail=$((fail+1)); }
 
-# Reproduce the provider's exact rejection deterministically.  The adapter must discover it before
-# campaign claim (and before provider invocation), leaving usage and the xfamily reserve untouched.
+# The strict provider schema, not the backward-compatible local schema, must pass Codex preflight.
+# Live provider drift is covered below at the claim-scoped recovery boundary.
 INCOMPAT_DOC="$TMP/incompatible.md"; printf '%s\n' 'unsupported schema fixture' > "$INCOMPAT_DOC"
 INCOMPAT_OUT="$TMP/incompatible-out"; mkdir -p "$INCOMPAT_OUT"
 python3 "$HERE/../scripts/magi_codex_schema_preflight.py" \
-  "$HERE/../schemas/finding.schema.json" \
+  "$HERE/../schemas/finding.codex.schema.json" \
   >"$TMP/incompatible.stdout" 2>"$TMP/incompatible.stderr"
 incompat_rc=$?
-if [ "$incompat_rc" -eq 64 ] \
-    && grep -q 'provider-incompatible.*allOf' "$TMP/incompatible.stderr" \
+if [ "$incompat_rc" -eq 0 ] \
+    && [ ! -s "$TMP/incompatible.stderr" ] \
     && [ ! -d "$TMP/.dual-magi" ]; then
-  ok "unsupported allOf fails deterministic provider-schema preflight"
+  ok "strict Codex finding schema passes deterministic provider-schema preflight"
 else
-  bad "unsupported schema passed deterministic preflight (rc=$incompat_rc)"
+  bad "strict Codex finding schema failed deterministic preflight (rc=$incompat_rc)"
 fi
 
 DEPENDENT_SCHEMA="$TMP/dependent-schema.json"
@@ -269,6 +273,92 @@ if [ "$exit_rc" -ne 0 ] && [ -s "$exit_diag" ] \
   ok "provider failure persists metadata only, without scrubbed payload content"
 else
   bad "provider failure diagnostic retained content or lost its classification"
+fi
+
+mkdir -p "$TMP/startup-recovery"
+RECOVERY_DOC="$TMP/startup-recovery-design.md"
+printf '%s\n' 'startup recovery fixture' > "$RECOVERY_DOC"
+STUB_SCHEMA_REJECT=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$RECOVERY_DOC" 1 "$TMP/startup-recovery" >/dev/null 2>&1
+recovery_rc=$?
+recovery_ledger="$(
+  find "$TMP/.dual-magi" -maxdepth 1 -name 'CAMPAIGN.*.json' -type f \
+    -exec jq -r 'select(.doc_path | endswith("startup-recovery-design.md")) | input_filename' {} \; \
+    | head -n 1
+)"
+if [ "$recovery_rc" -ne 0 ] && python3 - "$recovery_ledger" <<'PY'
+import json, sys
+launch = json.load(open(sys.argv[1]))["campaigns"][-1]["launches"][-1]
+raise SystemExit(
+    0 if launch.get("status") == "startup-failed-recoverable"
+    and launch.get("model_launches") == 3
+    and launch.get("recovery", {}).get("reason_code")
+        == "PROVIDER_SCHEMA_STARTUP_REJECTION"
+    else 1
+)
+PY
+then
+  ok "all-provider schema startup rejection authorizes one audited replacement"
+else
+  bad "schema startup rejection was charged without bounded recovery"
+fi
+PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$RECOVERY_DOC" 1 "$TMP/startup-recovery" >/dev/null 2>&1
+retry_rc=$?
+if [ "$retry_rc" -eq 0 ] && python3 - "$recovery_ledger" <<'PY'
+import json, sys
+launches = json.load(open(sys.argv[1]))["campaigns"][-1]["launches"]
+gross = sum(item["model_launches"] for item in launches)
+effective = sum(
+    item["model_launches"] for item in launches if "replacement_for" not in item
+)
+raise SystemExit(
+    0 if len(launches) == 2
+    and launches[1].get("replacement_for") == launches[0].get("claim_id")
+    and launches[1].get("status") == "success"
+    and gross == 6 and effective == 3
+    else 1
+)
+PY
+then
+  ok "corrected retry consumes replacement without lowering immutable gross history"
+else
+  bad "corrected retry minted or failed to consume replacement credit"
+fi
+
+mkdir -p "$TMP/repeated-startup"
+REPEATED_DOC="$TMP/repeated-startup-design.md"
+printf '%s\n' 'repeated startup fixture' > "$REPEATED_DOC"
+STUB_SCHEMA_REJECT=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$REPEATED_DOC" 1 "$TMP/repeated-startup" >/dev/null 2>&1
+STUB_SCHEMA_REJECT=1 PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$REPEATED_DOC" 1 "$TMP/repeated-startup" >/dev/null 2>&1
+second_startup_rc=$?
+PATH="$TMP/bin:$PATH" \
+  "$FANOUT" "$REPEATED_DOC" 1 "$TMP/repeated-startup" >/dev/null 2>&1
+third_startup_rc=$?
+repeated_ledger="$(
+  find "$TMP/.dual-magi" -maxdepth 1 -name 'CAMPAIGN.*.json' -type f \
+    -exec jq -r 'select(.doc_path | endswith("repeated-startup-design.md")) | input_filename' {} \; \
+    | head -n 1
+)"
+if [ "$second_startup_rc" -ne 0 ] && [ "$third_startup_rc" -eq 64 ] \
+    && python3 - "$repeated_ledger" <<'PY'
+import json, sys
+launches = json.load(open(sys.argv[1]))["campaigns"][-1]["launches"]
+raise SystemExit(
+    0 if len(launches) == 2
+    and launches[0].get("status") == "startup-failed-recoverable"
+    and launches[1].get("status") == "failed"
+    and launches[1].get("replacement_for") == launches[0].get("claim_id")
+    and "recovery" not in launches[1]
+    else 1
+)
+PY
+then
+  ok "repeated startup failures cannot chain replacement credits"
+else
+  bad "repeated startup failures minted credit or escaped retry bound"
 fi
 
 mkdir -p "$TMP/broken-bin" "$TMP/preflight"

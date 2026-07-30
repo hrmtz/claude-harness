@@ -532,9 +532,15 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
     assert isinstance(active_launches, list)
     active_used = guard.model_launches([active])
     current_protocol_sha = guard.protocol_sha()
+    current_artifact_sha = guard.file_sha(manifest_path)
     transition = guard.next_transition(active_launches)
     transition_blocked = transition["kind"] == "transition-blocked" and not guard.may_rollover(
-        ledger, active, manifest_path, 1, "fanout"
+        ledger,
+        active,
+        1,
+        "fanout",
+        artifact_sha=current_artifact_sha,
+        review_protocol_sha=current_protocol_sha,
     )
 
     successful_artifacts = {
@@ -630,6 +636,35 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         finding.get("changes_design_invariant") is True
         for finding in delta["current_summary"]["roots"].values()
     )
+
+    def admission_for(phase: str) -> dict[str, object]:
+        artifact_changed = bool(
+            active_launches
+            and isinstance(active_launches[-1], dict)
+            and active_launches[-1].get("artifact_sha") != current_artifact_sha
+        )
+        replacement = (
+            None
+            if artifact_changed
+            else guard.replacement_source(active_launches, phase)
+        )
+        rollover = replacement is None and guard.may_rollover(
+            ledger,
+            active,
+            1,
+            phase,
+            artifact_sha=current_artifact_sha,
+            review_protocol_sha=current_protocol_sha,
+        )
+        return guard.bounded_admission_decision(
+            0 if rollover else active_used,
+            campaign_ceiling,
+            used,
+            ceiling,
+            phase,
+            launch_weight=0 if replacement is not None else None,
+        )
+
     state = {
         "used": used,
         "ceiling": ceiling,
@@ -643,15 +678,7 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         "incremental_allowed": incremental_allowed,
         "targeted_persona": targeted_persona(manifest),
         "admissions": {
-            phase: guard.bounded_admission_decision(
-                0
-                if guard.may_rollover(ledger, active, manifest_path, 1, phase)
-                else active_used,
-                campaign_ceiling,
-                used,
-                ceiling,
-                phase,
-            )
+            phase: admission_for(phase)
             for phase in ("fanout", "targeted", "xfamily")
         },
     }

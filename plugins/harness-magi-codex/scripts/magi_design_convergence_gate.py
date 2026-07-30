@@ -344,6 +344,7 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     assert isinstance(active_launches, list)
     active_used = guard.model_launches([active])
     current_protocol_sha = guard.protocol_sha()
+    current_artifact_sha = guard.file_sha(doc)
     current_phases = {
         str(launch["phase"])
         for launch in active_launches
@@ -369,7 +370,14 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     transition = guard.next_transition(active_launches)
     transition_blocked = (
         transition["kind"] == "transition-blocked"
-        and not guard.may_rollover(ledger, active, doc, 1, "fanout")
+        and not guard.may_rollover(
+            ledger,
+            active,
+            1,
+            "fanout",
+            artifact_sha=current_artifact_sha,
+            review_protocol_sha=current_protocol_sha,
+        )
     )
     if transition_blocked:
         result = blocked_output(
@@ -379,6 +387,35 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
             artifact_sha=artifact_sha,
         )
     else:
+        def admission_for(phase: str) -> dict[str, object]:
+            artifact_changed = bool(
+                active_launches
+                and isinstance(active_launches[-1], dict)
+                and active_launches[-1].get("artifact_sha")
+                != current_artifact_sha
+            )
+            replacement = (
+                None
+                if artifact_changed
+                else guard.replacement_source(active_launches, phase)
+            )
+            rollover = replacement is None and guard.may_rollover(
+                ledger,
+                active,
+                1,
+                phase,
+                artifact_sha=current_artifact_sha,
+                review_protocol_sha=current_protocol_sha,
+            )
+            return guard.bounded_admission_decision(
+                0 if rollover else active_used,
+                campaign_ceiling,
+                used,
+                ceiling,
+                phase,
+                launch_weight=0 if replacement is not None else None,
+            )
+
         state = {
             "delta": delta,
             "used": used,
@@ -387,15 +424,7 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
             "cycles": len(completed_cycles),
             "current_phases": current_phases,
             "admissions": {
-                phase: guard.bounded_admission_decision(
-                    0
-                    if guard.may_rollover(ledger, active, doc, 1, phase)
-                    else active_used,
-                    campaign_ceiling,
-                    used,
-                    ceiling,
-                    phase,
-                )
+                phase: admission_for(phase)
                 for phase in ("fanout", "xfamily")
             },
         }

@@ -54,6 +54,12 @@ def validate(
                 raise ValueError("artifact_sha does not match the current document revision")
     findings = payload.get("findings") or []
     for finding in findings:
+        if finding.get("severity") in BLOCKING_SEVERITIES:
+            if not finding.get("subsystem") or not finding.get("root_cause_id"):
+                raise ValueError(
+                    f"{finding.get('finding_id')}: blocking finding requires "
+                    "subsystem and root_cause_id"
+                )
         if (
             finding.get("dup_flag") in NONBLOCKING
             and finding.get("severity") in BLOCKING_SEVERITIES

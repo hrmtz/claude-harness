@@ -32,9 +32,10 @@ same-family reviewers read the same text and found none of them.
 ## What's inside
 
 ```
-schemas/finding.schema.json   Local validation SSOT, including conditional HIGH+ identity rules.
+schemas/finding.schema.json   Backward-compatible local SSOT; cross-field rules stay in validator.
 schemas/finding.codex.schema.json
-                              Provider subset for Codex constrained decoding; deliberately stricter.
+                              Provider response schema for Codex and cross-family constrained
+                              decoding; deliberately stricter than persisted artifacts.
 schemas/implementation-convergence.schema.json
                               opt-in report-only implementation manifest
 schemas/preflight-{review,decision}.schema.json
@@ -267,10 +268,34 @@ reserve cannot be preserved, the campaign is blocked before any provider starts;
 permission to ship. Cross-family admission charges only its real weight, so the reserve is not
 charged twice.
 Both reviewer adapters append to a canonical document-scoped campaign ledger before launching a
-model. Retries consume budget; a fresh state directory or repeated round 1 cannot reset it. Exit `4`
-means `CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive
-change, then invoke round 1. A changed document or review-protocol SHA rolls into the next campaign
-automatically, without acknowledgement.
+model. Retries normally consume budget; a fresh state directory or repeated round 1 cannot reset
+it. The one exception is a claim-scoped Codex replacement after all three provider processes reject
+the response schema before producing any structured-output bytes. The closed fan-out adapter must
+publish the three bounded diagnostics, prove its exact provider process tree has exited, and
+authorize recovery while it still owns the claim. The failed launch remains charged and visible.
+Only the immediately following attempt-2 launch for the same campaign, round, phase, and artifact
+may carry `replacement_for`, so the logical phase is charged once rather than twice. A second
+startup rejection, partial fan-out, timeout, malformed or substantive response, arbitrary provider
+exit, cancellation, or non-adapter request remains charged and cannot chain credit. Exit `4` means
+`CAMPAIGN BUDGET EXHAUSTED — NOT PLATEAU`: apply an in-scope correction or scope/primitive change,
+then invoke round 1. A changed document or review-protocol SHA rolls into the next campaign
+automatically, without acknowledgement. The bounded replacement is the deliberate protocol-only
+exception: it may run the corrected provider contract against the exact same artifact SHA.
+
+The finalized #271 incident predates claim-scoped recovery and its legacy bounded artifact cannot
+prove the newer `turn_observed` classification. It is repaired only by the reviewed closed
+attestation in `magi_campaign_guard.py`, invoked as
+`magi_campaign_guard.py repair-historical-startup <doc> <claim-id>`. This is not a generic
+operator-evidence or acknowledgement path: the attestation pins the one canonical document ID,
+claim, artifact SHA, original protocol SHA, completion time, six-launch history prefix hash, gross
+usage 14/16, three-reviewer pre-turn provider stage, and three-unit credit. Any runtime-authored
+JSON is ignored. The exact pre-repair history must match before a distinct `repairs` transition is
+appended; launch entries remain unchanged. The selected attestation is embedded as an immutable
+tombstone in that transition, so later allowlist cleanup cannot orphan the ledger; at-rest
+validation rechecks its digest and history prefix after later launches. Unknown documents/claims,
+changed history or identity, a live
+claim, unchanged protocol, an existing replacement, or any second repair remain charged. Adding
+another historical incident requires a reviewed protocol/code change.
 
 `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the per-campaign ceiling of 12; it cannot extend it.
 All revision campaigns share a separate fixed global allowance of 16 weighted model launches.
@@ -369,7 +394,8 @@ byte counts, redaction counts, and a bounded classification. Neither failure art
 provider response, prompt, document, or scrubbed log content, and neither occupies a canonical
 persona artifact path. Classifications distinguish missing child status, scrubber/provider/timeout
 failure, live-document drift, empty output, JSON parse/schema/convergence rejection, post-scrub
-corruption, and exact artifact-identity rejection.
+corruption, exact artifact-identity rejection, and the narrowly allowlisted zero-output provider
+schema startup rejection used by the claim-bound replacement path.
 Fan-out lock I/O failure exits `2`; live lock contention exits `5`.
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default

@@ -27,7 +27,7 @@ printf '%s\n' 'supporting implementation notes' > "$TMP/repoB/docs/supporting.md
 cat > "$TMP/bin/codex" <<'STUB'
 #!/usr/bin/env bash
 if [ "${1:-}" = "exec" ] && [ "${2:-}" = "--help" ]; then
-  printf '%s\n' '--output-schema --output-last-message --ephemeral'
+  printf '%s\n' '--output-schema --output-last-message --ephemeral --json'
   exit 0
 fi
 out=""

@@ -212,13 +212,27 @@ class Slice0IntegrationTest(unittest.TestCase):
         result = self.prepare("optional-convergence")
         self.assertEqual(result.returncode, 0, result.stderr)
         record = json.loads(
-            (self.campaign("optional-convergence") / "normalized-findings.jsonl").read_text()
+            (
+                self.campaign("optional-convergence")
+                / "normalized-findings.jsonl"
+            ).read_text()
         )
         self.assertNotIn("subsystem", record)
         self.assertNotIn("root_cause_id", record)
         self.assertNotIn("affected_invariant", record)
         self.assertNotIn("changes_design_invariant", record)
         self.assertNotIn("relation_to_prior", record)
+
+    def test_blocking_finding_requires_subsystem_and_root_cause(self) -> None:
+        for field in ("subsystem", "root_cause_id"):
+            with self.subTest(field=field):
+                high = finding(f"HIGH-NO-{field.upper()}")
+                high.pop(field)
+                with self.assertRaisesRegex(
+                    slice0.Slice0Error,
+                    "blocking finding requires subsystem and root_cause_id",
+                ):
+                    slice0.validate_artifact(artifact(high))
 
     def test_changed_source_on_completed_campaign_returns_four(self) -> None:
         self.assertEqual(self.prepare().returncode, 0)

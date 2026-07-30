@@ -426,6 +426,70 @@ class DesignConvergenceGateTest(unittest.TestCase):
         self.assertEqual(result["usage"], guard.DEFAULT_MAX_MODEL_LAUNCHES + 1)
         self.assertEqual(result["ceiling"], guard.GLOBAL_MAX_MODEL_LAUNCHES)
 
+    def test_recoverable_retry_admission_uses_zero_incremental_weight(self) -> None:
+        artifact = self.current_sha()
+        self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=artifact,
+            status="failed",
+        )
+        launch = self.launches[-1]
+        launch["protocol_sha"] = "0" * 64
+        launch["status"] = "startup-failed-recoverable"
+        launch["finished_at"] = "2026-07-24T00:00:01+00:00"
+        launch["recovery"] = {
+            "kind": "claim-scoped-credit",
+            "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+            "requested_at": "2026-07-24T00:00:01+00:00",
+            "evidence_path": str(self.root / "failure.json"),
+            "evidence_sha256": "1" * 64,
+            "adapter_script_sha256": "2" * 64,
+            "process_cleanup": "verified-no-descendants",
+            "reviewers": [
+                {
+                    "reviewer": reviewer,
+                    "classification": "provider-schema-startup-rejection",
+                    "provider_exit_code": 1,
+                    "output_bytes": 0,
+                    "input_bytes": 0,
+                    "turn_observed": False,
+                }
+                for reviewer in ("MELCHIOR", "BALTHASAR", "CASPAR")
+            ],
+        }
+        self.write_ledger()
+        with mock.patch.object(
+            guard,
+            "bounded_admission_decision",
+            wraps=guard.bounded_admission_decision,
+        ) as admission:
+            result = design.evaluate(self.doc)
+        self.assertFalse(result["authorizes_shipping"])
+        fanout_calls = [
+            call for call in admission.call_args_list if call.args[4] == "fanout"
+        ]
+        self.assertTrue(fanout_calls)
+        self.assertEqual(fanout_calls[-1].kwargs.get("launch_weight"), 0)
+
+        self.revise(2)
+        with mock.patch.object(
+            guard,
+            "bounded_admission_decision",
+            wraps=guard.bounded_admission_decision,
+        ) as revised_admission:
+            design.evaluate(self.doc)
+        revised_fanout = [
+            call
+            for call in revised_admission.call_args_list
+            if call.args[4] == "fanout"
+        ]
+        self.assertTrue(revised_fanout)
+        self.assertIsNone(
+            revised_fanout[-1].kwargs.get("launch_weight")
+        )
+        self.assertEqual(revised_fanout[-1].args[0], 0)
+
     def test_stale_review_artifact_fails_closed_with_exit_two(self) -> None:
         current = self.current_sha()
         state = self.add_launch(

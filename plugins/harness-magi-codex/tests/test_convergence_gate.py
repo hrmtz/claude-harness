@@ -888,7 +888,7 @@ class ConvergenceGateTest(unittest.TestCase):
 import json, re, sys
 args = sys.argv[1:]
 if args == ["exec", "--help"]:
-    print("--output-schema --output-last-message --ephemeral")
+    print("--output-schema --output-last-message --ephemeral --json")
     raise SystemExit(0)
 out = args[args.index("-o") + 1]
 prompt = sys.stdin.read()
@@ -1354,6 +1354,73 @@ print("incremental fixture")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["decision"], "BLOCKED")
         self.assertEqual(payload["reason_code"], "NEXT_FANOUT_UNAFFORDABLE")
+
+    def test_recoverable_retry_admission_uses_zero_incremental_weight(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact, status="failed")
+        launch = self.launches[-1]
+        launch["protocol_sha"] = "0" * 64
+        launch["status"] = "startup-failed-recoverable"
+        launch["finished_at"] = "2026-07-24T00:00:01+00:00"
+        launch["recovery"] = {
+            "kind": "claim-scoped-credit",
+            "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+            "requested_at": "2026-07-24T00:00:01+00:00",
+            "evidence_path": str(self.state / "failure.json"),
+            "evidence_sha256": "1" * 64,
+            "adapter_script_sha256": "2" * 64,
+            "process_cleanup": "verified-no-descendants",
+            "reviewers": [
+                {
+                    "reviewer": reviewer,
+                    "classification": "provider-schema-startup-rejection",
+                    "provider_exit_code": 1,
+                    "output_bytes": 0,
+                    "input_bytes": 0,
+                    "turn_observed": False,
+                }
+                for reviewer in ("MELCHIOR", "BALTHASAR", "CASPAR")
+            ],
+        }
+        self.write_ledger()
+        with (
+            mock.patch.object(
+                guard,
+                "bounded_admission_decision",
+                wraps=guard.bounded_admission_decision,
+            ) as admission,
+            mock.patch.dict(os.environ, {"HOME": str(self.fake_home)}),
+        ):
+            result = convergence.evaluate(self.manifest)
+        self.assertFalse(result["authorizes_shipping"])
+        fanout_calls = [
+            call for call in admission.call_args_list if call.args[4] == "fanout"
+        ]
+        self.assertTrue(fanout_calls)
+        self.assertEqual(fanout_calls[-1].kwargs.get("launch_weight"), 0)
+
+        payload = json.loads(self.manifest.read_text())
+        payload["scope_id"] = "issue-107-revised"
+        self.manifest.write_text(json.dumps(payload, indent=2) + "\n")
+        with (
+            mock.patch.object(
+                guard,
+                "bounded_admission_decision",
+                wraps=guard.bounded_admission_decision,
+            ) as revised_admission,
+            mock.patch.dict(os.environ, {"HOME": str(self.fake_home)}),
+        ):
+            convergence.evaluate(self.manifest)
+        revised_fanout = [
+            call
+            for call in revised_admission.call_args_list
+            if call.args[4] == "fanout"
+        ]
+        self.assertTrue(revised_fanout)
+        self.assertIsNone(
+            revised_fanout[-1].kwargs.get("launch_weight")
+        )
+        self.assertEqual(revised_fanout[-1].args[0], 0)
 
     def test_clean_review_never_emits_pass(self) -> None:
         artifact = file_sha(self.manifest)

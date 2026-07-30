@@ -11,6 +11,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import jsonschema
@@ -25,10 +26,12 @@ VALIDATOR = PLUGIN / "scripts" / "magi_validate_findings.py"
 SCHEMA = json.loads((PLUGIN / "schemas" / "finding.schema.json").read_text())
 sys.path.insert(0, str(PLUGIN / "scripts"))
 from magi_validate_findings import validate as validate_findings  # noqa: E402
+import magi_campaign_guard as campaign_guard  # noqa: E402
 from magi_campaign_guard import (  # noqa: E402
     DEFAULT_MAX_MODEL_LAUNCHES,
     GLOBAL_MAX_MODEL_LAUNCHES,
     PHASE_WEIGHT,
+    protocol_sha,
 )
 
 
@@ -58,10 +61,12 @@ def finding(
         "confidence": "high",
         "dup_flag": dup_flag,
         "missed_angle": "test",
+        "subsystem": "orchestration",
+        "root_cause_id": "test.root",
+        "affected_invariant": "test invariant",
+        "changes_design_invariant": False,
+        "relation_to_prior": "none",
     }
-    if severity in {"REJECT", "CRITICAL", "HIGH"}:
-        finding_payload["subsystem"] = "orchestration"
-        finding_payload["root_cause_id"] = "test.root"
     return {
         "reviewer": "TEST",
         "round": round_no,
@@ -166,6 +171,175 @@ class CampaignGuardTest(unittest.TestCase):
             )
         )
         return path
+
+    def recoverable_launch(self) -> dict[str, object]:
+        claim_id = "11111111-1111-4111-8111-111111111111"
+        return {
+            "claim_id": claim_id,
+            "sequence": 1,
+            "round": 1,
+            "phase": "fanout",
+            "attempt": 1,
+            "model_launches": 3,
+            "state_dir": str(self.state.resolve()),
+            "artifact_sha": hashlib.sha256(self.doc.read_bytes()).hexdigest(),
+            "protocol_sha": protocol_sha(),
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:00:01Z",
+            "status": "startup-failed-recoverable",
+            "recovery": {
+                "kind": "claim-scoped-credit",
+                "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+                "requested_at": "2026-01-01T00:00:01Z",
+                "evidence_path": str(
+                    self.state / f"round_1_fanout.{claim_id}.FAILED.json"
+                ),
+                "evidence_sha256": "1" * 64,
+                "adapter_script_sha256": "2" * 64,
+                "process_cleanup": "verified-no-descendants",
+                "reviewers": [
+                    {
+                        "reviewer": reviewer,
+                        "classification": "provider-schema-startup-rejection",
+                        "provider_exit_code": 1,
+                        "output_bytes": 0,
+                        "input_bytes": 0,
+                        "turn_observed": False,
+                    }
+                    for reviewer in ("MELCHIOR", "BALTHASAR", "CASPAR")
+                ],
+            },
+        }
+
+    def historical_incident(self) -> tuple[Path, str, dict[str, object]]:
+        """Seed the observed 14/16 shape and its closed compatibility attestation."""
+        artifact_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        source_claim = "10000000-0000-4000-8000-000000000001"
+
+        def launch(
+            claim_id: str,
+            *,
+            campaign_round: int,
+            phase: str,
+            attempt: int,
+            status: str,
+            artifact: str,
+            protocol: str,
+        ) -> dict[str, object]:
+            return {
+                "claim_id": claim_id,
+                "sequence": campaign_round,
+                "round": campaign_round,
+                "phase": phase,
+                "attempt": attempt,
+                "model_launches": PHASE_WEIGHT[phase],
+                "state_dir": str(self.state.resolve()),
+                "artifact_sha": artifact,
+                "protocol_sha": protocol,
+                "claimed_at": f"2026-01-01T00:00:{campaign_round:02d}Z",
+                "finished_at": f"2026-01-01T00:01:{campaign_round:02d}Z",
+                "status": status,
+            }
+
+        first = [
+            launch(
+                source_claim,
+                campaign_round=1,
+                phase="fanout",
+                attempt=1,
+                status="failed",
+                artifact=artifact_sha,
+                protocol="1" * 64,
+            ),
+            launch(
+                "10000000-0000-4000-8000-000000000002",
+                campaign_round=1,
+                phase="fanout",
+                attempt=2,
+                status="failed",
+                artifact=artifact_sha,
+                protocol="1" * 64,
+            ),
+        ]
+        first[1]["sequence"] = 2
+        later = [
+            launch(
+                "10000000-0000-4000-8000-000000000003",
+                campaign_round=1,
+                phase="fanout",
+                attempt=1,
+                status="success",
+                artifact="2" * 64,
+                protocol="2" * 64,
+            ),
+            launch(
+                "10000000-0000-4000-8000-000000000004",
+                campaign_round=2,
+                phase="xfamily",
+                attempt=1,
+                status="failed",
+                artifact="3" * 64,
+                protocol="2" * 64,
+            ),
+            launch(
+                "10000000-0000-4000-8000-000000000005",
+                campaign_round=2,
+                phase="xfamily",
+                attempt=2,
+                status="failed",
+                artifact="3" * 64,
+                protocol="2" * 64,
+            ),
+        ]
+        final = [
+            launch(
+                "10000000-0000-4000-8000-000000000006",
+                campaign_round=1,
+                phase="fanout",
+                attempt=1,
+                status="success",
+                artifact="4" * 64,
+                protocol="2" * 64,
+            )
+        ]
+        ledger_path = self.seed_ledger(first)
+        ledger = json.loads(ledger_path.read_text())
+        for index, launches in enumerate((later, final), start=2):
+            ledger["campaigns"].append(
+                {
+                    "campaign_id": f"seed-{index}",
+                    "started_at": f"2026-01-01T00:0{index}:00Z",
+                    "started_by": "test",
+                    "reason": "historical incident fixture",
+                    "launches": launches,
+                }
+            )
+        ledger_path.write_text(json.dumps(ledger))
+        history = [
+            launch
+            for campaign in ledger["campaigns"]
+            for launch in campaign["launches"]
+        ]
+        incident = {
+            "incident_id": "test-closed-schema-startup",
+            "issue": "test#271",
+            "doc_id": hashlib.sha256(
+                str(self.doc.resolve()).encode()
+            ).hexdigest()[:16],
+            "source_claim_id": source_claim,
+            "source_finished_at": first[0]["finished_at"],
+            "artifact_sha": artifact_sha,
+            "source_protocol_sha": "1" * 64,
+            "history_launch_count": len(history),
+            "history_gross_model_launches": 14,
+            "history_prefix_sha256": campaign_guard.canonical_sha256(history),
+            "credited_model_launches": 3,
+            "provider_stage": "codex-output-schema-validation-before-reviewer-turn",
+            "reviewer_count": 3,
+            "turn_observed": False,
+            "legacy_classification": "provider-exit",
+        }
+        return ledger_path, source_claim, incident
 
     def start_owned_claim(
         self, *, ignore_term: bool = False
@@ -326,6 +500,339 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertEqual(denied.returncode, 64)
         self.assertIn("still running", denied.stderr)
         self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_non_adapter_owner_cannot_authorize_startup_recovery(self) -> None:
+        claimed = self.guard(
+            "claim",
+            str(self.doc),
+            "1",
+            "fanout",
+            str(self.state),
+            "--owner-pid",
+            str(os.getpid()),
+            "--adapter-kind",
+            "fanout",
+        )
+        self.assertEqual(claimed.returncode, 0, claimed.stderr)
+        claim_id = claimed.stdout.strip().rsplit("CLAIM_ID=", 1)[-1]
+        evidence = self.state / f"round_1_fanout.{claim_id}.FAILED.json"
+        evidence.write_text("{}")
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        before = ledger_path.read_bytes()
+        denied = self.guard(
+            "recover-startup", str(self.doc), claim_id, str(evidence)
+        )
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("official shell adapter", denied.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_concurrent_replacement_claim_has_one_consumer(self) -> None:
+        source = self.recoverable_launch()
+        ledger_path = self.seed_ledger([source])
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(GUARD),
+                    "claim",
+                    str(self.doc),
+                    "1",
+                    "fanout",
+                    str(self.state),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(8)
+        ]
+        results = [process.communicate(timeout=10) + (process.returncode,) for process in processes]
+        self.assertEqual(sum(returncode == 0 for _, _, returncode in results), 1)
+        ledger = json.loads(ledger_path.read_text())
+        launches = ledger["campaigns"][0]["launches"]
+        self.assertEqual(len(launches), 2)
+        self.assertEqual(launches[1]["replacement_for"], source["claim_id"])
+        self.assertEqual(launches[1]["model_launches"], 3)
+
+    def test_replacement_source_is_shared_admission_signal(self) -> None:
+        source = self.recoverable_launch()
+        self.assertIs(
+            campaign_guard.replacement_source([source], "fanout"), source
+        )
+        self.assertIsNone(campaign_guard.replacement_source([source], "targeted"))
+        source["status"] = "failed"
+        self.assertIsNone(campaign_guard.replacement_source([source], "fanout"))
+
+    def test_changed_artifact_after_recovery_rolls_over_without_replacement(self) -> None:
+        source = self.recoverable_launch()
+        ledger_path = self.seed_ledger([source])
+        self.doc.write_text("# revised after startup failure\n")
+
+        admission = campaign_guard.campaign_admission_status(self.doc)
+        self.assertEqual(admission["weight"], 3)
+        self.assertEqual(admission["required"], 4)
+
+        claimed = self.guard(
+            "claim", str(self.doc), "1", "fanout", str(self.state)
+        )
+        self.assertEqual(claimed.returncode, 0, claimed.stderr)
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 2)
+        replacement = ledger["campaigns"][1]["launches"][0]
+        self.assertNotIn("replacement_for", replacement)
+        self.assertEqual(replacement["model_launches"], 3)
+        self.assertEqual(
+            replacement["artifact_sha"],
+            hashlib.sha256(self.doc.read_bytes()).hexdigest(),
+        )
+        status = self.guard("claim-status", str(self.doc), replacement["claim_id"])
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "running")
+
+    def test_protocol_fix_can_consume_replacement_for_same_artifact(self) -> None:
+        source = self.recoverable_launch()
+        source["protocol_sha"] = "provider-schema-before-fix"
+        ledger_path = self.seed_ledger([source])
+
+        claimed = self.guard(
+            "claim", str(self.doc), "1", "fanout", str(self.state)
+        )
+        self.assertEqual(claimed.returncode, 0, claimed.stderr)
+        launches = json.loads(ledger_path.read_text())["campaigns"][0]["launches"]
+        self.assertEqual(launches[1]["replacement_for"], source["claim_id"])
+        self.assertNotEqual(launches[1]["protocol_sha"], source["protocol_sha"])
+        self.assertEqual(launches[1]["artifact_sha"], source["artifact_sha"])
+
+    def test_document_change_after_claim_snapshot_cannot_corrupt_replacement(self) -> None:
+        source = self.recoverable_launch()
+        ledger_path = self.seed_ledger([source])
+        real_file_sha = campaign_guard.file_sha
+        calls = 0
+
+        def mutate_after_snapshot(path: Path) -> str:
+            nonlocal calls
+            calls += 1
+            digest = real_file_sha(path)
+            self.doc.write_text("# changed after the guarded snapshot\n")
+            return digest
+
+        with (
+            mock.patch.object(
+                campaign_guard, "file_sha", side_effect=mutate_after_snapshot
+            ),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.claim(
+                str(self.doc), "1", "fanout", str(self.state)
+            )
+
+        self.assertEqual(calls, 1)
+        launches = json.loads(ledger_path.read_text())["campaigns"][0]["launches"]
+        self.assertEqual(launches[1]["replacement_for"], source["claim_id"])
+        self.assertEqual(launches[1]["artifact_sha"], source["artifact_sha"])
+        status = self.guard("claim-status", str(self.doc), launches[1]["claim_id"])
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "running")
+
+    def test_changed_artifact_after_recovery_rejects_noninitial_round(self) -> None:
+        source = self.recoverable_launch()
+        ledger_path = self.seed_ledger([source])
+        self.doc.write_text("# revised after startup failure\n")
+        before = ledger_path.read_bytes()
+
+        denied = self.guard(
+            "claim", str(self.doc), "2", "fanout", str(self.state)
+        )
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("requires round 1 fanout", denied.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_malformed_replacement_link_fails_closed(self) -> None:
+        source = self.recoverable_launch()
+        consumer = {
+            **source,
+            "claim_id": "22222222-2222-4222-8222-222222222222",
+            "sequence": 2,
+            "attempt": 2,
+            "status": "failed",
+            "claimed_at": "2026-01-01T00:00:02Z",
+            "finished_at": "2026-01-01T00:00:03Z",
+            "replacement_for": source["claim_id"],
+        }
+        consumer.pop("recovery")
+        consumer["artifact_sha"] = "0" * 64
+        self.seed_ledger([source, consumer])
+        denied = self.guard("claim-status", str(self.doc), source["claim_id"])
+        self.assertEqual(denied.returncode, 2)
+        self.assertIn("replacement does not match", denied.stderr)
+
+    def test_historical_repair_makes_observed_14_of_16_final_sequence_affordable(
+        self,
+    ) -> None:
+        ledger_path, source_claim, incident = self.historical_incident()
+        with (
+            mock.patch.object(
+                campaign_guard, "HISTORICAL_STARTUP_INCIDENTS", (incident,)
+            ),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(str(self.doc), source_claim)
+            ledger = json.loads(ledger_path.read_text())
+            gross = sum(
+                launch["model_launches"]
+                for campaign in ledger["campaigns"]
+                for launch in campaign["launches"]
+            )
+            self.assertEqual(gross, 14)
+            repairs = [
+                repair
+                for campaign in ledger["campaigns"]
+                for repair in campaign.get("repairs", [])
+            ]
+            self.assertEqual(len(repairs), 1)
+            self.assertEqual(repairs[0]["source_claim_id"], source_claim)
+            self.assertEqual(repairs[0]["credited_model_launches"], 3)
+            self.assertEqual(campaign_guard.model_launches(ledger["campaigns"]), 11)
+
+            campaign_guard.claim(str(self.doc), "1", "fanout", str(self.state))
+            ledger = json.loads(ledger_path.read_text())
+            fanout_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
+            campaign_guard.finish(str(self.doc), fanout_claim, "success")
+            campaign_guard.claim(str(self.doc), "2", "xfamily", str(self.state))
+            ledger = json.loads(ledger_path.read_text())
+            xfamily_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
+            campaign_guard.finish(str(self.doc), xfamily_claim, "success")
+
+            completed = json.loads(ledger_path.read_text())
+            gross = sum(
+                launch["model_launches"]
+                for campaign in completed["campaigns"]
+                for launch in campaign["launches"]
+            )
+            self.assertEqual(gross, 18)
+            self.assertEqual(
+                campaign_guard.model_launches(completed["campaigns"]), 15
+            )
+
+    def test_historical_repair_refuses_unattested_runtime_input(self) -> None:
+        ledger_path, source_claim, _ = self.historical_incident()
+        before = ledger_path.read_bytes()
+        denied = self.guard(
+            "repair-historical-startup",
+            str(self.doc),
+            source_claim,
+        )
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("no closed historical startup attestation", denied.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_historical_repair_refuses_changed_history_turn_and_attempt_two(
+        self,
+    ) -> None:
+        ledger_path, source_claim, incident = self.historical_incident()
+        before = ledger_path.read_bytes()
+        changed_history = {**incident, "history_prefix_sha256": "0" * 64}
+        with (
+            self.assertRaisesRegex(campaign_guard.TransitionError, "does not match"),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(
+                str(self.doc), source_claim, (changed_history,)
+            )
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+        turn_started = {**incident, "turn_observed": True}
+        with (
+            self.assertRaisesRegex(campaign_guard.TransitionError, "does not match"),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(
+                str(self.doc), source_claim, (turn_started,)
+            )
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+        ledger = json.loads(ledger_path.read_text())
+        attempt_two = "10000000-0000-4000-8000-000000000002"
+        attempt_two_incident = {
+            **incident,
+            "source_claim_id": attempt_two,
+            "source_finished_at": ledger["campaigns"][0]["launches"][1][
+                "finished_at"
+            ],
+        }
+        with (
+            self.assertRaisesRegex(campaign_guard.TransitionError, "does not match"),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(
+                str(self.doc), attempt_two, (attempt_two_incident,)
+            )
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_historical_repair_is_single_use_and_tamper_evident(self) -> None:
+        ledger_path, source_claim, incident = self.historical_incident()
+        with (
+            mock.patch.object(
+                campaign_guard, "HISTORICAL_STARTUP_INCIDENTS", (incident,)
+            ),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(str(self.doc), source_claim)
+            with self.assertRaisesRegex(
+                campaign_guard.TransitionError, "already consumed"
+            ):
+                campaign_guard.repair_historical_startup(
+                    str(self.doc), source_claim
+                )
+            with mock.patch.object(
+                campaign_guard, "HISTORICAL_STARTUP_INCIDENTS", ()
+            ):
+                campaign_guard.load_ledger(self.doc.resolve(), create=False)
+            ledger = json.loads(ledger_path.read_text())
+            ledger["campaigns"][0]["repairs"][0]["credited_model_launches"] = 6
+            ledger_path.write_text(json.dumps(ledger))
+            with self.assertRaisesRegex(campaign_guard.StateError, "does not match"):
+                campaign_guard.load_ledger(self.doc.resolve(), create=False)
+
+    def test_historical_repair_at_rest_rejects_self_consistent_forgery(self) -> None:
+        ledger_path, source_claim, incident = self.historical_incident()
+        with (
+            mock.patch.object(
+                campaign_guard, "HISTORICAL_STARTUP_INCIDENTS", (incident,)
+            ),
+            mock.patch("builtins.print"),
+        ):
+            campaign_guard.repair_historical_startup(str(self.doc), source_claim)
+        baseline = ledger_path.read_bytes()
+
+        def mutate(**changes: object) -> None:
+            ledger = json.loads(baseline)
+            repair = ledger["campaigns"][0]["repairs"][0]
+            for field, value in changes.items():
+                if field in repair:
+                    repair[field] = value
+            repair["attestation"].update(changes)
+            repair["attestation_sha256"] = campaign_guard.canonical_sha256(
+                repair["attestation"]
+            )
+            ledger_path.write_text(json.dumps(ledger))
+
+        cases = (
+            {"credited_model_launches": 14},
+            {
+                "history_launch_count": 0,
+                "history_prefix_sha256": campaign_guard.canonical_sha256([]),
+                "history_gross_model_launches": 0,
+            },
+            {"credited_model_launches": "3"},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                mutate(**changes)
+                with self.assertRaisesRegex(
+                    campaign_guard.StateError, "does not match"
+                ):
+                    campaign_guard.load_ledger(self.doc.resolve(), create=False)
 
     def test_wrong_cancel_sha_does_not_mutate_or_signal(self) -> None:
         process, _ = self.start_owned_claim()
@@ -701,7 +1208,7 @@ class CampaignGuardTest(unittest.TestCase):
         codex_stub.write_text(
             "#!/bin/sh\n"
             "if [ \"$1\" = exec ] && [ \"$2\" = --help ]; then\n"
-            "  echo '--output-schema --output-last-message --ephemeral'\n"
+            "  echo '--output-schema --output-last-message --ephemeral --json'\n"
             "  exit 0\n"
             "fi\n"
             f"touch {marker}\n"
@@ -802,10 +1309,18 @@ class FindingSchemaTest(unittest.TestCase):
         for missing in ("root_cause_id", "subsystem"):
             payload = finding("new", "HIGH")
             del payload["findings"][0][missing]
-            with self.assertRaises(jsonschema.ValidationError):
+            with self.assertRaisesRegex(ValueError, "blocking finding requires"):
                 validate_findings(payload, SCHEMA)
 
         payload = finding("new", "MED")
+        for optional in (
+            "subsystem",
+            "root_cause_id",
+            "affected_invariant",
+            "changes_design_invariant",
+            "relation_to_prior",
+        ):
+            payload["findings"][0].pop(optional)
         validate_findings(payload, SCHEMA)
 
     def test_classification_and_severity_contract(self) -> None:

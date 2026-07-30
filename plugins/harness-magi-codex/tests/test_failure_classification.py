@@ -79,6 +79,78 @@ class FailureClassificationTests(unittest.TestCase):
         self.write_meta(parsed=False)
         self.assertEqual(self.result(provider_exit=70)["classification"], "provider-exit")
 
+    def test_provider_schema_startup_rejection_requires_zero_output_and_signature(self) -> None:
+        self.output.write_text("")
+        self.log.write_text(
+            "invalid_json_schema: In context=('properties', 'findings', 'items'), "
+            "'allOf' is not permitted.\n"
+        )
+        self.write_meta(parsed=False, input_bytes=0)
+        self.assertEqual(
+            self.result(provider_exit=1)["classification"],
+            "provider-schema-startup-rejection",
+        )
+
+        self.output.write_text("{}")
+        self.write_meta(parsed=False, input_bytes=2)
+        self.assertEqual(self.result(provider_exit=1)["classification"], "provider-exit")
+
+    def test_arbitrary_provider_failure_is_not_startup_recoverable(self) -> None:
+        self.output.write_text("")
+        self.log.write_text("connection reset before response\n")
+        self.write_meta(parsed=False, input_bytes=0)
+        self.assertEqual(self.result(provider_exit=1)["classification"], "provider-exit")
+
+    def test_model_jsonl_event_blocks_startup_recovery(self) -> None:
+        self.output.write_text("")
+        self.log.write_text(
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"invalid_json_schema: allOf is not permitted"}}\n'
+            "invalid_json_schema: 'allOf' is not permitted\n"
+        )
+        self.write_meta(parsed=False, input_bytes=0)
+        result = self.result(provider_exit=1)
+        self.assertEqual(result["classification"], "provider-exit")
+        self.assertIs(result["turn_observed"], True)
+
+    def test_observed_codex_rollout_shapes_block_startup_recovery(self) -> None:
+        events = (
+            {"type": "turn.started"},
+            {"type": "event_msg", "payload": {"type": "agent_message"}},
+            {
+                "type": "response_item",
+                "payload": {"type": "message", "role": "assistant"},
+            },
+            {"type": "response_item", "payload": {"type": "custom_tool_call"}},
+            {"id": "0", "msg": {"type": "agent_message", "message": "review"}},
+            {"type": "future.provider.item", "payload": {}},
+        )
+        self.output.write_text("")
+        self.write_meta(parsed=False, input_bytes=0)
+        for event in events:
+            with self.subTest(event=event):
+                self.log.write_text(
+                    json.dumps(event)
+                    + "\ninvalid_json_schema: 'allOf' is not permitted\n"
+                )
+                result = self.result(provider_exit=1)
+                self.assertEqual(result["classification"], "provider-exit")
+                self.assertIs(result["turn_observed"], True)
+
+    def test_known_benign_jsonl_does_not_imply_a_provider_turn(self) -> None:
+        self.output.write_text("")
+        self.log.write_text(
+            '{"type":"thread.started","thread_id":"fixture"}\n'
+            '{"type":"error","message":"invalid_json_schema"}\n'
+            "invalid_json_schema: 'allOf' is not permitted\n"
+        )
+        self.write_meta(parsed=False, input_bytes=0)
+        result = self.result(provider_exit=1)
+        self.assertEqual(
+            result["classification"], "provider-schema-startup-rejection"
+        )
+        self.assertIs(result["turn_observed"], False)
+
     def test_empty_output(self) -> None:
         self.output.write_text("")
         self.write_meta(parsed=False, input_bytes=0)
