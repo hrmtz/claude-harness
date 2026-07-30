@@ -80,6 +80,303 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 ')
 
 # ----------------------------------------
+# Refuse literal `pkill/pgrep -f` patterns that reappear elsewhere in the same
+# executable command (#262).
+#
+# procps matches the full argv. A literal pattern repeated by a later command
+# (worker name, script path, marker, etc.) can therefore match the enclosing
+# shell/ssh process and kill the command runner before the intended follow-up.
+# Parse shell tokens so quoted prose remains inert, and recurse only into bodies
+# that are themselves executed (`sh -c` family and ssh remote commands).
+#
+# This is intentionally literal containment, not regex interpretation:
+# `myscrip[t].py` does not occur literally in `myscript.py`, so the documented
+# bracket escape remains available. Dynamic patterns are not guessed.
+pkill_full_pattern_self_matches() {
+    [[ "$DEOBF" == *pkill* || "$DEOBF" == *pgrep* ]] || return 0
+    python3 - "$SCRUBBED" 2>/dev/null <<'PY'
+import os
+import re
+import shlex
+import sys
+
+command = sys.argv[1]
+shells = {"bash", "sh", "dash", "zsh", "ksh"}
+killers = {"pkill", "pgrep"}
+controls = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "{", "}", "\n"}
+reserved_prefixes = {
+    "!", "if", "then", "elif", "else", "while", "until", "do", "time",
+    "coproc",
+}
+simple_wrappers = {"command", "exec", "nohup", "setsid"}
+assign = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+dynamic = "$`"
+max_depth = 8
+
+
+def tokenize(source):
+    lexer = shlex.shlex(source, posix=True, punctuation_chars=";&|()<>{}\n")
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
+    lexer.commenters = ""
+    raw = list(lexer)
+    normalized = []
+    punctuation = set(";&|()<>{}\n")
+    operators = re.compile(r"&&|\|\||;;|\|&|<<<|<<|>>|>&|&>|[;|&()<>{}\n]")
+    for token in raw:
+        if token and all(character in punctuation for character in token):
+            normalized.extend(operators.findall(token))
+        else:
+            normalized.append(token)
+    return normalized
+
+
+def segment_start(tokens, index):
+    cursor = index
+    while cursor > 0 and tokens[cursor - 1] not in controls:
+        cursor -= 1
+    return cursor
+
+
+def segment_end(tokens, index):
+    cursor = index
+    while cursor < len(tokens) and tokens[cursor] not in controls:
+        cursor += 1
+    return cursor
+
+
+def command_position(tokens, index):
+    start = segment_start(tokens, index)
+    if index == start:
+        return True
+    prefix = tokens[start:index]
+    while prefix and prefix[0] in reserved_prefixes:
+        prefix = prefix[1:]
+    if not prefix:
+        return True
+    while prefix and assign.match(prefix[0]):
+        prefix = prefix[1:]
+    if not prefix:
+        return True
+
+    wrapper = os.path.basename(prefix[0])
+    rest = prefix[1:]
+    if wrapper in simple_wrappers:
+        return all(token.startswith("-") or assign.match(token) for token in rest)
+    if wrapper == "env":
+        cursor = 0
+        while cursor < len(rest):
+            token = rest[cursor]
+            if assign.match(token):
+                cursor += 1
+            elif token in {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}:
+                cursor += 2
+            elif token.startswith("-"):
+                cursor += 1
+            else:
+                return False
+        return True
+    if wrapper in {"sudo", "doas"}:
+        value_options = {
+            "-C", "-D", "-g", "-h", "-p", "-R", "-r", "-T", "-t", "-U",
+            "-u", "--chdir", "--close-from", "--group", "--host", "--prompt",
+            "--role", "--type", "--other-user", "--user",
+        }
+        cursor = 0
+        while cursor < len(rest):
+            token = rest[cursor]
+            if token in value_options:
+                cursor += 2
+            elif token.startswith("-"):
+                cursor += 1
+            else:
+                return False
+        return True
+    if wrapper == "timeout":
+        cursor = 0
+        while cursor < len(rest):
+            token = rest[cursor]
+            if token in {"-k", "--kill-after", "-s", "--signal"}:
+                cursor += 2
+            elif token.startswith("-"):
+                cursor += 1
+            else:
+                # duration is the one required non-option prefix
+                return cursor == len(rest) - 1
+        return False
+    if wrapper in {"nice", "ionice", "chrt", "taskset", "stdbuf", "flock"}:
+        # These wrappers accept option/value shapes that vary by platform.
+        # A pkill/pgrep token following them is executable, not prose.
+        return True
+    if wrapper == "xargs":
+        return all(token.startswith("-") for token in rest)
+    return False
+
+
+def full_pattern(tokens, executable_index):
+    end = segment_end(tokens, executable_index)
+    full = False
+    option_ended = False
+    skip_value = False
+    value_short = set("dGgOPqrstuUF")
+    value_long = {
+        "--cgroup", "--delimiter", "--env", "--group", "--namespace",
+        "--ns", "--nslist", "--older", "--parent", "--pgroup",
+        "--pidfile", "--queue", "--runstates",
+        "--session", "--signal", "--terminal", "--euid", "--uid",
+    }
+    for index in range(executable_index + 1, end):
+        token = tokens[index]
+        if token in {"<", ">", "<<", ">>"}:
+            break
+        if skip_value:
+            skip_value = False
+            continue
+        if not option_ended and token == "--":
+            option_ended = True
+            continue
+        if not option_ended and token.startswith("--"):
+            name, separator, _ = token.partition("=")
+            if name == "--full":
+                full = True
+            if name in value_long and not separator:
+                skip_value = True
+            continue
+        if not option_ended and token.startswith("-") and token != "-":
+            option = token[1:]
+            if (
+                re.fullmatch(r"(?:SIG)?[A-Z][A-Z0-9]*|[0-9]+", option)
+                and not (len(option) == 1 and option in value_short)
+            ):
+                continue
+            for offset, character in enumerate(option):
+                if character == "f":
+                    full = True
+                if character in value_short:
+                    # A value-taking short option consumes the rest of this
+                    # token, or the next token when no attached value remains.
+                    if offset == len(option) - 1:
+                        skip_value = True
+                    break
+            continue
+        if not full or any(char in token for char in dynamic):
+            return None
+        return index, token
+    return None
+
+
+def ssh_remote_body(tokens, executable_index):
+    end = segment_end(tokens, executable_index)
+    value_options = {
+        "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J",
+        "-L", "-l", "-m", "-O", "-o", "-P", "-p", "-Q", "-R", "-S",
+        "-W", "-w",
+    }
+    cursor = executable_index + 1
+    while cursor < end:
+        token = tokens[cursor]
+        if token == "--":
+            cursor += 2  # option terminator + destination
+            break
+        if token in value_options:
+            cursor += 2
+            continue
+        if token.startswith("-"):
+            cursor += 1
+            continue
+        cursor += 1  # destination
+        break
+    if cursor >= end:
+        return None
+    return " ".join(tokens[cursor:end])
+
+
+def inspect(source, depth=0, inherited=()):
+    if depth > max_depth:
+        raise ValueError("shell nesting exceeds classifier depth")
+    tokens = tokenize(source)
+
+    for index, token in enumerate(tokens):
+        base = os.path.basename(token)
+        if base in shells and command_position(tokens, index):
+            end = segment_end(tokens, index)
+            cursor = index + 1
+            while cursor + 1 < end:
+                option = tokens[cursor]
+                if (
+                    (
+                        option.startswith("-")
+                        and not option.startswith("--")
+                        and "c" in option[1:]
+                    )
+                    or option == "--command"
+                ):
+                    body_index = cursor + 1
+                    ambient = tuple(
+                        value for token_index, value in enumerate(tokens)
+                        if token_index != body_index
+                    ) + tuple(inherited)
+                    if inspect(tokens[body_index], depth + 1, ambient):
+                        return True
+                    break
+                cursor += 1
+        elif base == "eval" and command_position(tokens, index):
+            end = segment_end(tokens, index)
+            if index + 1 < end:
+                body_indices = set(range(index + 1, end))
+                ambient = tuple(
+                    value for token_index, value in enumerate(tokens)
+                    if token_index not in body_indices
+                ) + tuple(inherited)
+                if inspect(
+                    " ".join(tokens[index + 1:end]), depth + 1, ambient
+                ):
+                    return True
+        elif base == "ssh" and command_position(tokens, index):
+            remote = ssh_remote_body(tokens, index)
+            if remote and inspect(remote, depth + 1):
+                return True
+
+    for index, token in enumerate(tokens):
+        if os.path.basename(token) not in killers or not command_position(tokens, index):
+            continue
+        parsed = full_pattern(tokens, index)
+        if parsed is None:
+            continue
+        pattern_index, pattern = parsed
+        if not pattern:
+            continue
+        if any(
+            (
+                other_index != pattern_index
+                and pattern in other
+            )
+            for other_index, other in enumerate(tokens)
+        ) or any(
+            pattern in other for other in inherited
+        ):
+            return True
+    return False
+
+
+try:
+    matched = inspect(command)
+except (ValueError, IndexError):
+    sys.exit(11)
+sys.exit(10 if matched else 0)
+PY
+}
+
+pkill_full_pattern_self_matches
+PKILL_SELF_MATCH=$?
+if [ "$PKILL_SELF_MATCH" -eq 10 ]; then
+    emit_deny "- pkill/pgrep -f の literal pattern が同じ実行 command に再出現する。myscrip[t].py の bracket 形か PID file を使おう。\n次これで行こう。"
+elif [ "$PKILL_SELF_MATCH" -ne 0 ]; then
+    printf '%s\n' "bash command guard pkill/pgrep classification failed; refusing tool execution" >&2
+    exit 2
+fi
+
+# ----------------------------------------
 # Refuse `sops exec-env` when its input is not a flat mapping (gh #156).
 #
 # `sops exec-env` cannot export nested mappings/lists. Worse, sops includes the
