@@ -293,7 +293,10 @@ else
 fi
 
 MSG_OUT="$(cmd_msg worker-a "mailbox first fixture")"
-if [[ "$MSG_OUT" == *"appended seq="* && "$MSG_OUT" == *"signal=relay-owned"* ]]; then
+if [[ "$MSG_OUT" == *"appended seq="* &&
+      "$MSG_OUT" == *"signal=relay-owned"* &&
+      "$MSG_OUT" == *"receipt=unconfirmed recipient_activity=unknown"* &&
+      "$MSG_OUT" == *"inbox read is not proven"* ]]; then
   ok "formation msg reports durable append and relay-owned signal"
 else
   bad "formation msg output broke mailbox-first contract [$MSG_OUT]"
@@ -347,7 +350,9 @@ if DEAD_RELAY_OUT="$(cmd_msg worker-a "durable while relay dead" 2>&1)"; then
 else
   DEAD_RELAY_RC=$?
 fi
-if [[ "$DEAD_RELAY_RC" -eq 0 && "$DEAD_RELAY_OUT" == *"signal=sent-directly pane=%42"* ]]; then
+if [[ "$DEAD_RELAY_RC" -eq 0 &&
+      "$DEAD_RELAY_OUT" == *"signal=sent-directly pane=%42"* &&
+      "$DEAD_RELAY_OUT" == *"receipt=unconfirmed recipient_activity=unknown"* ]]; then
   ok "formation msg safely signals directly when the relay is dead"
 else
   bad "formation msg dead-relay contract failed [$DEAD_RELAY_RC: $DEAD_RELAY_OUT]"

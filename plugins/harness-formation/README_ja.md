@@ -115,6 +115,11 @@ report 先を推測しない。untargeted な
 `tmux display-message -p '#{pane_id}'` は session の active pane を返し得るため、
 自己 pane の根拠に使わない。
 
+通常の zero-keystroke signal は
+`receipt=unconfirmed recipient_activity=unknown` を返す。durable row と badge
+は inbox read の証明ではない。同じ本文を再送せず、緊急時は
+`formation status` または明示起動した `formation-stall-watch` で確認する。
+
 option 更新失敗時は取得済みの全 pane option を復元し、row を追加しない。
 原因修正後は同じ id で再実行できる。異なる locked identity との衝突は
 fail-closed のまま残し、調査後の approved registry reset を要求する。rollback
