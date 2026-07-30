@@ -96,6 +96,11 @@ registry and `@formation_exclusive_input`. Only then may
 short pull nudge. The durable body always remains in the mailbox.
 Every injection remains `receipt unconfirmed` and uses the shared delayed-submit
 primitive.
+Normal zero-keystroke signals now report
+`receipt=unconfirmed recipient_activity=unknown`: a durable row and pane badge
+do not prove that the recipient read its inbox. Do not resend the body. For an
+urgent instruction, inspect `formation status` or the explicit
+`formation-stall-watch`; an idle recipient may not act until a later turn.
 
 ### Registering an existing pane
 

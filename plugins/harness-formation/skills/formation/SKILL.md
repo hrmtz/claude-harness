@@ -337,10 +337,10 @@ Drop these patterns into the briefing so the worker knows its own protocol:
 
   | Output | Meaning | Your move |
   |---|---|---|
-  | `signal=relay-owned` | Best case. The recipient's relay is alive and owns the badge write. | Nothing. Done. |
-  | `signal=sent-directly` | No relay, so the sender set the badge itself. | Nothing. Done. |
-  | `signal=unavailable … pull required` | No usable route. The row is durable; the recipient will see it when it reads its inbox. | Tell a human if it was urgent. Do not re-send. |
-  | `FAILED (exit 4)` | The pane could not be signaled. Row still durable, but no badge appears. | Report the failure. Do not re-send the body. |
+  | `signal=relay-owned … receipt=unconfirmed recipient_activity=unknown` | The recipient's relay owns the badge write. The row is durable, but inbox read is not proven. | Do not re-send. If urgent, inspect status or the explicit stall watcher. |
+  | `signal=sent-directly … receipt=unconfirmed recipient_activity=unknown` | The sender set the badge itself. The row is durable, but inbox read is not proven. | Do not re-send. If urgent, inspect status or the explicit stall watcher. |
+  | `signal=unavailable … receipt=unconfirmed recipient_activity=unknown … pull required` | No usable route. The row is durable; the recipient will see it when it reads its inbox. | Tell a human if it was urgent. Do not re-send. |
+  | `FAILED (exit 4): receipt=unconfirmed recipient_activity=unknown` | The pane could not be signaled. Row still durable, but no badge appears. | Report the failure. Do not re-send the body. |
 
   If you believe a message was lost, check `formation inbox --history` or ask
   the recipient — do not put the same body in the mailbox twice.

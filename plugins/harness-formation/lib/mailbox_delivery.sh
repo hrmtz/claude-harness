@@ -208,14 +208,14 @@ mailbox_signal_or_defer() {
   # durable" and read like reassurance. Nothing about the delivery logic was
   # wrong — only which outcome sounded alarming (gh #214).
   if mailbox_relay_alive "$relay_pid" "$recipient"; then
-    echo "signal=relay-owned relay_pid=$relay_pid pane=$pane (sent; the relay sets the badge, zero keystrokes into prompt)"
+    echo "signal=relay-owned relay_pid=$relay_pid pane=$pane receipt=unconfirmed recipient_activity=unknown (signal sent; the relay sets the badge with zero prompt keystrokes, but inbox read is not proven)"
     return 0
   fi
   if ! mailbox_signal_pane "$pane" "$seq" "$from"; then
-    echo "FAILED (exit 4): pane $pane could not be signaled. The row is durable, so nothing is lost, but $recipient sees no badge until it reads its inbox unprompted." >&2
+    echo "FAILED (exit 4): receipt=unconfirmed recipient_activity=unknown; pane $pane could not be signaled. The row is durable, so nothing is lost, but $recipient sees no badge until it reads its inbox unprompted." >&2
     return 4
   fi
-  echo "signal=sent-directly pane=$pane (sent; no relay, so the sender set the badge itself, zero keystrokes into prompt)"
+  echo "signal=sent-directly pane=$pane receipt=unconfirmed recipient_activity=unknown (signal sent; the sender set the badge with zero prompt keystrokes, but inbox read is not proven)"
 }
 
 # Signal an already-durable row when its pane route is known. Parent-directed
@@ -230,7 +230,7 @@ mailbox_signal_or_defer() {
 mailbox_signal_durable_row() {
   local recipient="$1" pane="$2" seq="$3" from="$4" formation_dir="$5"
   if [[ ! "$pane" =~ ^%[0-9]+$ ]]; then
-    echo "signal=unavailable recipient=$recipient route=absent-or-invalid (row remains durable; pull required)"
+    echo "signal=unavailable recipient=$recipient route=absent-or-invalid receipt=unconfirmed recipient_activity=unknown (row remains durable; pull required)"
     return 0
   fi
   mailbox_signal_or_defer "$recipient" "$pane" "$seq" "$from" "$formation_dir"

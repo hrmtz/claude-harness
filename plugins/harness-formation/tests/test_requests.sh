@@ -103,6 +103,8 @@ printf '%s\n' "$RELAY_PID" >"$FORMATION_DIR/parent-a.relay_pid"
 FORMATION_PARENT_PANE=%100 cmd_report 'relay owns lifecycle signal' \
   2>"$FIXTURE/relay-owned-report.err"
 grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/relay-owned-report.err"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' \
+  "$FIXTURE/relay-owned-report.err"
 if grep -Fq '@formation_mail_pending' "$TMUX_LOG"; then
   echo "FAIL: lifecycle sender duplicated a live relay's badge write" >&2
   exit 1
@@ -117,6 +119,8 @@ rm -f "$FORMATION_DIR/parent-a.relay_pid"
 FORMATION_PARENT_PANE="" cmd_report 'legacy pull-only report' \
   2>"$FIXTURE/pull-only-report.err"
 grep -Fq 'signal=unavailable' "$FIXTURE/pull-only-report.err"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' \
+  "$FIXTURE/pull-only-report.err"
 jq -Rsc \
   '[splits("\n") | fromjson? | select(.body == "legacy pull-only report")] | length == 1' \
   "$MAILBOX_LOG" | grep -qx true
