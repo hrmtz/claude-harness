@@ -167,6 +167,20 @@ formation-window-status apply --arrange --dry-run
 formation-window-status revert
 ```
 
+### Structural stall observer
+
+`formation-stall-watch` は mailbox silence と pane hash 安定の両 clock が
+満了した時だけ worker を `STALL` と分類する。pane snapshot は activity
+変化の検出専用で、input box の状態判定には使わない。`capture-pane` では
+editable draft / 直前入力 ghost / chassis auto-suggestion を区別できないため、
+全 result に `prompt_state=UNKNOWN` を返す。`STALL` は input box が詰まっている、
+または変更して安全という意味ではない。未解決 ASK は `WAITING_PARENT` とする。
+
+```bash
+formation-stall-watch --silence 900 --idle 900 --json
+formation-stall-watch --watch --quiet
+```
+
 ### 3. worker 側 (worker の agent が Bash tool から叩く — claude/codex 共通)
 
 ```bash

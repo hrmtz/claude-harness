@@ -129,6 +129,9 @@ def snapshot_crc(pane: str) -> str | None:
     result = run_tmux("capture-pane", "-p", "-S", "-40", "-t", pane)
     if result.returncode:
         return None
+    # Render stability is only an activity gate. It cannot prove that the
+    # prompt buffer is empty: drafts, ghosts, and auto-suggestions can render
+    # identically. Injection still requires recorded exclusive ownership.
     return hashlib.sha256(result.stdout.encode()).hexdigest()
 
 

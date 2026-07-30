@@ -22,7 +22,8 @@ check_surface() {
   for tok in "formation msg" "mailbox-send" "zero keystrokes" "--inject" \
              "receipt unconfirmed" "formation inbox" "tmux_send_submit" \
              "send-keys -X cancel" "#{pane_in_mode}" "load-buffer" \
-             "paste-buffer -p" "0.4" "0.5" "$single_token"; do
+             "paste-buffer -p" "capture-pane" "UNKNOWN" "C-u" \
+             "auto-suggestion" "activity signal" "0.4" "0.5" "$single_token"; do
     grep -qF -- "$tok" "$file" || missing="$missing $tok"
   done
   # Double Enter: two distinct Enter submissions separated by the second delay.
