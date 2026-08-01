@@ -47,6 +47,25 @@ class ProfileMirrorTest(unittest.TestCase):
                 self.assertIn("PLATEAU_CANDIDATE", text)
                 self.assertIn("magi_plateau_gate.sh", text)
 
+    def test_ultramagi_mirrors_split_warmup_from_irreversible_boundaries(self) -> None:
+        paths = (
+            PLUGIN / "skills/ultramagi/SKILL.md",
+            ROOT / "plugins/harness-magi/skills/ultramagi/SKILL.md",
+            ROOT / "plugins/harness-kimi/skills/ultramagi/SKILL.md",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path):
+                self.assertIn("ready-to-drive", text)
+                self.assertIn("warmup", text.lower())
+                self.assertIn("irreversible boundary", text)
+                self.assertIn("not plateau", text.lower())
+                self.assertIn("exact-revision", text)
+                self.assertIn("implementation", text)
+                self.assertIn("CRITICAL/HIGH", text)
+                self.assertIn("never authorizes shipping", text)
+                self.assertIn("background wait estimated at 30 minutes or more", text)
+
     def test_legacy_installer_and_uninstaller_cover_all_codex_skills(self) -> None:
         expected = "for skill in magi dual-magi-review ultramagi; do"
         self.assertIn(expected, (PLUGIN / "install-codex-skills.sh").read_text())
