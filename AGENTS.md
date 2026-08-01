@@ -75,6 +75,13 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 
 - walltime > 1h の作業は 5 分以内に early-check（CPU / log / カウンタの妥当性）
 - walltime ≥ 2h / ≥ 100M row DML / 非可逆 cutover / 新 layer build / ≥ $10 確実消費 の場合は事前に多視点審議を行う
+- briefing は可逆性で分ける。DROP / migration / 本番切替など非可逆・破壊的な作業は
+  従来どおり重く審議する。measurement / build / rollback が証明済みの追加のみ INSERT
+  など可逆な作業は、不変条件・最初の bounded step・rollback が決まり、その step を
+  無効化する既知 CRITICAL/HIGH がない時点で着手する。prose の完全化を待たない。
+- 推定待ち時間 ≥30 分の background job 中は次工程を下見する。実コードの分岐・固定値・
+  test lockstep、doc 参照 object の存在、role/index/env 名から推測した用途を検証する。
+  乖離はその場で直さず、次工程の変更範囲として記録する。
 
 ## 8. Identity（自己命名・self-reference）
 

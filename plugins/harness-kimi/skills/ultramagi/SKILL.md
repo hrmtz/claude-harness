@@ -1,10 +1,10 @@
 ---
 name: ultramagi
-version: 0.1.0-kimi
+version: 0.2.0-kimi
 description: |
-  End-to-end design-to-implementation rigor loop for Kimi. Gate the design with dual-magi, build
-  only after exact-revision plateau, adversarially bug-hunt the implementation, then run final
-  executable review and tests. Use for hard-to-reverse, production-critical changes.
+  End-to-end design-to-implementation rigor loop for Kimi. Classify reversibility, start bounded
+  reversible work once ready-to-drive, and require dual-magi plus implementation review before
+  every irreversible boundary. Use for hard-to-reverse, production-critical changes.
 type: prompt
 whenToUse: |
   Canonical migrations, public launches, security boundaries, scoring/ranking changes, and explicit
@@ -32,10 +32,24 @@ whole umbrella Epic as one task. After each gated slice, update the Epic with ga
 and dependency changes, then select the next unblocked slice. Do not create an Epic when the
 request is already one independently mergeable slice.
 
+Classify the next step before briefing. Destructive/canonical mutation, production cutover, public
+launch, and user-facing ranking changes stay on the heavy track and require exact-revision plateau
+first. Canonical/bulk DML stays heavy even when a rollback is claimed. Local
+measurement/build/tests, disposable scaffolding, and additive work in a non-canonical/staging
+target with an executable rollback check use the warmup track: start when the invariant, first bounded step, rollback/disposal,
+and absence of a known CRITICAL/HIGH against that step are explicit. Warmup is not plateau and
+never authorizes shipping or an irreversible action. Move machine-derivable detail into executable
+checks; return to heavy briefing if evidence changes the invariant, rollback, or blast radius.
+During a background wait estimated at 30 minutes or more, inspect the next step's real branches,
+constants, test lockstep, referenced objects, and role/index/env naming assumptions. Record drift
+as next-step scope; do not fix it opportunistically while the current job runs.
+
 1. State the slice invariant and inherited Epic invariant, then write the slice design locally.
-2. Invoke the Kimi `dual-magi-review` skill. Do not code until its mechanical plateau marker matches
-   the current design revision.
-3. Implement reversible, repo-baked changes. Record actual family routing when Kimi codes directly.
+2. Heavy track: invoke the Kimi `dual-magi-review` skill and do not cross the irreversible boundary
+   until its mechanical plateau marker matches the current design revision. Warmup track: review
+   may overlap the bounded reversible step.
+3. Implement the plateau'd design or only the bounded reversible step admitted by the warmup
+   checkpoint. Keep changes repo-baked. Record actual family routing when Kimi codes directly.
 4. Freeze the implementation under review as a stable artifact (for example, a generated patch
    file). Record its exact SHA; editing code requires regenerating the artifact.
 5. Run the shared runtime's odd-numbered `magi_fanout_codex.sh` phase with
