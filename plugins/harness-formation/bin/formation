@@ -506,7 +506,7 @@ Parent (lead) commands:
                                           PRs, issues, evidence, refs/worktrees, parent
                                           checkout divergence, and Formation worker state.
                                           Use --json for stable machine-readable output.
-  formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator]
+  formation spawn [--cli claude|codex|kimi] [--model <model>] [--effort <level>] [--task <label>] [--orchestrator]
                   [--exclusive-input]
                   [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]
                                           Create new window (default; isolates worker SessionStart
@@ -997,11 +997,12 @@ cmd_spawn() {
   # bypass is tri-state: "" = pick the default, 1 = force bypass
   # (--bypass-sandbox), 0 = force normal sandbox (--sandbox). Either override
   # works for either cli.
-  local cli="claude" model="" placement="new-window" bypass="" task="" orchestrator="" exclusive_input=0
+  local cli="claude" model="" effort="" placement="new-window" bypass="" task="" orchestrator="" exclusive_input=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cli)            cli="$2";   shift 2 ;;
       --model)          model="$2"; shift 2 ;;
+      --effort)         effort="$2"; shift 2 ;;
       --task)           task="$2";  shift 2 ;;
       --new-window)     placement="new-window"; shift ;;
       --split)          placement="split-window"; shift ;;
@@ -1013,7 +1014,7 @@ cmd_spawn() {
     esac
   done
   [[ "$cli" == "claude" || "$cli" == "codex" || "$cli" == "kimi" ]] || { echo "unknown --cli: $cli (claude|codex|kimi)" >&2; exit 2; }
-  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--task <label>] [--orchestrator] [--exclusive-input] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "usage: formation spawn [--cli claude|codex|kimi] [--model <model>] [--effort <level>] [--task <label>] [--orchestrator] [--exclusive-input] [--new-window|--split] [--bypass-sandbox|--sandbox] <briefing.md> [name]" >&2; exit 2; }
 
   # Delegate to the same cache guard used by direct launches. This happens
   # before pane/registry mutation and avoids a second, recursively acquired
@@ -1152,15 +1153,20 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   if [[ "$cli" == "codex" ]]; then
     # Codex: pass seed as initial prompt argument.
     session_name="codex-$name"
-    local codex_model_flag="" codex_sandbox_flag=""
+    local codex_model_flag="" codex_sandbox_flag="" codex_effort_flag=""
     [[ -n "$model" ]] && codex_model_flag="-m $model"
+    # Reasoning effort is a config key, not a flag: codex reads
+    # model_reasoning_effort from ~/.codex/config.toml. Overriding it per-worker
+    # with -c keeps concurrent workers on their own tiers instead of forcing a
+    # global edit that would retune every running pane. harness#281.
+    [[ -n "$effort" ]] && codex_effort_flag="-c model_reasoning_effort=$effort"
     codex_sandbox_flag="$(codex_launch_flags "$bypass")"
     if [[ "$bypass" == "1" ]]; then
       echo "formation: spawning codex worker '$name' with FULL SANDBOX/APPROVAL BYPASS (default). Harness controls remain active; the worker has unrestricted local authority." >&2
     else
       echo "formation: spawning codex worker '$name' with EXPLICIT workspace-write sandbox (--sandbox), approvals disabled, and scoped mailbox write access at $FORMATION_HOME." >&2
     fi
-    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $(printf '%q' "$seed")" Enter
+    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $codex_effort_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
     # Kimi: launch the interactive TUI, then inject the seed. Kimi has no
