@@ -1112,6 +1112,15 @@ cmd_spawn() {
 
   # Set once at pane creation. Header/self-routing read the locked value so
   # later task/status updates cannot drift the worker identity.
+  # Chassis first, before the worker CLI has had time to exec. identity_owner
+  # defaults HARNESS_IDENTITY_CHASSIS to "claude" and, on a pane with no
+  # @harness_chassis to consult, falls back to process ancestry — which for any
+  # worker still resolves to the spawning Claude. It then CLAIMs the pane as
+  # claude and writes both @harness_chassis and the window name in one
+  # transaction (identity_owner.sh:311,517,547). Seeding the value we already
+  # know from --cli makes the existing foreign-owner-nested refusal
+  # (identity_owner.sh:400) fire instead. harness#280.
+  tmux set-option -p -t "$pane_id" @harness_chassis "$cli" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_identity_locked "$name" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_id "$name" >/dev/null
   tmux set-option -p -t "$pane_id" @formation_task "$task_label" >/dev/null
