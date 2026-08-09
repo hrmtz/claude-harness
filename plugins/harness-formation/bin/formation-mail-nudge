@@ -621,11 +621,20 @@ def ensure_window_status(script_dir: Path) -> None:
     applied = subprocess.run(
         [str(helper), "apply"], text=True, capture_output=True, check=False
     )
+    # flush: under systemd, stdout is block-buffered and a rare once-per-server
+    # line would otherwise sit invisible in the buffer until process exit.
     if applied.returncode:
         detail = applied.stderr.strip() or f"exit {applied.returncode}"
-        print(f"formation-mail-nudge: window-status apply failed: {detail}", file=sys.stderr)
+        print(
+            f"formation-mail-nudge: window-status apply failed: {detail}",
+            file=sys.stderr,
+            flush=True,
+        )
     else:
-        print(f"formation-mail-nudge: window-status re-applied for tmux server {server_pid}")
+        print(
+            f"formation-mail-nudge: window-status re-applied for tmux server {server_pid}",
+            flush=True,
+        )
 
 
 def process_identity(pid: int, script: Path) -> bool:
