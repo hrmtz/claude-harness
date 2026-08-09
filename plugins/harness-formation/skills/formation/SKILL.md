@@ -296,7 +296,10 @@ canonical checkout and never records a disposable worktree.
 `formation-window-status status` is read-only. Its explicit `apply` journals
 the same tmux server's exact global-format and changed-pane preimages;
 `--arrange` is separately opt-in. `revert` restores the journal when safe.
-Neither helper is invoked automatically.
+The mail-nudge watcher, when running, re-applies the window format for a tmux
+server that has no journal (server restarts drop tmux global options, #283);
+an explicit `revert` leaves a per-server marker that suppresses this until the
+next `apply` or server restart.
 
 Whenever you return to idle in the lead pane, call `formation inbox` before
 continuing — the worker may have asked a question or reported completion.

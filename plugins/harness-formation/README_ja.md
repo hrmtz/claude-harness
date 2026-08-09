@@ -156,9 +156,14 @@ plugin install / `formation spawn` は watcher を起動しない。常駐は明
 systemd user service 選択で、installer は disposable caller worktree ではなく
 canonical checkout を解決する。
 
-`formation-window-status` も自動実行しない。`apply` は server-global format の
+`formation-window-status` の初回適用も明示実行。`apply` は server-global format の
 正確な preimage を journal し、`--arrange` は別 opt-in。`revert` は同じ tmux
-server の journal を復元し、`status` は read-only:
+server の journal を復元し、`status` は read-only。tmux global option は server
+メモリにしか無いため、server 再起動で適用済み format は silent に消える (#283)。
+mail-nudge watcher 稼働中は watch loop が journal の無い server に format を
+再適用する。明示的 `revert` は per-server marker を残し watcher はそれを尊重
+(次の `apply` か server 再起動まで revert が維持される)。watcher 側で
+`FORMATION_WINDOW_STATUS_AUTO=0` を設定すると再適用を完全停止:
 
 ```bash
 formation-window-status status

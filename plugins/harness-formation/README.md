@@ -169,10 +169,16 @@ Neither plugin install nor `formation spawn` starts the watcher. Persistent
 operation is an explicit systemd user-service choice; the installer resolves
 the canonical checkout rather than persisting a caller worktree.
 
-`formation-window-status` is likewise explicit. `apply` changes server-global
-window formats and journals their exact preimage; `--arrange` is separately
-opt-in. `revert` restores that journal for the same tmux server, and `status`
-is read-only:
+`formation-window-status` is likewise explicit for its first application.
+`apply` changes server-global window formats and journals their exact
+preimage; `--arrange` is separately opt-in. `revert` restores that journal for
+the same tmux server, and `status` is read-only. Because tmux global options
+live only in server memory, a tmux server restart silently drops an applied
+format; when the mail-nudge watcher is running, its watch loop re-applies the
+format for any server that has no journal (#283). An explicit `revert` leaves
+a per-server marker the watcher honors, so reverting sticks until the next
+`apply` or server restart. Set `FORMATION_WINDOW_STATUS_AUTO=0` on the watcher
+to disable re-application entirely:
 
 ```bash
 formation-window-status status
