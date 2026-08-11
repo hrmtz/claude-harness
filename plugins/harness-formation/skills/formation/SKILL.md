@@ -319,8 +319,37 @@ missing durable mail (they complement, not replace, the pull rail above):
   emitting. Kill switch: `FORMATION_MAILBOX_STOP_GATE_DISABLE=1`.
 
 Both fail open silently when the `formation` CLI or a mailbox identity is
-absent. A fully idle parent still needs an external wake (#282); these hooks
-only close the busy-turn and turn-end gaps.
+absent. These hooks close the busy-turn and turn-end gaps; the fully idle gap
+is closed by the Monitor rail below.
+
+### Idle-wake rail: arm a mailbox Monitor before going idle (#282)
+
+A fully idle Claude parent gets no new turn from a mailbox badge. The
+event-driven wake uses the Claude `Monitor` tool plus
+`formation inbox --follow`, which streams exactly one metadata line per new
+addressed mailbox row (seq/from/ts/subject only — never the body), touches
+neither cursor nor badge, and rides the same inotify+timeout discipline as the
+relay. Each emitted line becomes a task notification that starts a turn even
+while the session is idle — zero keystrokes into any pane, and the event is
+machine-tagged as a notification, never as user speech.
+
+**A Claude lead/orchestrator that spawns workers MUST arm this once, right
+after the first spawn:**
+
+```
+Monitor({
+  command: "formation inbox --follow",
+  description: "formation mailbox (self)",
+  persistent: true, timeout_ms: 3600000
+})
+```
+
+Rows already pending at arm time collapse into one `pending=N` startup event,
+so arming late cannot silently skip mail. On wake, pull with
+`formation inbox` as usual — the event line is only a doorbell. Stop it with
+`TaskStop` when the last worker is reaped. Codex leads have no Monitor tool;
+they remain covered by badge + hooks only, so prefer a Claude lead for
+long-running supervision.
 
 ### 4. Worker-side (what the worker pane should do)
 

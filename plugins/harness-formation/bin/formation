@@ -550,6 +550,9 @@ Parent (lead) commands:
   formation inbox                         Read unread reports addressed to self
   formation inbox --count                 Print unread count, max seq, and oldest timestamp
   formation inbox --history               Also show the last 50 addressed mailbox rows
+  formation inbox --follow                Stream one metadata line per NEW addressed row
+                                          (for a Claude Monitor wake rail; never prints
+                                          bodies, never touches cursor or badge)
   formation ack <request_id> [summary]     Acknowledge an ASK; worker resumes RUNNING
   formation resolve <request_id> <summary>
                                           Resolve an ASK into its declared next state
@@ -1600,12 +1603,88 @@ cmd_repair_parent() {
 }
 
 cmd_inbox() {
-  local history=0 count_only=0
+  local history=0 count_only=0 follow=0
   case "${1:-}" in
     --history) history=1; shift ;;
     --count) count_only=1; shift ;;
+    --follow) follow=1; shift ;;
   esac
-  [[ $# -eq 0 ]] || { echo "usage: formation inbox [--history|--count]" >&2; return 2; }
+  [[ $# -eq 0 ]] || { echo "usage: formation inbox [--history|--count|--follow]" >&2; return 2; }
+
+  if [[ "$follow" == "1" ]]; then
+    # Event stream for the idle-wake rail (gh #282): a Claude orchestrator arms
+    # `Monitor(formation inbox --follow, persistent:true)` before going idle;
+    # each emitted stdout line becomes a task notification that starts a turn
+    # even when the session is idle. Contract:
+    #   - metadata only (seq/from/ts/subject, control-stripped, bounded) —
+    #     never the body: bodies are attacker-controllable free text and this
+    #     line lands directly in the orchestrator's context;
+    #   - read-only observer: cursor and tmux badge are never touched, the
+    #     mandatory `formation inbox` pull stays the single consumption path;
+    #   - inotify with a bounded timeout backstop (relay idiom): re-arming per
+    #     loop keeps it correct across retention rotation and pre-arm appends.
+    local f_self f_pane_id f_pane_alias="" f_last=0 f_interval
+    f_self="$(self_id)" || return 1
+    f_pane_id="$(mailbox_resolve_caller_pane || true)"
+    [[ -n "$f_pane_id" ]] && f_pane_alias="pane-${f_pane_id#%}"
+    f_interval="${FORMATION_INBOX_FOLLOW_INTERVAL:-5}"
+    [[ "$f_interval" =~ ^[0-9]+$ && "$f_interval" -ge 1 ]] || f_interval=5
+
+    follow_scan() {
+      local out line seqf rest emitted=1
+      out="$(jq -Rrc --arg self "$f_self" --arg pane "$f_pane_alias" \
+               --argjson last "$f_last" '
+        def ch: tostring | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "") | .[0:120];
+        fromjson?
+        | select(((.seq? // null) | type) == "number" and .seq > $last)
+        | select(.to == $self or ($pane != "" and .to == $pane))
+        | "\(.seq)\t📬 mailbox seq=\(.seq) from=\((.from // "?") | ch) ts=\((.ts // "?") | ch)"
+          + (if (((.subject // "") | ch) != "") then " subject:\(.subject | ch)" else "" end)
+          + " — pull with formation inbox"
+      ' "$MAILBOX_LOG" 2>/dev/null || true)"
+      [[ -n "$out" ]] || return 1
+      while IFS=$'\t' read -r seqf rest; do
+        [[ "$seqf" =~ ^[0-9]+$ && -n "$rest" ]] || continue
+        printf '%s\n' "$rest"
+        emitted=0
+        [[ "$seqf" -gt "$f_last" ]] && f_last="$seqf"
+      done <<<"$out"
+      return "$emitted"
+    }
+
+    # Baseline: only NEW arrivals stream row-by-row. Mail already pending at
+    # arm time collapses into one summary event so arming late cannot silently
+    # skip it, and cannot replay a long backlog either.
+    f_last="$(jq -Rrc --arg self "$f_self" --arg pane "$f_pane_alias" '
+      fromjson?
+      | select(.to == $self or ($pane != "" and .to == $pane))
+      | .seq? // 0
+    ' "$MAILBOX_LOG" 2>/dev/null | sort -n | tail -n 1 || true)"
+    [[ "$f_last" =~ ^[0-9]+$ ]] || f_last=0
+    local f_pending
+    f_pending="$(mailbox_read "$f_self" "$f_pane_alias" 2>/dev/null |
+      grep -c . || true)"
+    [[ "$f_pending" =~ ^[0-9]+$ ]] || f_pending=0
+    if [[ "$f_pending" -gt 0 ]]; then
+      printf '📬 mailbox pending=%s at follow start — pull with formation inbox\n' \
+        "$f_pending"
+    fi
+    echo "follow: watching to=$f_self${f_pane_alias:+,$f_pane_alias} baseline seq=$f_last interval=${f_interval}s (metadata only; cursor/badge untouched)" >&2
+
+    local f_use_inotify=0
+    [[ "${FORMATION_INBOX_FOLLOW_FORCE_POLL:-0}" != "1" ]] &&
+      command -v inotifywait >/dev/null 2>&1 && f_use_inotify=1
+    while true; do
+      if [[ "$f_use_inotify" == "1" ]]; then
+        inotifywait -qq -t "$f_interval" -e modify -e create -e close_write \
+          "$MAILBOX_LOG" 2>/dev/null || true
+      else
+        sleep "$f_interval"
+      fi
+      while follow_scan; do :; done
+    done
+    return 0
+  fi
 
   if [[ "$count_only" == "1" ]]; then
     # Advisory callers must never consume mail or alter the tmux badge. Capture
