@@ -304,6 +304,24 @@ next `apply` or server restart.
 Whenever you return to idle in the lead pane, call `formation inbox` before
 continuing — the worker may have asked a question or reported completion.
 
+### Unread-mail hooks for the parent/orchestrator loop
+
+Two zero-keystroke Claude hooks keep a busy or stopping orchestrator from
+missing durable mail (they complement, not replace, the pull rail above):
+
+- `mailbox_unread_advisor.sh` (UserPromptSubmit / SessionStart / PostToolUse)
+  injects the unread count as context. The PostToolUse path surfaces new mail
+  at the next tool boundary during a long autonomous turn; it probes at most
+  every `FORMATION_MAILBOX_ADVISOR_PROBE_INTERVAL` seconds (default 20).
+- `mailbox_unread_stop_gate.sh` (Stop) blocks a turn from ending with unread
+  mail exactly once per max sequence, with a readable reason (#273). Loop-safe:
+  `stop_hook_active` always allows, and the block record is written before
+  emitting. Kill switch: `FORMATION_MAILBOX_STOP_GATE_DISABLE=1`.
+
+Both fail open silently when the `formation` CLI or a mailbox identity is
+absent. A fully idle parent still needs an external wake (#282); these hooks
+only close the busy-turn and turn-end gaps.
+
 ### 4. Worker-side (what the worker pane should do)
 
 Drop these patterns into the briefing so the worker knows its own protocol:

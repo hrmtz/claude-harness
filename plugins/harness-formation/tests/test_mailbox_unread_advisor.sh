@@ -99,6 +99,40 @@ else
   bad "new max seq did not inject [$THIRD_HOOK]"
 fi
 
+# --- PostToolUse (gh #282 gap A: busy orchestrator, tool 境界注入) ---------
+printf '5\n' >"$CURSOR"
+PTU_PAYLOAD='{"hook_event_name":"PostToolUse","session_id":"issue-282-ptu"}'
+PTU_FIRST="$(printf '%s' "$PTU_PAYLOAD" | bash "$HOOK")"
+if printf '%s' "$PTU_FIRST" |
+   jq -e '.hookSpecificOutput
+          | (.hookEventName == "PostToolUse")
+            and (.additionalContext | contains("件未読"))' \
+     >/dev/null 2>&1; then
+  ok "PostToolUse injects PostToolUse-shaped additionalContext"
+else
+  bad "PostToolUse first injection missing [$PTU_FIRST]"
+fi
+
+printf '%s\n' \
+  '{"seq":11,"ts":"2026-07-27T09:16:03Z","from":"worker-e","to":"tester","body":"newer"}' \
+  >>"$FORMATION_MAILBOX"
+PTU_THROTTLED="$(printf '%s' "$PTU_PAYLOAD" | bash "$HOOK")"
+if [[ -z "$PTU_THROTTLED" ]]; then
+  ok "PostToolUse probe throttle suppresses immediate re-probe"
+else
+  bad "PostToolUse throttle leaked [$PTU_THROTTLED]"
+fi
+
+PTU_FRESH="$(printf '%s' "$PTU_PAYLOAD" |
+  FORMATION_MAILBOX_ADVISOR_PROBE_INTERVAL=0 bash "$HOOK")"
+if printf '%s' "$PTU_FRESH" |
+   jq -e '.hookSpecificOutput.additionalContext | contains("件未読")' \
+     >/dev/null 2>&1; then
+  ok "PostToolUse new max seq injects once throttle window passes"
+else
+  bad "PostToolUse new seq did not inject [$PTU_FRESH]"
+fi
+
 MISSING_HOME="$TEST_TMP/missing-home"
 mkdir -p "$MISSING_HOME"
 ABSENT_OUT="$(
