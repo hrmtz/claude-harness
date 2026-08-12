@@ -50,6 +50,7 @@ _submit_enter_twice() {
 # the recipient draft.
 TMUX_SUBMIT_NOT_PASTED=10
 TMUX_SUBMIT_PASTED_UNCONFIRMED=11
+TMUX_SUBMIT_KIMI_UNCONFIRMED=12
 
 tmux_send_submit() {
   local pane_id="$1" text="$2"
@@ -64,6 +65,41 @@ tmux_send_submit() {
   fi
   _submit_enter_twice "$pane_id" ||
     return "$TMUX_SUBMIT_PASTED_UNCONFIRMED"
+}
+
+# Kimi renders an input box before its first-session state is durable. A seed
+# submitted in that window can be accepted by tmux, then erased by Kimi's
+# remaining startup redraws. Confirm the first turn created a Kimi session;
+# when it did not, submit an existing draft again or re-paste a vanished seed.
+tmux_send_kimi_bootstrap() {
+  local pane_id="$1" text="$2"
+  local attempts="${FORMATION_KIMI_SEED_ATTEMPTS:-3}"
+  local confirm_checks="${FORMATION_KIMI_SEED_CONFIRM_CHECKS:-10}"
+  local confirm_sleep="${FORMATION_KIMI_SEED_CONFIRM_SLEEP_S:-0.5}"
+  local attempt check screen
+
+  sleep "${FORMATION_KIMI_READY_SETTLE_S:-1}" ||
+    return "$TMUX_SUBMIT_NOT_PASTED"
+  for attempt in $(seq 1 "$attempts"); do
+    screen="$(tmux capture-pane -p -t "$pane_id" 2>/dev/null || true)"
+    if [[ "$attempt" -gt 1 && "$screen" == *"Formation bootstrap."* ]]; then
+      # The seed may still be a visible draft. Retap submit without pasting a
+      # duplicate; Enter on an already-cleared input box is harmless.
+      _submit_enter_twice "$pane_id" ||
+        return "$TMUX_SUBMIT_PASTED_UNCONFIRMED"
+    else
+      tmux_send_submit "$pane_id" "$text" || return
+    fi
+
+    for check in $(seq 1 "$confirm_checks"); do
+      sleep "$confirm_sleep" || return "$TMUX_SUBMIT_KIMI_UNCONFIRMED"
+      screen="$(tmux capture-pane -p -t "$pane_id" 2>/dev/null || true)"
+      if [[ "$screen" =~ Session:[[:space:]]+session_[A-Za-z0-9_-]+ ]]; then
+        return 0
+      fi
+    done
+  done
+  return "$TMUX_SUBMIT_KIMI_UNCONFIRMED"
 }
 
 # Send a machine-attributed pull nudge through the shared submit rail.

@@ -1260,7 +1260,13 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
         break
       fi
     done
-    tmux_send_submit "$pane_id" "$seed"
+    local kimi_seed_rc=0
+    tmux_send_kimi_bootstrap "$pane_id" "$seed" || {
+      kimi_seed_rc=$?
+      echo "formation: kimi worker '$name' did not confirm seed submission (rc=$kimi_seed_rc)" >&2
+      tmux kill-pane -t "$pane_id" 2>/dev/null || true
+      return "$kimi_seed_rc"
+    }
   else
     # Claude Code: launch interactive then inject seed once prompt is ready.
     # Default: permission bypass for an autonomous peer. --sandbox explicitly
