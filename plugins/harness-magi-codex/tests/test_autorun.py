@@ -235,6 +235,26 @@ class AutorunTest(unittest.TestCase):
         self.assertIn("stage or revert: scripts/runtime.py second line", detail)
         self.assertNotIn("\n", detail)
 
+    def test_protocol_error_from_campaign_admission_blocks_without_traceback(self) -> None:
+        self.arm()
+        output = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, self.env, clear=False),
+            mock.patch("sys.stdin", io.StringIO(json.dumps({"session_id": self.session}))),
+            mock.patch.object(
+                autorun_module,
+                "campaign_admission_status",
+                side_effect=autorun_module.ProtocolError("external snapshot is stale"),
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(autorun_module.hook(), 0)
+        hook_output = json.loads(output.getvalue())
+        self.assertEqual(hook_output["decision"], "block")
+        self.assertIn("ProtocolError: external snapshot is stale", hook_output["reason"])
+        self.assertEqual(self.registry()["status"], "blocked")
+        self.assertIn("ProtocolError: external snapshot is stale", self.registry()["reason"])
+
     def test_complete_transition_rechecks_document_after_persist(self) -> None:
         self.arm()
         doc_id = hashlib.sha256(str(self.doc.resolve()).encode()).hexdigest()[:16]

@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from magi_protocol import protocol_sha, sha256_file, strict_json_loads
+from magi_protocol import ProtocolError, protocol_sha, sha256_file, strict_json_loads
 
 from magi_campaign_guard import StateError, campaign_admission_status
 
@@ -353,7 +353,15 @@ def hook() -> int:
             "and stop only after exact-revision PLATEAU or a definitive fixed-fuse BLOCKED state."
         )
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
-    except (OSError, ValueError, TypeError, RecursionError, json.JSONDecodeError, StateError) as exc:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        RecursionError,
+        json.JSONDecodeError,
+        ProtocolError,
+        StateError,
+    ) as exc:
         # Hook protocol keeps exit 0, but campaign-state corruption must remain visible and
         # fail-closed instead of looking like an ordinary completed Stop event.
         detail = str(exc).replace("\n", " ")[:240]
