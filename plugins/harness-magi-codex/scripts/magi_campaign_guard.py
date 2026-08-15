@@ -45,6 +45,17 @@ from magi_protocol import (
 # 14 of 16 launches over four rounds.
 DEFAULT_MAX_MODEL_LAUNCHES = 12
 PHASE_WEIGHT = {"fanout": 3, "targeted": 1, "xfamily": 1}
+STARTUP_REVIEWER_SETS = {
+    "fanout": (
+        frozenset({"MELCHIOR", "BALTHASAR", "CASPAR"}),
+        frozenset({"HORNET", "GNAT", "WASP"}),
+    ),
+    "targeted": (
+        frozenset({"HORNET"}),
+        frozenset({"GNAT"}),
+        frozenset({"WASP"}),
+    ),
+}
 FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
 # Hard fuse across all revision campaigns for one target. Deliberately NOT cut:
 # in the same corpus five campaigns were still surfacing new CRITICAL/HIGH at
@@ -510,6 +521,20 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                 recovery_reviewers = (
                     recovery.get("reviewers") if isinstance(recovery, dict) else None
                 )
+                recovery_names = (
+                    frozenset(
+                        item.get("reviewer")
+                        for item in recovery_reviewers
+                        if isinstance(item, dict)
+                    )
+                    if isinstance(recovery_reviewers, list)
+                    else frozenset()
+                )
+                recovery_shape_valid = isinstance(recovery_reviewers, list) and any(
+                    len(recovery_reviewers) == len(expected)
+                    and recovery_names == expected
+                    for expected in STARTUP_REVIEWER_SETS.get(str(phase), ())
+                )
                 if (
                     not isinstance(recovery, dict)
                     or set(recovery) != required_recovery
@@ -526,16 +551,7 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                         for field in ("evidence_sha256", "adapter_script_sha256")
                     )
                     or not isinstance(recovery_reviewers, list)
-                    or len(recovery_reviewers) != 3
-                    or {
-                        item.get("reviewer")
-                        for item in recovery_reviewers
-                        if isinstance(item, dict)
-                    }
-                    not in (
-                        {"MELCHIOR", "BALTHASAR", "CASPAR"},
-                        {"HORNET", "GNAT", "WASP"},
-                    )
+                    or not recovery_shape_valid
                     or any(
                         not isinstance(item, dict)
                         or set(item)
@@ -1053,13 +1069,19 @@ def load_startup_evidence(
     ):
         raise TransitionError("startup evidence identity does not match the claim")
     reviewers = payload.get("reviewers")
-    if not isinstance(reviewers, list) or len(reviewers) != 3:
-        raise TransitionError("startup evidence must cover exactly three reviewers")
-    names = {item.get("reviewer") for item in reviewers if isinstance(item, dict)}
-    if names not in (
-        {"MELCHIOR", "BALTHASAR", "CASPAR"},
-        {"HORNET", "GNAT", "WASP"},
-    ):
+    phase = launch.get("phase")
+    reviewer_sets = STARTUP_REVIEWER_SETS.get(str(phase))
+    if reviewer_sets is None:
+        raise TransitionError("startup evidence phase is not recoverable")
+    expected_count = len(reviewer_sets[0])
+    if not isinstance(reviewers, list) or len(reviewers) != expected_count:
+        raise TransitionError(
+            f"startup evidence must cover exactly {expected_count} reviewer(s)"
+        )
+    names = frozenset(
+        item.get("reviewer") for item in reviewers if isinstance(item, dict)
+    )
+    if names not in reviewer_sets:
         raise TransitionError("startup evidence reviewer set is invalid")
     required_item = {
         "reviewer",

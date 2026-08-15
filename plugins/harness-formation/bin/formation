@@ -659,6 +659,11 @@ cmd_register() {
     echo "formation: invalid registration id: $worker_id" >&2
     return 2
   }
+  # Check the normalized bytes that can actually reach the registry/tmux.
+  # Otherwise a control-separated credential can look harmless here, then be
+  # concatenated into a credential-shaped value by the persistence scrub.
+  task="$(printf '%s' "$task" | tr -d '\000-\037\177')"
+  goal="$(printf '%s' "$goal" | tr -d '\000-\037\177')"
   if is_credential_like "$task" || is_credential_like "$goal"; then
     refuse_credential register "$worker_id" "task/goal metadata refused"
     return 3
@@ -696,8 +701,6 @@ cmd_register() {
     echo "formation: invalid FORMATION_SESSION_ID" >&2
     return 2
   }
-  task="$(printf '%s' "$task" | tr -d '\000-\037\177')"
-  goal="$(printf '%s' "$goal" | tr -d '\000-\037\177')"
   task="${task:0:28}"
   goal="${goal:0:160}"
 

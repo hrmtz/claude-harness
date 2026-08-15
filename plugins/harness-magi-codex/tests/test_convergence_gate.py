@@ -432,6 +432,46 @@ class ConvergenceGateTest(unittest.TestCase):
         self.git("commit", "-qm", "implementation revision 2")
         self.target_sha = self.git("rev-parse", "HEAD")
 
+    def prepare_incremental_adapter_fixture(self) -> tuple[Path, Path, Path]:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        ledger_path = self.write_ledger()
+        output_state = self.repo / "incremental-state"
+        output_state.mkdir()
+        deja_root = Path(self.temp.name) / "deja-root"
+        deja_root.mkdir()
+        target_path_id = hashlib.sha256(
+            str(self.manifest.resolve()).encode()
+        ).hexdigest()[:16]
+        selected = run(
+            "python3",
+            str(DEJA),
+            "select",
+            "--target",
+            str(self.manifest),
+            "--magi-state",
+            str(output_state),
+            "--target-path-id",
+            target_path_id,
+            "--target-sha",
+            file_sha(self.manifest),
+            "--protocol-sha",
+            magi_protocol.protocol_sha(),
+            "--state-root",
+            str(deja_root),
+        )
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        return ledger_path, output_state, deja_root
+
     def finding_payload(
         self,
         *,
@@ -868,18 +908,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(payload["usage"], 5)
 
     def test_incremental_adapter_runs_one_authorized_persona_and_charges_one(self) -> None:
-        old_artifact = file_sha(self.manifest)
-        old_target = self.target_sha
-        self.add_launch(1, "fanout", old_artifact, root="root-a")
-        self.add_launch(2, "xfamily", old_artifact, root="root-a")
-        history = [self.archive_manifest()]
-        self.advance_target()
-        self.write_manifest(
-            historical=history,
-            review_base=old_target,
-            incremental=True,
-        )
-        ledger_path = self.write_ledger()
+        ledger_path, output_state, deja_root = self.prepare_incremental_adapter_fixture()
         stub_bin = Path(self.temp.name) / "bin"
         stub_bin.mkdir()
         codex = stub_bin / "codex"
@@ -911,31 +940,6 @@ print("incremental fixture")
 """
         )
         codex.chmod(0o755)
-        output_state = self.repo / "incremental-state"
-        output_state.mkdir()
-        deja_root = Path(self.temp.name) / "deja-root"
-        deja_root.mkdir()
-        target_path_id = hashlib.sha256(
-            str(self.manifest.resolve()).encode()
-        ).hexdigest()[:16]
-        selected = run(
-            "python3",
-            str(DEJA),
-            "select",
-            "--target",
-            str(self.manifest),
-            "--magi-state",
-            str(output_state),
-            "--target-path-id",
-            target_path_id,
-            "--target-sha",
-            file_sha(self.manifest),
-            "--protocol-sha",
-            magi_protocol.protocol_sha(),
-            "--state-root",
-            str(deja_root),
-        )
-        self.assertEqual(selected.returncode, 0, selected.stderr)
 
         result = run(
             str(FANOUT),
@@ -950,6 +954,8 @@ print("incremental fixture")
                 "PATH": f"{stub_bin}:{os.environ['PATH']}",
                 "HOME": str(self.fake_home),
                 "DEJA_REVIEW_STATE_ROOT": str(deja_root),
+                "TMUX": "",
+                "TMUX_PANE": "",
             },
         )
 
@@ -979,6 +985,76 @@ print("incremental fixture")
         ]
         self.assertEqual(launches[-1]["phase"], "targeted")
         self.assertEqual(launches[-1]["model_launches"], 1)
+
+    def test_incremental_startup_rejection_authorizes_weight_one_replacement(self) -> None:
+        ledger_path, output_state, deja_root = self.prepare_incremental_adapter_fixture()
+        stub_bin = Path(self.temp.name) / "bin"
+        stub_bin.mkdir()
+        codex = stub_bin / "codex"
+        codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "if sys.argv[1:] == ['exec', '--help']:\n"
+            "    print('--output-schema --output-last-message --ephemeral --json')\n"
+            "    raise SystemExit(0)\n"
+            "print(\"invalid_json_schema: In context=('properties', 'findings', 'items'), "
+            "'allOf' is not permitted.\", file=sys.stderr)\n"
+            "raise SystemExit(1)\n"
+        )
+        codex.chmod(0o755)
+
+        result = run(
+            str(FANOUT),
+            str(self.manifest),
+            "1",
+            str(output_state),
+            "--persona-set",
+            "bug-hunt",
+            "--review-mode",
+            "incremental",
+            env={
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "HOME": str(self.fake_home),
+                "DEJA_REVIEW_STATE_ROOT": str(deja_root),
+                "TMUX": "",
+                "TMUX_PANE": "",
+            },
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        failures = list(output_state.glob("round_1_fanout.*.FAILED.json"))
+        self.assertEqual(len(failures), 1)
+        evidence = json.loads(failures[0].read_text())
+        self.assertEqual(len(evidence["reviewers"]), 1)
+        self.assertEqual(evidence["reviewers"][0]["reviewer"], "GNAT")
+        self.assertEqual(
+            evidence["reviewers"][0]["classification"],
+            "provider-schema-startup-rejection",
+        )
+        ledger = json.loads(ledger_path.read_text())
+        launch = ledger["campaigns"][-1]["launches"][-1]
+        self.assertEqual(launch["phase"], "targeted")
+        self.assertEqual(launch["model_launches"], 1)
+        self.assertEqual(launch["status"], "startup-failed-recoverable")
+        self.assertEqual(len(launch["recovery"]["reviewers"]), 1)
+
+        retry = run(
+            sys.executable,
+            str(PLUGIN / "scripts" / "magi_campaign_guard.py"),
+            "claim",
+            str(self.manifest),
+            "1",
+            "targeted",
+            str(output_state),
+            env={"HOME": str(self.fake_home)},
+        )
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        reloaded = json.loads(ledger_path.read_text())
+        launches = reloaded["campaigns"][-1]["launches"]
+        self.assertEqual(len(launches), 2)
+        self.assertEqual(launches[1]["attempt"], 2)
+        self.assertEqual(launches[1]["replacement_for"], launches[0]["claim_id"])
+        self.assertEqual(guard.model_launches([reloaded["campaigns"][-1]]), 1)
 
     def test_surface_change_forces_full_fanout(self) -> None:
         old_artifact = file_sha(self.manifest)

@@ -706,12 +706,13 @@ PY
         exit 1
     fi
     startup_only=0
-    if python3 - "$failure_out" <<'PY'
+    if python3 - "$failure_out" "$PHASE" <<'PY'
 import json, pathlib, sys
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 reviewers = payload.get("reviewers")
+expected_count = {"fanout": 3, "targeted": 1}.get(sys.argv[2], 0)
 raise SystemExit(
-    0 if isinstance(reviewers, list) and len(reviewers) == 3
+    0 if isinstance(reviewers, list) and len(reviewers) == expected_count
     and all(
         isinstance(item, dict)
         and item.get("classification") == "provider-schema-startup-rejection"

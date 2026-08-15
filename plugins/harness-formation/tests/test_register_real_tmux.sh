@@ -117,6 +117,20 @@ if grep -Fq 'token=fixture' "$FIXTURE/home/mailbox/refuse.log"; then
   exit 1
 fi
 
+# Normalization must happen before credential detection. Deleting the embedded
+# newline joins these individually harmless fragments into one GitHub-token shape.
+rc="$(run_register "$child_pane" normalized-credential \
+  "" "--cli codex --task \$'ghp_1234567890\\n12345678901234567890' child")"
+[[ "$rc" == "3" ]]
+grep -Fq 'body matches credential pattern' "$FIXTURE/normalized-credential.err"
+[[ "$(wc -l < "$registry" | tr -d ' ')" == "1" ]]
+[[ -z "$(tmux -L "$SOCKET" show-options -p -q -v -t "$child_pane" \
+  @formation_identity_locked 2>/dev/null || true)" ]]
+if grep -Fq 'ghp_' "$FIXTURE/home/mailbox/refuse.log"; then
+  echo "normalized credential leaked to refusal log" >&2
+  exit 1
+fi
+
 # A half-known reverse route is refused; it must never create the half-open
 # channel documented in #235.
 rc="$(run_register "$child_pane" missing-parent \
