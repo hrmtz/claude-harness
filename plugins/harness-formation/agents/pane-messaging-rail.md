@@ -29,6 +29,15 @@ The mailbox-first contract is:
    `signal=unavailable`.
 2. Never paste a body into a normal pane to wake it. An idle agent is not proof
    that its prompt is empty, and paste alone can merge with a human draft.
+   `tmux capture-pane` is rendered pixels, not an editor-buffer API. Visible
+   prompt text may be an editable draft, a last-input ghost, or a
+   chassis-generated auto-suggestion, so its prompt state is always
+   **UNKNOWN**. Never diagnose "un-submitted" or "stuck", nor send `Enter`,
+   `C-u`, or a character probe, from that appearance alone. `C-u` mutates a
+   real draft and only separates editable text from non-buffer UI; it cannot
+   distinguish a ghost from an auto-suggestion. Use durable mailbox cursors,
+   ASK state, process liveness, and pane-hash change only as structural
+   activity signals. Pane stability is not proof of prompt state.
 3. Prompt injection is exceptional: only an explicitly exclusive worker may
    use `formation msg --inject <worker-id> <body>` or
    `mailbox-send <pane> <body> --inject`. Exclusivity is established only by
@@ -52,3 +61,10 @@ durable request id and `WAITING_PARENT` state in a separate request event
 store. Transport receipt and semantic acknowledgement are not interchangeable:
 only `formation ack <request-id>` or `formation resolve <request-id> <summary>`
 closes an ASK. Ordinary reports and messages never clear it.
+
+Review requests use their own durable ids. Send work with
+`formation review-request <reviewer-id> <subject>` and return the decision with
+`formation verdict <review-id> <PASS|BLOCK> <summary>`. A verdict is incomplete
+until it carries the original id; Formation then copies it to both the
+requester and the requester's manager. Use
+`formation reviews --stale-minutes <N>` to detect unanswered review work.

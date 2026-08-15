@@ -27,6 +27,11 @@ ALLOW_LIVE_ONLY = {
     ("SessionEnd", "session_end_ingest.sh"),  # hippocampus ingest integration
 }
 
+HOOK_SCRIPT_RE = re.compile(r"/([A-Za-z0-9_]+\.(?:sh|py))")
+HOOK_ENTRYPOINT_RE = re.compile(
+    r"/bin/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=[\s\"';]|$)"
+)
+
 
 def hook_names(hooks: Any) -> set[tuple[str, str]]:
     if not isinstance(hooks, dict):
@@ -47,9 +52,44 @@ def hook_names(hooks: Any) -> set[tuple[str, str]]:
                 command = hook.get("command", "")
                 if not isinstance(command, str):
                     raise ValueError(f"{event} hook command must be a string")
-                match = re.search(r"/([A-Za-z0-9_]+\.(?:sh|py))", command)
+                # Dispatcher commands mention ~/.local/bin/harness-hook before
+                # the actual script. Prefer a script whenever one is present;
+                # only use an extensionless bin entrypoint as the fallback.
+                match = HOOK_SCRIPT_RE.search(command)
                 if match:
                     found.add((event, match.group(1)))
+                    continue
+                match = HOOK_ENTRYPOINT_RE.search(command)
+                if match:
+                    found.add((event, match.group(1)))
+    return found
+
+
+def unresolved_plugin_roots(hooks: Any) -> set[tuple[str, str]]:
+    """Find live commands that escaped plugin-context path expansion."""
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an object")
+    found: set[tuple[str, str]] = set()
+    for event, blocks in hooks.items():
+        if not isinstance(event, str) or not isinstance(blocks, list):
+            raise ValueError("hook events must map to arrays")
+        for block in blocks:
+            if not isinstance(block, dict):
+                raise ValueError(f"{event} hook block must be an object")
+            entries = block.get("hooks", [])
+            if not isinstance(entries, list):
+                raise ValueError(f"{event} hooks must be an array")
+            for hook in entries:
+                if not isinstance(hook, dict):
+                    raise ValueError(f"{event} hook entry must be an object")
+                command = hook.get("command", "")
+                if not isinstance(command, str):
+                    raise ValueError(f"{event} hook command must be a string")
+                if "${CLAUDE_PLUGIN_ROOT}" in command:
+                    match = HOOK_SCRIPT_RE.search(command)
+                    if not match:
+                        match = HOOK_ENTRYPOINT_RE.search(command)
+                    found.add((event, match.group(1) if match else "<unknown>"))
     return found
 
 
@@ -63,11 +103,14 @@ def compare(live_path: Path, plugins_root: Path) -> tuple[
     set[tuple[str, str]],
     set[tuple[str, str]],
     set[tuple[str, str]],
+    set[tuple[str, str]],
 ]:
     live_payload = read_json(live_path)
     if not isinstance(live_payload, dict):
         raise ValueError("live settings must be an object")
-    live = hook_names(live_payload.get("hooks", {}))
+    live_hooks = live_payload.get("hooks", {})
+    live = hook_names(live_hooks)
+    unresolved = unresolved_plugin_roots(live_hooks)
 
     plugin: set[tuple[str, str]] = set()
     hook_files = sorted(
@@ -84,7 +127,7 @@ def compare(live_path: Path, plugins_root: Path) -> tuple[
 
     orphan = {item for item in live - plugin if item not in ALLOW_LIVE_ONLY}
     dormant = plugin - live
-    return live, plugin, orphan, dormant
+    return live, plugin, orphan, dormant, unresolved
 
 
 def parser() -> argparse.ArgumentParser:
@@ -97,7 +140,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        live, plugin, orphan, dormant = compare(
+        live, plugin, orphan, dormant, unresolved = compare(
             args.live.expanduser().resolve(),
             args.plugins.expanduser().resolve(),
         )
@@ -114,9 +157,13 @@ def main(argv: list[str] | None = None) -> int:
         print("\nDORMANT (plugin-wired, not live — guard does not fire):")
         for event, name in sorted(dormant):
             print(f"  [{event}] {name}")
-    if not orphan and not dormant:
+    if unresolved:
+        print("\nUNRESOLVED_PLUGIN_ROOT (invalid outside plugin expansion context):")
+        for event, name in sorted(unresolved):
+            print(f"  [{event}] {name}")
+    if not orphan and not dormant and not unresolved:
         print("\nIN SYNC ✓ (live wiring == plugin union, modulo allowlisted live-only)")
-    return 1 if orphan or dormant else 0
+    return 1 if orphan or dormant or unresolved else 0
 
 
 if __name__ == "__main__":

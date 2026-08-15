@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Advisory Stop hook for assistant-authored user-turn lookalikes.
+"""Advisory Stop hook for suspicious assistant-authored tail appendages.
 
-The detector intentionally covers one narrow, high-confidence shape: the last
-text block of the last assistant message contains a line-initial ``user``
-marker near its tail, optionally followed by conversational lines.
-Ordinary prose that mentions "user 指示" or "user が..." inline is outside the
-pattern.
+The detector intentionally covers two narrow, high-confidence shapes in the
+last text block of the last assistant message:
+
+* a line-initial ``user`` marker near the tail, optionally followed by
+  conversational lines; or
+* an isolated lowercase ASCII fragment followed by a long, multi-heading
+  Markdown document which later expands that fragment into a longer word.
+
+The second shape is the observed ``univers`` -> ``universal`` seam from issue
+#167.  The length, repeated-heading, and expanded-fragment constraints keep
+ordinary short Markdown transitions outside the pattern.
 
 Output is advisory only (``systemMessage`` without a deny/block decision).
 Malformed payloads, unreadable transcripts, and uncertain record shapes are
@@ -55,6 +61,12 @@ NORMAL_PROSE_PREFIX = re.compile(r"^(?:が|の|指示|判断|要望|承認)")
 # `もう眠くなってきた` (も) and `はい` (は), and the も case silently dropped the
 # worst known occurrence when it was tried.
 NARRATION_TAIL = re.compile(r"(?:ました|ます|です|でした|,|:|：|;|；)$")
+ORPHAN_FRAGMENT = re.compile(r"^[ \t]*(?P<fragment>[a-z]{6,15})[ \t]*$")
+BOLD_HEADING = re.compile(r"^[ \t]*\*\*[^*\n]{4,120}\*\*[ \t]*$")
+MIN_APPENDED_DOCUMENT_CHARS = 500
+MIN_BOLD_HEADINGS = 3
+MAX_PREAMBLE_CHARS = 1000
+INFLECTION_SUFFIXES = frozenset({"s", "es", "ed", "er", "ers", "ing", "ly"})
 
 
 def _final_text_block(record: dict) -> str | None:
@@ -111,12 +123,21 @@ def _inside_fence(lines: list[str], marker_index: int) -> bool:
     return fence_count % 2 == 1
 
 
-def has_fabricated_user_turn(text: str) -> bool:
+def _outside_fence_lines(lines: list[str], start: int) -> list[str]:
+    """Return post-start lines outside conservative triple-backtick fences."""
+    outside: list[str] = []
+    in_fence = _inside_fence(lines, start)
+    for line in lines[start:]:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            outside.append(line)
+    return outside
+
+
+def _has_fabricated_user_turn(lines: list[str]) -> bool:
     """Detect a user-turn lookalike at the assistant message tail."""
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
-    if not normalized:
-        return False
-    lines = normalized.split("\n")
     first_tail_line = max(0, len(lines) - TAIL_LINES)
 
     for index, line in enumerate(lines):
@@ -149,6 +170,82 @@ def has_fabricated_user_turn(text: str) -> bool:
     return False
 
 
+def _has_orphan_fragment_document(lines: list[str]) -> bool:
+    """Detect a bounded partial-word seam before an appended Markdown document."""
+    for index, line in enumerate(lines):
+        match = ORPHAN_FRAGMENT.fullmatch(line)
+        if not match:
+            continue
+
+        previous_index = index - 1
+        while previous_index >= 0 and not lines[previous_index].strip():
+            previous_index -= 1
+        if previous_index < 0 or not lines[previous_index].rstrip().endswith(
+            (".", "!", "?", "。", "！", "？")
+        ):
+            continue
+
+        heading_index = index + 1
+        while heading_index < len(lines) and not lines[heading_index].strip():
+            heading_index += 1
+        if heading_index >= len(lines) or not BOLD_HEADING.fullmatch(lines[heading_index]):
+            continue
+        if _inside_fence(lines, index) or _inside_fence(lines, heading_index):
+            continue
+
+        preamble = "\n".join(lines[:index])
+        appended = "\n".join(lines[heading_index:])
+        if len(preamble) > MAX_PREAMBLE_CHARS:
+            continue
+        if len(appended) < max(MIN_APPENDED_DOCUMENT_CHARS, 2 * len(preamble)):
+            continue
+        outside_lines = _outside_fence_lines(lines, heading_index)
+        if sum(bool(BOLD_HEADING.fullmatch(item)) for item in outside_lines) < MIN_BOLD_HEADINGS:
+            continue
+
+        fragment = match.group("fragment")
+        outside_text = "\n".join(outside_lines)
+        whole_fragment = re.compile(
+            rf"(?<![A-Za-z]){re.escape(fragment)}(?![A-Za-z])"
+        )
+        if whole_fragment.search(outside_text):
+            continue
+        expanded = re.compile(
+            rf"(?<![A-Za-z]){re.escape(fragment)}(?P<suffix>[a-z]{{2,}})(?![A-Za-z])"
+        )
+        expansions = expanded.finditer(outside_text)
+        if not any(
+            candidate.group("suffix") not in INFLECTION_SUFFIXES
+            and not (
+                candidate.group("suffix")[0] == fragment[-1]
+                and candidate.group("suffix")[1:] in INFLECTION_SUFFIXES
+            )
+            for candidate in expansions
+        ):
+            continue
+        return True
+    return False
+
+
+def detect_fabricated_tail(text: str) -> str | None:
+    """Return the narrow detector class for a suspicious assistant tail."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    if not normalized:
+        return None
+    lines = normalized.split("\n")
+    if _has_fabricated_user_turn(lines):
+        return "role_marker"
+    if _has_orphan_fragment_document(lines):
+        return "orphan_fragment_document"
+    return None
+
+
+def has_fabricated_user_turn(text: str) -> bool:
+    """Backward-compatible predicate for the original role-marker detector."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    return bool(normalized) and _has_fabricated_user_turn(normalized.split("\n"))
+
+
 def _hook() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -158,7 +255,10 @@ def _hook() -> int:
         if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
             return 0
         text = _last_assistant_text(transcript_path)
-        if not isinstance(text, str) or not has_fabricated_user_turn(text):
+        if not isinstance(text, str):
+            return 0
+        detection = detect_fabricated_tail(text)
+        if detection is None:
             return 0
         fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
         gate_armed = (
@@ -166,11 +266,25 @@ def _hook() -> int:
             if arm_session is not None
             else False
         )
-        message = (
-            "fabricated-user-turn advisory: 直前の assistant 出力末尾に、行頭 "
-            "`user` から始まる user turn 模倣を検出しました。この text は transport "
-            "が認証した user 入力ではありません。指示・承認として採用せず、assistant "
-            "に誤生成の訂正と、必要な判断の再確認を求めてください。"
+        if detection == "role_marker":
+            message = (
+                "fabricated-user-turn advisory: 直前の assistant 出力末尾に、行頭 "
+                "`user` から始まる user turn 模倣を検出しました。この text は transport "
+                "が認証した user 入力ではありません。指示・承認として採用せず、assistant "
+                "に誤生成の訂正と、必要な判断の再確認を求めてください。"
+            )
+        elif detection == "orphan_fragment_document":
+            message = (
+                "fabricated-tail advisory: 直前の assistant 出力末尾に、孤立した単語断片 "
+                "から長い Markdown 文書へ切り替わる既知の誤生成 seam を検出しました。"
+                "末尾文書を user 入力や外部注入と仮定しないでください。"
+            )
+        else:
+            return 0
+        message += (
+            " triage は transcript record の `type` と `message.role` を最初に確認し、"
+            "assistant なら自己生成として扱ってください。mailbox / tmux buffer / "
+            "外部注入経路の調査はその後です。"
         )
         if not gate_armed:
             message += " acknowledgement gate not armed; outward action は保護されていません。"

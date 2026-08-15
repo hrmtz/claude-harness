@@ -100,4 +100,6 @@ if [[ "$NUDGE" -eq 1 ]]; then
   else
     echo "inject=skipped (default; --inject requires a Formation --exclusive-input worker)"
   fi
+else
+  echo "signal=skipped (--no-nudge) receipt=unconfirmed recipient_activity=unknown (row appended durably; no pane signal requested)"
 fi

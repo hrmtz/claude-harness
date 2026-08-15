@@ -95,6 +95,12 @@ Formation worker pane へのメッセージ送信:
   `mailbox-send <pane> <body>` も同じ安全な default。signal は receipt ではないため、
   turn 境界で `formation inbox` を読む。
 - idle は prompt-empty の証明ではない。通常 pane へ本文を paste して wake しない。
+- `tmux capture-pane` は描画スナップショットであり editor buffer API ではない。
+  input box の文字は draft / 直前入力 ghost / chassis の auto-suggestion のいずれか判別不能。
+  prompt state は常に `UNKNOWN` と扱う。見た目だけで un-submitted / stuck と断定せず、
+  `Enter` / `C-u` / 文字 probe を送らない。`C-u` は実 draft を消し、ghost と
+  auto-suggestion も区別できない。mailbox cursor / ASK state / process liveness /
+  pane hash 変化は activity signal であり prompt-empty の証拠ではない。
 - prompt injection は明示的 exclusive worker だけ:
   `formation spawn --exclusive-input ...` で生成し、
   `formation msg --inject <worker-id> <body>` または

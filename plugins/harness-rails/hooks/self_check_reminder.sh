@@ -15,8 +15,8 @@
 set -euo pipefail
 
 payload=$(head -c 65536 || true)
-is_bg=$(echo "$payload" | jq -r '.tool_input.run_in_background // false' 2>/dev/null || echo "false")
-cmd=$(echo "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || echo "")
+is_bg=$(echo "$payload" | jq -r '.tool_input.run_in_background // .tool_input.runInBackground // .toolInput.run_in_background // .toolInput.runInBackground // false' 2>/dev/null || echo "false")
+cmd=$(echo "$payload" | jq -r '.tool_input.command // .toolInput.command // ""' 2>/dev/null || echo "")
 
 # Not a background Bash → exit silent
 [[ "$is_bg" == "true" ]] || exit 0
@@ -42,11 +42,21 @@ if echo "$cmd" | grep -qiE 'CREATE INDEX|REINDEX|VACUUM FULL|pg_dump|pg_baseback
   window=10
 fi
 
-cat <<EOF
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PostToolUse",
-    "additionalContext": "⏱ long-running bg Bash kicked (匹配 long-running pattern). user の ack を待つな、 ${window} min 後 self-check を schedule して self-report しろ: \`Bash run_in_background: true, command: sleep $((window*60)); <status query here>\`。 task notification 来たら結果を user に proactive report。 Per feedback_self_check_inflight_workers + feedback_early_bug_check。"
+msg="⏱ long-running bg Bash kicked (匹配 long-running pattern). user の ack を待つな、 ${window} min 後 self-check を schedule して self-report しろ: \`Bash run_in_background: true, command: sleep $((window*60)); <status query here>\`。 task notification 来たら結果を user に proactive report。 Per feedback_self_check_inflight_workers + feedback_early_bug_check。"
+
+# Conservative >=30 minute tendency. Shorter/unknown jobs keep the monitoring reminder only;
+# a fabricated precise ETA is worse than an honest lower bound.
+RECON_RE='FlagEmbedding|model\.encode|--device cuda|psql.*COPY|rclone (copy|sync)|pg_dump|pg_restore|pg_basebackup|CREATE INDEX|REINDEX|VACUUM FULL|ANALYZE.*paper_chunks|build-r2'
+# Job-name heuristic accepts common path/module shapes (ingest_papers.py, prs_ingest,
+# run_export.sh) without confusing the shell builtin `export NAME=value` for an export job.
+RECON_JOB_RE="(^|[[:space:]\"'])([^[:space:]\"']*[/_.-])?(ingest|embed|export)[[:alnum:]_.-]*\.(py|sh|mjs|js)([[:space:]\"']|\$)|(^|[[:space:]\"'])[^[:space:]\"']+[/_.-](ingest|embed|export)[[:alnum:]_.-]*([[:space:]\"']|\$)"
+if echo "$cmd" | grep -qiE "$RECON_RE" || echo "$cmd" | grep -qiE "$RECON_JOB_RE"; then
+  msg+=$'\n\n🏁 推定待ち時間 >=30分。この間に次工程を下見しろ:\n  - 次に触るコードの実際の分岐 / 固定値 / テストの lockstep\n  - doc が参照しているオブジェクトが今も存在するか\n  - 「名前が用途を表しているはず」という前提 (role名 / index名 / env名)\n見つけた乖離はその場で直さず、次工程の変更範囲として記録しろ。'
+fi
+
+jq -n --arg msg "$msg" '{
+  hookSpecificOutput: {
+    hookEventName: "PostToolUse",
+    additionalContext: $msg
   }
-}
-EOF
+}'

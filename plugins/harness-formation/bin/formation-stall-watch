@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""Detect stalled Formation workers from mailbox silence and pane stability."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import signal
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import NoReturn
+
+
+SCHEMA_VERSION = 1
+MAX_INTERVAL = 86400
+PANE_RE = re.compile(r"^%[0-9]{1,10}$")
+IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+KIMI_LEADING_SPINNER_RE = re.compile(
+    r"^(\s*)[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒](?=\s)"
+)
+STOP = False
+PROMPT_STATE_UNKNOWN = "UNKNOWN"
+
+
+class TmuxUnavailable(RuntimeError):
+    pass
+
+
+class RegistryUnavailable(RuntimeError):
+    pass
+
+
+class RequestStoreUnavailable(RuntimeError):
+    pass
+
+
+def die(message: str, code: int = 64) -> NoReturn:
+    print(f"formation-stall-watch: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer") from None
+    if not 1 <= parsed <= MAX_INTERVAL:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {MAX_INTERVAL}")
+    return parsed
+
+
+def run_tmux(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["tmux", *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def registry_rows(registry: Path) -> tuple[list[dict[str, object]], bool]:
+    latest: dict[str, dict[str, object]] = {}
+    complete = True
+    try:
+        with registry.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    value = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    complete = False
+                    continue
+                worker = value.get("id") if isinstance(value, dict) else None
+                if isinstance(worker, str) and IDENTITY_RE.fullmatch(worker):
+                    latest[worker] = value
+                else:
+                    complete = False
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RegistryUnavailable(f"cannot read registry: {registry}") from exc
+    return list(latest.values()), complete
+
+
+def waiting_parent_workers(request_log: Path) -> set[str]:
+    latest: dict[str, dict[str, object]] = {}
+    try:
+        with request_log.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    value = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(value, dict):
+                    continue
+                request_id = value.get("request_id")
+                required_strings = (
+                    "event",
+                    "state",
+                    "worker_id",
+                    "parent_id",
+                    "question",
+                    "next_state",
+                )
+                if (
+                    isinstance(request_id, str)
+                    and all(isinstance(value.get(key), str) for key in required_strings)
+                    and isinstance(value.get("closed"), bool)
+                ):
+                    latest[request_id] = value
+    except FileNotFoundError:
+        return set()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RequestStoreUnavailable(
+            f"cannot read request store: {request_log}"
+        ) from exc
+    return {
+        str(value["worker_id"])
+        for value in latest.values()
+        if value["state"] == "WAITING_PARENT" and value["closed"] is False
+    }
+
+
+def live_panes() -> dict[str, str]:
+    fmt = (
+        "#{pane_id}|"
+        "#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}"
+    )
+    result = run_tmux("list-panes", "-a", "-F", fmt)
+    if result.returncode:
+        raise TmuxUnavailable("cannot list tmux panes")
+    panes: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        pane, separator, worker = line.partition("|")
+        if (
+            separator
+            and PANE_RE.fullmatch(pane)
+            and IDENTITY_RE.fullmatch(worker)
+        ):
+            panes[pane] = worker
+    return panes
+
+
+def normalized_snapshot(pane: str, cli: str) -> str | None:
+    result = run_tmux("capture-pane", "-p", "-S", "-80", "-t", pane)
+    if result.returncode:
+        return None
+    # capture-pane is a rendered snapshot, not an editor-buffer API. Visible
+    # prompt text can be an editable draft, a last-input ghost, or a
+    # chassis-generated follow-up suggestion. This observer uses it only for
+    # activity-change detection; prompt/input state remains UNKNOWN (#215).
+    text = ANSI_RE.sub("", result.stdout.replace("\r", ""))
+    lines = [line.rstrip() for line in text.splitlines()]
+    if cli == "kimi":
+        # Grounded against a fresh Kimi pane: MCP connection chrome repaints
+        # only its leading spinner glyph while semantic text stays fixed.
+        # Do not normalize clocks/durations globally; those occur in real
+        # progress output and would erase activity such as "10s remaining".
+        lines = [
+            KIMI_LEADING_SPINNER_RE.sub(r"\1<spinner>", line)
+            for line in lines
+        ]
+    canonical = "\n".join(lines).rstrip() + "\n"
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def parse_timestamp(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def mailbox_latest_all(mailbox: Path) -> dict[str, tuple[int, int | None]]:
+    latest: dict[str, tuple[int, int | None]] = {}
+    try:
+        with mailbox.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    value = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(value, dict):
+                    continue
+                worker = value.get("from")
+                seq = value.get("seq")
+                if (
+                    isinstance(worker, str)
+                    and IDENTITY_RE.fullmatch(worker)
+                    and isinstance(seq, int)
+                    and not isinstance(seq, bool)
+                    and 0 < seq <= 2**63 - 1
+                    and seq >= latest.get(worker, (0, None))[0]
+                ):
+                    latest[worker] = (seq, parse_timestamp(value.get("ts")))
+    except FileNotFoundError:
+        pass
+    return latest
+
+
+def state_path(state_dir: Path, pane: str) -> Path:
+    return state_dir / f"pane-{pane[1:]}.json"
+
+
+def load_state(
+    path: Path,
+    pane: str,
+    worker: str,
+    cli: str,
+    generation: str,
+) -> dict[str, object] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    expected = {
+        "schema_version",
+        "pane_id",
+        "worker_id",
+        "cli",
+        "generation",
+        "snapshot_hash",
+        "snapshot_since",
+        "mailbox_seq",
+        "mailbox_last_at",
+        "observed_at",
+        "stalled",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        return None
+    if (
+        value["schema_version"] != SCHEMA_VERSION
+        or value["pane_id"] != pane
+        or value["worker_id"] != worker
+        or value["cli"] != cli
+        or value["generation"] != generation
+        or not isinstance(value["snapshot_hash"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value["snapshot_hash"])
+        or not isinstance(value["snapshot_since"], int)
+        or not 0 <= value["snapshot_since"] <= 2**63 - 1
+        or not isinstance(value["mailbox_seq"], int)
+        or not 0 <= value["mailbox_seq"] <= 2**63 - 1
+        or not isinstance(value["mailbox_last_at"], int)
+        or not 0 <= value["mailbox_last_at"] <= 2**63 - 1
+        or not isinstance(value["observed_at"], int)
+        or not 0 <= value["observed_at"] <= 2**63 - 1
+        or not isinstance(value["stalled"], bool)
+    ):
+        return None
+    return value
+
+
+def atomic_json(path: Path, value: dict[str, object]) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def initial_mailbox_time(row: dict[str, object], mailbox_at: int | None, now: int) -> int:
+    spawned = parse_timestamp(row.get("spawned"))
+    if mailbox_at is not None:
+        # A reused worker id can have mailbox history from an older generation.
+        # Never let that history predate this generation's spawn clock.
+        return min(max(mailbox_at, spawned or mailbox_at), now)
+    if spawned is not None:
+        return min(spawned, now)
+    return now
+
+
+def worker_result(
+    row: dict[str, object],
+    pane: str,
+    checksum: str,
+    mailbox_latest: tuple[int, int | None],
+    state_dir: Path,
+    now: int,
+    silence_required: int,
+    idle_required: int,
+    waiting_parent: bool,
+    dry_run: bool,
+) -> dict[str, object]:
+    worker = str(row["id"])
+    cli = str(row.get("cli") or "claude")
+    session_id = row.get("session_id")
+    generation = (
+        session_id
+        if isinstance(session_id, str) and session_id
+        else str(row.get("spawned") or "")
+    )
+    path = state_path(state_dir, pane)
+    state = load_state(path, pane, worker, cli, generation)
+    mailbox_seq, observed_mailbox_at = mailbox_latest
+    if state is None:
+        mailbox_last_at = initial_mailbox_time(row, observed_mailbox_at, now)
+        state = {
+            "schema_version": SCHEMA_VERSION,
+            "pane_id": pane,
+            "worker_id": worker,
+            "cli": cli,
+            "generation": generation,
+            "snapshot_hash": checksum,
+            "snapshot_since": now,
+            "mailbox_seq": mailbox_seq,
+            "mailbox_last_at": mailbox_last_at,
+            "observed_at": now,
+            "stalled": False,
+        }
+        if not dry_run:
+            atomic_json(path, state)
+    else:
+        if state["snapshot_hash"] != checksum:
+            state["snapshot_hash"] = checksum
+            state["snapshot_since"] = now
+        if mailbox_seq > int(state["mailbox_seq"]):
+            state["mailbox_seq"] = mailbox_seq
+            # The structural signal is discovery of a new durable row. Use the
+            # local observation clock so a skewed or delayed row timestamp
+            # cannot classify an emitter as immediately silent.
+            state["mailbox_last_at"] = now
+        elif 0 < mailbox_seq < int(state["mailbox_seq"]):
+            # Recover after an explicit mailbox/.seq recreation. Zero means
+            # merely "no retained row" and must not erase a valid watermark.
+            state["mailbox_seq"] = mailbox_seq
+            state["mailbox_last_at"] = now
+        silence_age = max(0, now - int(state["mailbox_last_at"]))
+        pane_idle_age = max(0, now - int(state["snapshot_since"]))
+        state["stalled"] = (
+            not waiting_parent
+            and silence_age >= silence_required
+            and pane_idle_age >= idle_required
+        )
+        state["observed_at"] = now
+        if not dry_run:
+            atomic_json(path, state)
+
+    silence_age = max(0, now - int(state["mailbox_last_at"]))
+    pane_idle_age = max(0, now - int(state["snapshot_since"]))
+    stalled = (
+        not waiting_parent
+        and silence_age >= silence_required
+        and pane_idle_age >= idle_required
+    )
+    state["stalled"] = stalled
+    return {
+        "worker_id": worker,
+        "pane_id": pane,
+        "cli": cli,
+        "status": (
+            "WAITING_PARENT"
+            if waiting_parent
+            else ("STALL" if stalled else "ACTIVE")
+        ),
+        "reason": "unresolved-request" if waiting_parent else "",
+        "mailbox_silence_seconds": silence_age,
+        "pane_stable_seconds": pane_idle_age,
+        "mailbox_silent": silence_age >= silence_required,
+        "pane_stable": pane_idle_age >= idle_required,
+        "prompt_state": PROMPT_STATE_UNKNOWN,
+        "stalled": stalled,
+    }
+
+
+def unknown_result(
+    row: dict[str, object],
+    pane: str,
+    reason: str,
+) -> dict[str, object]:
+    return {
+        "worker_id": str(row["id"]),
+        "pane_id": pane,
+        "cli": str(row.get("cli") or "claude"),
+        "status": "UNKNOWN",
+        "reason": reason,
+        "mailbox_silence_seconds": None,
+        "pane_stable_seconds": None,
+        "mailbox_silent": False,
+        "pane_stable": False,
+        "prompt_state": PROMPT_STATE_UNKNOWN,
+        "stalled": False,
+    }
+
+
+def observation_now(watch_mode: bool) -> int:
+    override = os.getenv("FORMATION_STALL_WATCH_NOW")
+    if override is None:
+        return int(time.time())
+    if watch_mode:
+        die("FORMATION_STALL_WATCH_NOW is test-only and cannot be used with --watch")
+    if not override.isdigit() or not 0 <= int(override) <= 2**63 - 1:
+        die("FORMATION_STALL_WATCH_NOW must be a non-negative integer")
+    return int(override)
+
+
+def sweep(
+    args: argparse.Namespace,
+    state_dir: Path,
+    registry: Path,
+    mailbox: Path,
+    request_log: Path,
+) -> list[dict[str, object]]:
+    now = observation_now(args.watch)
+    panes = live_panes()
+    mailbox_by_worker = mailbox_latest_all(mailbox)
+    waiting_workers = waiting_parent_workers(request_log)
+    results = []
+    rows, registry_complete = registry_rows(registry)
+    registered_panes = {
+        pane
+        for row in rows
+        if isinstance((pane := row.get("pane_id")), str) and PANE_RE.fullmatch(pane)
+    }
+    for row in rows:
+        worker = row.get("id")
+        pane = row.get("pane_id")
+        cli = row.get("cli") or "claude"
+        if (
+            not isinstance(worker, str)
+            or not isinstance(pane, str)
+            or not PANE_RE.fullmatch(pane)
+            or not isinstance(cli, str)
+        ):
+            continue
+        if pane in panes and panes[pane] != worker:
+            results.append(unknown_result(row, pane, "identity-mismatch"))
+            continue
+        if pane not in panes:
+            results.append(unknown_result(row, pane, "pane-missing"))
+            continue
+        checksum = normalized_snapshot(pane, cli)
+        if checksum is None:
+            results.append(unknown_result(row, pane, "capture-failed"))
+            continue
+        results.append(
+            worker_result(
+                row,
+                pane,
+                checksum,
+                mailbox_by_worker.get(worker, (0, None)),
+                state_dir,
+                now,
+                args.silence,
+                args.idle,
+                worker in waiting_workers,
+                args.dry_run,
+            )
+        )
+    if not args.dry_run and registry_complete:
+        for path in state_dir.glob("pane-*.json"):
+            match = re.fullmatch(r"pane-([0-9]{1,10})\.json", path.name)
+            if match and f"%{match.group(1)}" not in registered_panes:
+                path.unlink(missing_ok=True)
+    return sorted(results, key=lambda item: str(item["worker_id"]))
+
+
+def render(results: list[dict[str, object]], as_json: bool, quiet: bool) -> None:
+    if as_json:
+        print(json.dumps(results, sort_keys=True, separators=(",", ":")), flush=True)
+        return
+    for result in results:
+        if quiet and result["status"] == "ACTIVE":
+            continue
+        status = result["status"]
+        if status == "UNKNOWN":
+            print(
+                f"UNKNOWN worker={result['worker_id']} pane={result['pane_id']} "
+                f"cli={result['cli']} reason={result['reason']} "
+                f"prompt_state={result['prompt_state']}",
+                flush=True,
+            )
+            continue
+        print(
+            f"{status} worker={result['worker_id']} pane={result['pane_id']} "
+            f"cli={result['cli']} mailbox_silence={result['mailbox_silence_seconds']}s "
+            f"pane_stable={result['pane_stable_seconds']}s "
+            f"prompt_state={result['prompt_state']}",
+            flush=True,
+        )
+
+
+def watch(
+    args: argparse.Namespace,
+    state_dir: Path,
+    registry: Path,
+    mailbox: Path,
+    request_log: Path,
+) -> None:
+    lock_path = state_dir / "watch.lock"
+    with lock_path.open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            die("watch already running", 75)
+        global STOP
+
+        def stop(_signum: int, _frame: object) -> None:
+            global STOP
+            STOP = True
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        previous: dict[str, str] = {}
+        while not STOP:
+            try:
+                with (state_dir / "state.lock").open("a+") as state_lock:
+                    fcntl.flock(state_lock, fcntl.LOCK_EX)
+                    results = sweep(args, state_dir, registry, mailbox, request_log)
+            except (TmuxUnavailable, RegistryUnavailable, RequestStoreUnavailable) as exc:
+                print(f"UNKNOWN watcher reason={exc}", flush=True)
+                results = []
+            transitions = [
+                result
+                for result in results
+                if (
+                    str(result["worker_id"]) in previous
+                    and previous[str(result["worker_id"])] != str(result["status"])
+                )
+                or (
+                    str(result["worker_id"]) not in previous
+                    and (not args.quiet or result["status"] != "ACTIVE")
+                )
+            ]
+            # Quiet suppresses routine steady/initial ACTIVE rows, not recovery
+            # transitions. A STALL alert without its later ACTIVE edge is stale.
+            if transitions:
+                render(transitions, args.json, False)
+            for result in results:
+                previous[str(result["worker_id"])] = str(result["status"])
+            deadline = time.monotonic() + args.interval
+            while not STOP and time.monotonic() < deadline:
+                time.sleep(max(0.0, min(1.0, deadline - time.monotonic())))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="formation-stall-watch")
+    parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--interval", type=positive_int, default=30)
+    parser.add_argument("--silence", type=positive_int, default=900)
+    parser.add_argument("--idle", type=positive_int, default=900)
+    args = parser.parse_args()
+    if args.watch and args.dry_run:
+        die("--watch and --dry-run cannot be combined")
+    if not shutil.which("tmux"):
+        die("tmux not found", 70)
+
+    formation_home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    state_dir = formation_home / "state" / "stall-watch"
+    registry = Path(os.getenv(
+        "FORMATION_REGISTRY", formation_home / "formation" / "registry.jsonl"
+    ))
+    mailbox = Path(os.getenv(
+        "FORMATION_MAILBOX", formation_home / "mailbox" / "log.jsonl"
+    ))
+    request_log = Path(os.getenv(
+        "FORMATION_REQUEST_LOG", formation_home / "requests" / "events.jsonl"
+    ))
+    if args.dry_run:
+        try:
+            render(
+                sweep(args, state_dir, registry, mailbox, request_log),
+                args.json,
+                args.quiet,
+            )
+        except (TmuxUnavailable, RegistryUnavailable, RequestStoreUnavailable) as exc:
+            die(str(exc), 70)
+        return
+    state_dir.mkdir(parents=True, exist_ok=True)
+    if args.watch:
+        watch(args, state_dir, registry, mailbox, request_log)
+    else:
+        with (state_dir / "state.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                render(
+                    sweep(args, state_dir, registry, mailbox, request_log),
+                    args.json,
+                    args.quiet,
+                )
+            except (
+                TmuxUnavailable,
+                RegistryUnavailable,
+                RequestStoreUnavailable,
+            ) as exc:
+                die(str(exc), 70)
+
+
+if __name__ == "__main__":
+    main()

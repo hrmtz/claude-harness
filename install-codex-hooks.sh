@@ -13,7 +13,14 @@
 
 set -euo pipefail
 
-HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INVOKED_HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_RESOLVER="$INVOKED_HARNESS_DIR/scripts/lib/resolve_harness_root.sh"
+[[ -r "$ROOT_RESOLVER" ]] || {
+    echo "error: canonical-root resolver missing: $ROOT_RESOLVER" >&2
+    exit 1
+}
+source "$ROOT_RESOLVER"
+HARNESS_DIR="$(harness_resolve_canonical_root "$INVOKED_HARNESS_DIR")" || exit 1
 CODEX_CONFIG="$HOME/.codex/config.toml"
 OVERLAY="$HARNESS_DIR/plugins/cross_cli_hooks.json"
 
@@ -66,7 +73,12 @@ CODEX_STATE_HOME="${CODEX_HOME:-$HOME/.codex}"
 INVENTORY_SNAPSHOT="$CODEX_STATE_HOME/plugins/harness-local-inventory.json"
 mkdir -p "$(dirname "$INVENTORY_SNAPSHOT")"
 INVENTORY_STAGE="$(mktemp "$(dirname "$INVENTORY_SNAPSHOT")/.harness-inventory.XXXXXX")"
-if ! "$ORIGINAL_CODEX_REAL" plugin list --json 2>/dev/null | jq -e '
+if ! PLUGIN_INVENTORY_JSON="$("$ORIGINAL_CODEX_REAL" plugin list --json 2>/dev/null)"; then
+    rm -f "$INVENTORY_STAGE"
+    echo "error: unable to read Codex plugin inventory." >&2
+    exit 1
+fi
+if ! printf '%s\n' "$PLUGIN_INVENTORY_JSON" | jq -e '
     [
       .installed[]
       | select(
@@ -93,6 +105,26 @@ if ! "$ORIGINAL_CODEX_REAL" plugin list --json 2>/dev/null | jq -e '
     exit 1
 fi
 mv -f "$INVENTORY_STAGE" "$INVENTORY_SNAPSHOT"
+
+# Native Codex plugin hooks and config.toml hooks are additive. Exclude only
+# handlers present in each enabled plugin's installed hooks.json, while retaining
+# the inline fallback for disabled, absent, or older plugin generations (#254).
+mapfile -t ENABLED_PLUGIN_ROOTS < <(
+    printf '%s\n' "$PLUGIN_INVENTORY_JSON" | jq -r '
+      .installed[]
+      | select(
+          .installed == true and
+          .enabled == true and
+          .marketplaceName == "claude-harness" and
+          (.name | startswith("harness-"))
+        )
+      | "\(.name)=\(.source.path)"
+    '
+)
+RENDER_PLUGIN_ARGS=()
+for plugin_root in "${ENABLED_PLUGIN_ROOTS[@]}"; do
+    RENDER_PLUGIN_ARGS+=(--enabled-plugin-root "$plugin_root")
+done
 
 # Publish the shared cross-CLI guard on PATH. Preserve a replaced entrypoint in
 # the same persistent backup used for the Codex config.
@@ -178,7 +210,7 @@ trap 'rm -f "$BLOCK_TMP" "$NEWCONF_TMP"' EXIT
 
 # (1) generate the fresh hooks block — must succeed before we touch config.toml
 python3 "$HARNESS_DIR/scripts/lib/render_codex_hooks.py" \
-    block "$OVERLAY" "$HARNESS_DIR" > "$BLOCK_TMP"
+    block "$OVERLAY" "$HARNESS_DIR" "${RENDER_PLUGIN_ARGS[@]}" > "$BLOCK_TMP"
 
 # (2) replace only our marker-bounded block. On first run after an older
 # installer, migrate only leaf tables whose commands are in the new managed
@@ -187,7 +219,7 @@ python3 "$HARNESS_DIR/scripts/lib/merge_codex_hooks.py" \
     "$CODEX_CONFIG" "$BLOCK_TMP" "$NEWCONF_TMP"
 echo "rebuilt $CODEX_CONFIG (claude-harness block regenerated atomically)"
 
-echo "wrote hooks to $CODEX_CONFIG (set: $(jq -r '.codex.hooks | length' "$OVERLAY") + $(jq -r '.codex.external | length' "$OVERLAY") external)"
+echo "wrote fallback/global hooks to $CODEX_CONFIG (enabled plugin manifests: ${#ENABLED_PLUGIN_ROOTS[@]})"
 
 # ---- verify config parses ---------------------------------------------------
 if codex features list >/dev/null 2>&1; then

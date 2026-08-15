@@ -1,6 +1,6 @@
 ---
 name: ultramagi
-description: End-to-end rigor loop for a non-trivial, hard-to-reverse change, orchestrated from Codex - local plan/design, then dual-magi review to PLATEAU, then code, then an adversarial bug-hunt on the implementation, then code review. A superset of dual-magi-review that gates the WHOLE lifecycle rather than a single design round, so that every irreversible step is preceded by adversarial, schema-grounded, cross-family review. TRIGGER, ultramagi, or a canonical migration, scoring algorithm, public launch, or data-loss-capable change. Not for small diffs, and not for a design doc with no implementation, use dual-magi-review for that.
+description: End-to-end rigor loop for a non-trivial change, orchestrated from Codex - classify reversibility, start bounded reversible work once ready-to-drive, and require dual-magi plus implementation review before every irreversible boundary. A superset of dual-magi-review that gates the WHOLE lifecycle rather than a single design round. TRIGGER, ultramagi, or a canonical migration, scoring algorithm, public launch, or data-loss-capable change. Not for small diffs, and not for a design doc with no implementation, use dual-magi-review for that.
 ---
 
 # ultramagi (Codex orchestrator, Claude/Grok cross-family)
@@ -10,9 +10,10 @@ All `scripts/...` and `schemas/...` references are relative to the installed
 Resolve that absolute plugin root before invoking a bundled script.
 
 **dual-magi** pairs same-family reviewers with a cross-family reviewer to subtract shared training
-bias. **ultramagi** wraps dual-magi around the *entire* change lifecycle: it gates both the design
-(before you write code) and the implementation (before you ship), with schema-grounded verification
-at each gate. It exists because AI-drafted designs are biased toward narrative coherence and skip
+bias. **ultramagi** wraps dual-magi around the *entire* change lifecycle: it gates both design and
+implementation before an irreversible boundary, with schema-grounded verification at each gate.
+Bounded reversible measurement/build/scaffolding may start earlier at the ready-to-drive checkpoint.
+It exists because AI-drafted designs are biased toward narrative coherence and skip
 literal verification — and the cheapest place to catch that is before the irreversible step.
 
 This is the Codex-orchestrated mirror of `plugins/harness-magi/skills/ultramagi`. The loop is
@@ -39,10 +40,10 @@ Rationale:
   satisfy the plateau'd design, and did implementation introduce policy/security/ops gaps?
 
 Codex-orchestrated ultramagi must therefore not assume "Codex writes the design because Codex is
-the current chassis." If the task is still in design/planning and a Claude worker is available,
-handoff or spawn Claude for the design plateau, then resume here for coding. If the user asks for
-"subagent Codex coding after design", enforce that no coding starts until the design gate has a
-mechanical plateau marker.
+the current chassis." If the next boundary is irreversible and a Claude worker is available,
+handoff or spawn Claude for the design plateau. Reversible work may start at the ready-to-drive
+checkpoint; exact-revision plateau remains mandatory before destructive/canonical mutation,
+production cutover, or shipping.
 
 ### Fallback when a family is unavailable
 
@@ -106,18 +107,42 @@ For an epic:
 If the request is already one independently mergeable slice, do not create ceremonial Epic
 overhead.
 
+## Reversibility briefing gate
+
+Classify the next step, not the project label:
+
+- **Heavy briefing:** destructive or hard-to-reverse work (`DROP`, migration/schema mutation,
+  canonical/bulk DML, production cutover, public launch, ranking changes
+  touching users). Complete the existing exact-revision design gate before that step.
+- **Warmup track:** local measurement, build, tests, disposable scaffolding, or additive work in a
+  non-canonical/staging target with an executable rollback check. Stop prose planning and start
+  when the invariant, first bounded executable
+  step, rollback/disposal path, and absence of a known CRITICAL/HIGH against that step are explicit.
+
+Warmup is not plateau and never authorizes shipping or an irreversible action. Put open
+implementation-detail questions into executable checks or the next-step reconnaissance ledger.
+If evidence changes the invariant, invalidates rollback, or expands blast radius, return to heavy
+briefing. Do not spend another design round perfecting machine-derivable detail.
+
+During a background wait estimated at 30 minutes or more, inspect the next step's real branches,
+constants, test lockstep, referenced objects, and role/index/env naming assumptions. Record drift
+as next-step scope; do not fix it opportunistically while the current job runs.
+
 ## The loop (one pass per task)
 
 ```
 [0] SCOPE      one independently mergeable task/slice. State the local and inherited epic
                invariants that must not break.
 [1] PLAN       design doc, preferably Claude-led for hard planning, written LOCALLY into
-               docs/designs/<NAME>.md.
-[2] DUAL-MAGI  run bounded dual-magi-review campaigns on the doc toward PLATEAU.
+               docs/designs/<NAME>.md. On the warmup track, stop at ready-to-drive.
+[2] DUAL-MAGI  heavy track: run bounded dual-magi-review campaigns on the doc toward PLATEAU.
+               Warmup track: review may overlap reversible execution, but exact-revision plateau
+               remains mandatory before any irreversible boundary.
    ↻           each round: revise with findings, re-review up to the campaign guard. The cross-family (Claude)
                round, or explicit Grok fallback, is MANDATORY before any plateau claim; the gate — not
                you — decides whether plateau was reached.
-[3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Repo-baked,
+[3] CODE       implement the plateau'd design, or only the bounded reversible step admitted by the
+               warmup checkpoint. Prefer Codex for repo-local coding. Repo-baked,
                idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   adversarial review of the IMPLEMENTATION, not the design:
@@ -175,9 +200,11 @@ G1..G9 — see the `dual-magi-review` skill). Same-family agreement is never pla
 own field data, three Claude reviewers reached consensus on a design that one cross-family round
 then REJECTED with five new criticals, two of which were literally unimplementable as written.
 
-If the gate exits non-zero, you are not at plateau. Do not proceed to [3].
+If the gate exits non-zero, you are not at plateau. Do not cross an irreversible boundary or claim
+shipping authority. A ready-to-drive warmup step may continue only while it remains bounded and
+reversible.
 
-Before gate [0], arm `scripts/magi_autorun.py arm <design-doc>` once. Its Stop hook owns
+On the heavy track, before gate [0], arm `scripts/magi_autorun.py arm <design-doc>` once. Its Stop hook owns
 acknowledgement-free session continuation across the design loop and ends only at exact-revision
 plateau or a definitive blocked state. Do not pause between phases for user acknowledgement.
 
@@ -188,8 +215,10 @@ allowance of 16 weighted model launches across all revision campaigns, without a
 Fan-out admission preserves one weighted launch for its immediately following mandatory
 cross-family review. Reserve denial is a definitive blocked state, never permission to ship; the
 cross-family claim still passes the normal transition and budget guards and is not double-charged.
-At global exhaustion, emit a definitive blocked result. Do not keep
-rerolling until a model happens to say GO and do not pause for user acknowledgement.
+At global exhaustion, emit a definitive blocked result for the irreversible boundary. Do not keep
+rerolling until a model happens to say GO and do not pause for user acknowledgement. If the
+ready-to-drive conditions still hold, continue only the reversible warmup and use executable
+evidence to narrow the next design revision.
 
 If requirements change while an adapter owns a live claim, do not edit the target or relaunch
 around it. Cancel that exact charged revision first:

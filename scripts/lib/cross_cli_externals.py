@@ -52,12 +52,19 @@ def _target_script(cmd: str):
     return parts[0]
 
 
-def resolve(overlay_path: str, cli: str, harness_dir: str) -> list:
+def resolve(
+    overlay_path: str,
+    cli: str,
+    harness_dir: str,
+    enabled_native_hooks: set[str] | frozenset[str] = frozenset(),
+) -> list:
     """External hooks for `cli` with tokens expanded and optional-absent entries
     dropped. Each item: {event, matcher, command, timeout}. Order preserved."""
     section = json.load(open(overlay_path)).get(cli, {})
     out = []
     for ext in section.get("external", []):
+        if ext.get("unless_native_hook") in enabled_native_hooks:
+            continue
         cmd = _expand(ext["command"], harness_dir)
         if ext.get("optional"):
             tgt = _target_script(cmd)

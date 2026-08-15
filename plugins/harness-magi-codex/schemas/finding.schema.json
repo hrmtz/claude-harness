@@ -63,19 +63,9 @@
             "enum": ["new-root", "same-root", "fix-induced-regression", "none"]
           }
         },
-        "required": ["finding_id", "severity", "title", "location", "rationale", "required_fix", "confidence", "dup_flag", "missed_angle"],
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "severity": {"enum": ["REJECT", "CRITICAL", "HIGH"]}
-              },
-              "required": ["severity"]
-            },
-            "then": {
-              "required": ["subsystem", "root_cause_id"]
-            }
-          }
+        "required": [
+          "finding_id", "severity", "title", "location", "rationale",
+          "required_fix", "confidence", "dup_flag", "missed_angle"
         ],
         "additionalProperties": false
       }

@@ -129,6 +129,9 @@ def snapshot_crc(pane: str) -> str | None:
     result = run_tmux("capture-pane", "-p", "-S", "-40", "-t", pane)
     if result.returncode:
         return None
+    # Render stability is only an activity gate. It cannot prove that the
+    # prompt buffer is empty: drafts, ghosts, and auto-suggestions can render
+    # identically. Injection still requires recorded exclusive ownership.
     return hashlib.sha256(result.stdout.encode()).hexdigest()
 
 
@@ -596,6 +599,44 @@ def sweep(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
         )
 
 
+def ensure_window_status(script_dir: Path) -> None:
+    # tmux global options live only in server memory, so a server restart
+    # silently reverts the window list to the stock look (#283). This watch
+    # loop is the one process that outlives server restarts (systemd restarts
+    # it), so it owns re-application. An explicit `formation-window-status
+    # revert` leaves a per-server marker that must win over re-application.
+    if os.getenv("FORMATION_WINDOW_STATUS_AUTO", "1") != "1":
+        return
+    result = run_tmux("display-message", "-p", "#{pid}")
+    server_pid = result.stdout.strip()
+    if result.returncode or not server_pid.isdigit() or int(server_pid) <= 1:
+        return
+    formation_home = Path(os.getenv("FORMATION_HOME", Path.home() / ".formation"))
+    status_dir = formation_home / "state" / "window-status"
+    if (status_dir / f"{server_pid}.json").exists():
+        return
+    if (status_dir / f"{server_pid}.reverted").exists():
+        return
+    helper = script_dir / "formation-window-status"
+    applied = subprocess.run(
+        [str(helper), "apply"], text=True, capture_output=True, check=False
+    )
+    # flush: under systemd, stdout is block-buffered and a rare once-per-server
+    # line would otherwise sit invisible in the buffer until process exit.
+    if applied.returncode:
+        detail = applied.stderr.strip() or f"exit {applied.returncode}"
+        print(
+            f"formation-mail-nudge: window-status apply failed: {detail}",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        print(
+            f"formation-mail-nudge: window-status re-applied for tmux server {server_pid}",
+            flush=True,
+        )
+
+
 def process_identity(pid: int, script: Path) -> bool:
     try:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
@@ -635,6 +676,7 @@ def watch(args: argparse.Namespace, script_dir: Path, state_dir: Path, registry:
     signal.signal(signal.SIGINT, stop)
     try:
         while not STOP:
+            ensure_window_status(script_dir)
             sweep(args, script_dir, state_dir, registry)
             deadline = time.monotonic() + args.interval
             while not STOP and time.monotonic() < deadline:

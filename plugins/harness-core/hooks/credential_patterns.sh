@@ -34,6 +34,17 @@ PATTERNS=(
     # in vendored Parade touchscreen drivers (issue #99).
     'cmcp_[a-zA-Z0-9_-]*[A-Z][a-zA-Z0-9_-]{10,}|cmcp_<REDACTED>'
     'cmcp_[a-zA-Z0-9_-]{10,}[A-Z][a-zA-Z0-9_-]*|cmcp_<REDACTED>'
+    # A filesystem basename cannot contain `/`, so tools commonly turn `://`
+    # into separators such as `::`, `--`, or `:--`.  Require the surviving
+    # `user:password@` shape to avoid matching ordinary scheme-prefixed names.
+    'postgresql[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|postgresql::<REDACTED>:<REDACTED>@'
+    'postgres[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|postgres::<REDACTED>:<REDACTED>@'
+    'mysql[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|mysql::<REDACTED>:<REDACTED>@'
+    'mongodb[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|mongodb::<REDACTED>:<REDACTED>@'
+    'mongodb\+srv[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|mongodb+srv::<REDACTED>:<REDACTED>@'
+    'redis[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|redis::<REDACTED>:<REDACTED>@'
+    'amqp[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|amqp::<REDACTED>:<REDACTED>@'
+    'libsql[-:_]{2,3}[^:/@[:space:]]+:[^@/[:space:]]+@|libsql::<REDACTED>:<REDACTED>@'
 )
 
 KEYWORD_PATTERN='[A-Z_]*(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL|PWD|AUTH|CERT|PRIVATE)[A-Z_]*'
@@ -67,6 +78,46 @@ credential_redact_text() {
     value=$(printf '%s' "$value" \
         | sed -E "s#(${KEYWORD_PATTERN}: [\"'])(${VALUE_PATTERN})#\1<REDACTED>#g")
     printf '%s' "$value"
+}
+
+credential_label_has_shape() {
+    # Compare entirely in memory.  Callers can test a path label without ever
+    # printing the possibly sensitive original.
+    local value="$1"
+    [ "$(credential_redact_text "$value")" != "$value" ]
+}
+
+credential_path_name_has_shape() {
+    # Check the target and every descendant pathname.  A scan error/timeout is
+    # sensitive, matching credential_path_has_shape's backup-safe fail-closed
+    # contract.  Candidate pathnames stay inside the pipeline.
+    local path="$1" redacted="${2-}" scan_rc filter_rc
+    local -a pipeline_status
+
+    if [ "$#" -ge 2 ]; then
+        if [ "$redacted" != "$path" ]; then
+            return 0
+        fi
+    elif credential_label_has_shape "$path"; then
+        return 0
+    fi
+    if [ ! -d "$path" ]; then
+        return 1
+    fi
+
+    timeout 4 find "$path" -print0 2>/dev/null \
+        | grep -zqE -f <(credential_shape_patterns) >/dev/null
+    pipeline_status=("${PIPESTATUS[@]}")
+    scan_rc=${pipeline_status[0]}
+    filter_rc=${pipeline_status[1]}
+
+    if [ "$filter_rc" -eq 0 ]; then
+        return 0
+    fi
+    if [ "$scan_rc" -eq 0 ] && [ "$filter_rc" -eq 1 ]; then
+        return 1
+    fi
+    return 0
 }
 
 credential_path_has_shape() {

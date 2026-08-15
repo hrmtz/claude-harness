@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "doc_id": "8fe2b3353e5e4a5b",
+  "doc_path": "__DOCUMENT__",
+  "campaigns": [
+    {
+      "campaign_id": "980aaebc-37a1-4e5f-b3e9-744962ad7009",
+      "started_at": "2026-07-30T06:12:51.534687+00:00",
+      "started_by": "automatic-initial-campaign",
+      "reason": "first guarded launch",
+      "launches": [
+        {
+          "claim_id": "b1dd62bd-1f56-4fbc-a3cc-d01bdcd2e845",
+          "sequence": 1,
+          "round": 1,
+          "phase": "fanout",
+          "attempt": 1,
+          "model_launches": 3,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "34c165c9c5447fafc2b9e27cc119ef32721fa5022b6e137010d5d8cc131cf59a",
+          "protocol_sha": "26d2f729c8b1639e28f176622424608f7c5e1c99e413584cf1953201c3473171",
+          "claimed_at": "2026-07-30T06:12:51.535559+00:00",
+          "status": "failed",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "fanout"
+          },
+          "finished_at": "2026-07-30T06:13:21.767990+00:00"
+        },
+        {
+          "claim_id": "7848897d-e5a8-47a3-8163-9f3a54ead2ba",
+          "sequence": 2,
+          "round": 1,
+          "phase": "fanout",
+          "attempt": 2,
+          "model_launches": 3,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "34c165c9c5447fafc2b9e27cc119ef32721fa5022b6e137010d5d8cc131cf59a",
+          "protocol_sha": "515980fcc5806116bd6d0430908276ce4fa36558890b8121f01e2eb66606c838",
+          "claimed_at": "2026-07-30T06:17:53.210686+00:00",
+          "status": "success",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "fanout"
+          },
+          "finished_at": "2026-07-30T06:22:14.641021+00:00"
+        },
+        {
+          "claim_id": "59561681-3e8c-4281-a910-13848aa3548d",
+          "sequence": 3,
+          "round": 2,
+          "phase": "xfamily",
+          "attempt": 1,
+          "model_launches": 1,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "34c165c9c5447fafc2b9e27cc119ef32721fa5022b6e137010d5d8cc131cf59a",
+          "protocol_sha": "515980fcc5806116bd6d0430908276ce4fa36558890b8121f01e2eb66606c838",
+          "claimed_at": "2026-07-30T06:24:07.129186+00:00",
+          "status": "success",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "xfamily"
+          },
+          "finished_at": "2026-07-30T06:29:17.849765+00:00"
+        }
+      ]
+    },
+    {
+      "campaign_id": "98f8829d-c2b2-44e6-8be1-11253f2cabc5",
+      "started_at": "2026-07-30T06:35:22.885678+00:00",
+      "started_by": "automatic-rollover",
+      "reason": "document or review protocol changed after prior campaign attempt",
+      "launches": [
+        {
+          "claim_id": "707d81ba-eaee-4fcc-8f06-35750cb4f74f",
+          "sequence": 1,
+          "round": 1,
+          "phase": "fanout",
+          "attempt": 1,
+          "model_launches": 3,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "c79ebb9a6b3bae97c121acd12468a89c1c4b5f0866fa634d2450d3d906189fc6",
+          "protocol_sha": "515980fcc5806116bd6d0430908276ce4fa36558890b8121f01e2eb66606c838",
+          "claimed_at": "2026-07-30T06:35:22.886509+00:00",
+          "status": "success",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "fanout"
+          },
+          "finished_at": "2026-07-30T06:39:34.400113+00:00"
+        }
+      ]
+    },
+    {
+      "campaign_id": "893c8c9c-dbc4-4e9d-8aa9-0ac2713c41a5",
+      "started_at": "2026-07-30T06:44:22.825212+00:00",
+      "started_by": "automatic-rollover",
+      "reason": "document or review protocol changed after prior campaign attempt",
+      "launches": [
+        {
+          "claim_id": "3797ab2c-a730-43f5-9061-a8c26748c164",
+          "sequence": 1,
+          "round": 1,
+          "phase": "fanout",
+          "attempt": 1,
+          "model_launches": 3,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "5e8ab74533e64c2a048db86c1d8861b29f95feac21ae9f3c442a2651634050d0",
+          "protocol_sha": "515980fcc5806116bd6d0430908276ce4fa36558890b8121f01e2eb66606c838",
+          "claimed_at": "2026-07-30T06:44:22.825888+00:00",
+          "status": "success",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "fanout"
+          },
+          "finished_at": "2026-07-30T06:49:16.846446+00:00"
+        },
+        {
+          "claim_id": "016bbff3-ef17-4115-917f-db6b386cc89c",
+          "sequence": 2,
+          "round": 2,
+          "phase": "xfamily",
+          "attempt": 1,
+          "model_launches": 1,
+          "state_dir": "__STATE_DIR__",
+          "artifact_sha": "2692b07d2488b91352d6ccdd7db63123208ca09ee4a637de6710fd49500598c1",
+          "protocol_sha": "515980fcc5806116bd6d0430908276ce4fa36558890b8121f01e2eb66606c838",
+          "claimed_at": "2026-07-30T06:57:57.215874+00:00",
+          "status": "success",
+          "owner": {
+            "pid": 1001,
+            "start_ticks": 2002,
+            "ppid": 3003,
+            "pgid": 4004,
+            "adapter_kind": "xfamily"
+          },
+          "finished_at": "2026-07-30T07:06:00.141904+00:00"
+        }
+      ]
+    }
+  ]
+}

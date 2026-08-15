@@ -78,6 +78,40 @@ formation spawn [--bypass-sandbox|--sandbox] [--cli claude|codex|kimi] \
   <path/to/briefing.md> [worker_name]
 ```
 
+#### Registering a pre-existing pane
+
+When the current tmux pane was not spawned by Formation, or survived an
+approved registry reset, register it from inside that pane:
+
+```bash
+formation register --cli claude|codex|kimi|grok \
+  [--task <label>] [--goal <text>] <id>
+```
+
+This command is self-registration only. It requires `$TMUX_PANE` to match both
+process-ancestry/TTY resolution and a targeted tmux lookup. It fails closed on
+duplicate ids or panes, inherited `FORMATION_SELF` mismatch, and existing pane
+identity conflicts. Never substitute untargeted
+`tmux display-message -p '#{pane_id}'`; that reports the session's active pane
+and can silently register a sibling agent.
+
+Registered panes are always nonexclusive: the row stores
+`exclusive_input=false` and the live `@formation_exclusive_input` option is
+removed. The row records `relay=DEAD` with
+`manual-registration-no-relay`, so delivery uses the zero-keystroke direct
+signal fallback. Credential-shaped `--task` or `--goal` metadata is refused
+before registry or pane mutation. Registration preserves the existing window
+name; locked pane identity remains the routing source of truth. If
+`FORMATION_PARENT` and
+`FORMATION_PARENT_PANE` are present, register the parent first; both the parent
+registry row and locked pane identity must agree. With neither variable,
+registration is intentionally `parent=UNROUTABLE` and does not invent a
+reverse route. Option-update failure restores every captured option and
+appends no row; after fixing the cause, re-run the same id. A different locked
+identity remains fail-closed pending inspection and an approved registry reset.
+If rollback itself fails, exit 8 reports `PARTIAL REGISTRATION`; inspect the
+named pane and registry before retrying.
+
 #### Choosing the CLI (subscription quotas are the constraint)
 
 Claude, Codex and Kimi are separate paid quotas that refill on separate clocks.
@@ -172,12 +206,13 @@ Do not rely on it to spread load; choose by the table above from the start.
   model; set it explicitly when a worker needs a different tier than the
   session default.
 - `--orchestrator` (claude workers, no explicit `--model`): asks `capacity-oracle
-  orchestrator-model --weight-class heavy` to pick the Claude tier by live
-  subscription headroom — **fable** for a heavy orchestration when there's ample
-  quota, else **opus**. A running session can't switch its own model, so this is
-  how you launch a *peer* orchestrator on the right tier. Fail-open: if
-  capacity-oracle isn't installed the worker just inherits the default tier. A
-  one-line stderr notice states the picked tier. (See capacity-oracle-mcp#92.)
+  orchestrator-model --weight-class heavy` for an authoritative admission
+  decision and Claude tier. It launches only when the oracle exits zero with
+  `admitted=true` and model **opus** or **fable**. Quota refusal, a missing
+  oracle, and missing/malformed/non-official output all fail closed before pane,
+  process, or registry mutation. The refusal notice includes measured headroom
+  and the stable reason code. A running session can't switch its own model, so
+  this is how you safely launch a *peer* orchestrator on the right tier.
 - **Placement defaults to a new tmux window** (isolates the worker's SessionStart
   window-rename from the parent — the ember-tanuki incident); pass `--split` for
   the old split-pane behavior. Either way it launches `claude --session-name
@@ -228,6 +263,9 @@ formation msg <id> "<x>"  # send instruction to worker
 formation msg --inject <id> "<x>" # exclusive worker only; short pull nudge
 formation ack <request-id> ["summary"]
 formation resolve <request-id> "<summary>"
+formation review-request <reviewer-id> "<subject>"
+formation verdict <review-id> <PASS|BLOCK> "<summary>"
+formation reviews --stale-minutes <N>
 formation reap <id>       # stop relay daemon, close pane, drop registry row
 ```
 
@@ -259,10 +297,60 @@ canonical checkout and never records a disposable worktree.
 `formation-window-status status` is read-only. Its explicit `apply` journals
 the same tmux server's exact global-format and changed-pane preimages;
 `--arrange` is separately opt-in. `revert` restores the journal when safe.
-Neither helper is invoked automatically.
+The mail-nudge watcher, when running, re-applies the window format for a tmux
+server that has no journal (server restarts drop tmux global options, #283);
+an explicit `revert` leaves a per-server marker that suppresses this until the
+next `apply` or server restart.
 
 Whenever you return to idle in the lead pane, call `formation inbox` before
 continuing — the worker may have asked a question or reported completion.
+
+### Unread-mail hooks for the parent/orchestrator loop
+
+Two zero-keystroke Claude hooks keep a busy or stopping orchestrator from
+missing durable mail (they complement, not replace, the pull rail above):
+
+- `mailbox_unread_advisor.sh` (UserPromptSubmit / SessionStart / PostToolUse)
+  injects the unread count as context. The PostToolUse path surfaces new mail
+  at the next tool boundary during a long autonomous turn; it probes at most
+  every `FORMATION_MAILBOX_ADVISOR_PROBE_INTERVAL` seconds (default 20).
+- `mailbox_unread_stop_gate.sh` (Stop) blocks a turn from ending with unread
+  mail exactly once per max sequence, with a readable reason (#273). Loop-safe:
+  `stop_hook_active` always allows, and the block record is written before
+  emitting. Kill switch: `FORMATION_MAILBOX_STOP_GATE_DISABLE=1`.
+
+Both fail open silently when the `formation` CLI or a mailbox identity is
+absent. These hooks close the busy-turn and turn-end gaps; the fully idle gap
+is closed by the Monitor rail below.
+
+### Idle-wake rail: arm a mailbox Monitor before going idle (#282)
+
+A fully idle Claude parent gets no new turn from a mailbox badge. The
+event-driven wake uses the Claude `Monitor` tool plus
+`formation inbox --follow`, which streams exactly one metadata line per new
+addressed mailbox row (seq/from/ts/subject only — never the body), touches
+neither cursor nor badge, and rides the same inotify+timeout discipline as the
+relay. Each emitted line becomes a task notification that starts a turn even
+while the session is idle — zero keystrokes into any pane, and the event is
+machine-tagged as a notification, never as user speech.
+
+**A Claude lead/orchestrator that spawns workers MUST arm this once, right
+after the first spawn:**
+
+```
+Monitor({
+  command: "formation inbox --follow",
+  description: "formation mailbox (self)",
+  persistent: true, timeout_ms: 3600000
+})
+```
+
+Rows already pending at arm time collapse into one `pending=N` startup event,
+so arming late cannot silently skip mail. On wake, pull with
+`formation inbox` as usual — the event line is only a doorbell. Stop it with
+`TaskStop` when the last worker is reaped. Codex leads have no Monitor tool;
+they remain covered by badge + hooks only, so prefer a Claude lead for
+long-running supervision.
 
 ### 4. Worker-side (what the worker pane should do)
 
@@ -287,6 +375,12 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   Use `formation status`, whose sticky ASK row remains caller-independent and
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
+- When assigning a review, use
+  `formation review-request <reviewer-id> "<subject>"`. The reviewer must
+  answer with `formation verdict <review-id> <PASS|BLOCK> "<summary>"`.
+  Formation copies the verdict to both requester and manager. A free-form
+  report does not close the review request; unresolved work remains visible
+  through `formation reviews --stale-minutes <N>`.
 - **Reading the delivery line. Never re-send on the strength of it.** Every
   `msg` / `report` / `done` / `ask` prints one of four outcomes. Three of them
   mean the send is finished and the body is durable either way — a re-send only
@@ -294,10 +388,10 @@ Drop these patterns into the briefing so the worker knows its own protocol:
 
   | Output | Meaning | Your move |
   |---|---|---|
-  | `signal=relay-owned` | Best case. The recipient's relay is alive and owns the badge write. | Nothing. Done. |
-  | `signal=sent-directly` | No relay, so the sender set the badge itself. | Nothing. Done. |
-  | `signal=unavailable … pull required` | No usable route. The row is durable; the recipient will see it when it reads its inbox. | Tell a human if it was urgent. Do not re-send. |
-  | `FAILED (exit 4)` | The pane could not be signaled. Row still durable, but no badge appears. | Report the failure. Do not re-send the body. |
+  | `signal=relay-owned … receipt=unconfirmed recipient_activity=unknown` | The recipient's relay owns the badge write. The row is durable, but inbox read is not proven. | Do not re-send. If urgent, inspect status or the explicit stall watcher. |
+  | `signal=sent-directly … receipt=unconfirmed recipient_activity=unknown` | The sender set the badge itself. The row is durable, but inbox read is not proven. | Do not re-send. If urgent, inspect status or the explicit stall watcher. |
+  | `signal=unavailable … receipt=unconfirmed recipient_activity=unknown … pull required` | No usable route. The row is durable; the recipient will see it when it reads its inbox. | Tell a human if it was urgent. Do not re-send. |
+  | `FAILED (exit 4): receipt=unconfirmed recipient_activity=unknown` | The pane could not be signaled. Row still durable, but no badge appears. | Report the failure. Do not re-send the body. |
 
   If you believe a message was lost, check `formation inbox --history` or ask
   the recipient — do not put the same body in the mailbox twice.
@@ -337,6 +431,14 @@ pane. `formation msg` is mailbox-first: it appends the durable body and lets the
 relay set a non-destructive badge with zero keystrokes into the prompt. An idle
 agent is not proof that its draft is empty. **Never hand-roll a raw
 `tmux send-keys -l "<text>" && tmux send-keys Enter` to nudge a peer pane.**
+`tmux capture-pane` exposes rendered output, not the editor buffer. Prompt text
+may be a draft, a last-input ghost, or a chassis-generated auto-suggestion;
+therefore prompt state from a capture is **UNKNOWN**. Do not label a pane
+"un-submitted" or "stuck", and do not send `Enter`, `C-u`, or a character
+probe, based on that appearance. `C-u` can destroy a real draft and still
+cannot distinguish a ghost from an auto-suggestion. Mailbox cursors, ASK
+state, process liveness, and pane-hash change are structural activity signals,
+not evidence that the prompt buffer is empty.
 Only a worker spawned with `formation spawn --exclusive-input` may use
 `formation msg --inject <worker_id> <body>` or
 `mailbox-send <pane> <body> --inject`; even then the output remains
@@ -550,8 +652,12 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).
-- **Worker pane un-submitted, or jumps into slash/file "search-mode"**:
-  the dominant cause is the **target pane being in tmux copy-mode** (the user
+- **A known injected message remains un-submitted, or the pane jumps into
+  slash/file "search-mode"**:
+  First establish the failure from the injection event and downstream
+  activity, not from input-box text in `capture-pane`. A capture cannot
+  distinguish an editable draft, a last-input ghost, or an auto-suggestion.
+  The dominant cause is the **target pane being in tmux copy-mode** (the user
   scrolled up to read, or a prior action left it there). In copy-mode,
   `send-keys` is consumed by copy-mode, not the app: the submit `Enter` copies
   the selection and exits instead of submitting (message sits un-submitted),

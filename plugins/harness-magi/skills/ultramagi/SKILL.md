@@ -1,9 +1,10 @@
 ---
 name: ultramagi
-version: 0.5.0
+version: 0.6.0
 description: >-
   End-to-end rigor loop for a non-trivial, hard-to-reverse change: local plan/design →
-  dual-magi review to PLATEAU → code → dual-magi/bug-hunt on the implementation → code-review →
+  reversibility-classified briefing → bounded code/measurement → dual-magi/bug-hunt before each
+  irreversible boundary → code-review →
   next. A superset of dual-magi-review that drives the WHOLE lifecycle, not just one design
   round, and is meant to be invoked from inside a Workflow so multi-agent execution stays gated
   by adversarial, schema-grounded, cross-family review at every irreversible step.
@@ -17,9 +18,10 @@ description: >-
 
 A "magi" is a panel of independent, perspective-orthogonal reviewers. **dual-magi** pairs
 same-family reviewers with a cross-family (codex) reviewer to subtract shared training bias.
-**ultramagi** wraps dual-magi around the ENTIRE change lifecycle: it gates BOTH the design (before
-you write code) AND the implementation (before you ship), with schema-grounded, real-data
-verification at each gate. It exists because heuristics and AI-drafted designs are biased toward
+**ultramagi** wraps dual-magi around the ENTIRE change lifecycle: it gates BOTH the design and the
+implementation before an irreversible boundary, with schema-grounded, real-data verification at
+each gate. Reversible measurement, build, and scaffolding may start earlier at the ready-to-drive
+checkpoint below. It exists because heuristics and AI-drafted designs are biased toward
 narrative coherence and skip literal verification — and the cheapest place to catch that is before
 the irreversible step.
 
@@ -49,10 +51,10 @@ Rationale:
 - Claude is the default cross-family reviewer for implementation intent: does the code still
   satisfy the plateau'd design, and did implementation introduce policy/security/ops gaps?
 
-Claude-orchestrated ultramagi should therefore keep design ownership until the design gate is
-mechanically complete, then delegate coding to Codex when available. If the user asks for
-"subagent Codex coding after design", enforce that no coding starts until the design plateau is
-recorded.
+Claude-orchestrated ultramagi should therefore keep design ownership through any irreversible
+boundary and delegate coding to Codex when available. Reversible work may start at the
+ready-to-drive checkpoint; exact-revision plateau remains mandatory before destructive/canonical
+mutation, production cutover, or shipping.
 
 ### Fallback when a family is unavailable
 
@@ -118,6 +120,27 @@ For an epic:
 
 If the request is already one independently mergeable slice, do not create ceremonial Epic
 overhead.
+
+## Reversibility briefing gate
+
+Classify the next step, not the project label:
+
+- **Heavy briefing:** destructive or hard-to-reverse work (`DROP`, migration/schema mutation,
+  canonical/bulk DML, production cutover, public launch, ranking changes
+  touching users). Complete the existing exact-revision design gate before that step.
+- **Warmup track:** local measurement, build, tests, disposable scaffolding, or additive work in a
+  non-canonical/staging target with an executable rollback check. Stop prose planning and start
+  when the invariant, first bounded executable
+  step, rollback/disposal path, and absence of a known CRITICAL/HIGH against that step are explicit.
+
+Warmup is not plateau and never authorizes shipping or an irreversible action. Put open
+implementation-detail questions into executable checks or the next-step reconnaissance ledger.
+If evidence changes the invariant, invalidates rollback, or expands blast radius, return to heavy
+briefing. Do not spend another design round perfecting machine-derivable detail.
+
+During a background wait estimated at 30 minutes or more, inspect the next step's real branches,
+constants, test lockstep, referenced objects, and role/index/env naming assumptions. Record drift
+as next-step scope; do not fix it opportunistically while the current job runs.
 
 ## Phase 0 (premise grill) — before [1] PLAN
 
@@ -188,10 +211,14 @@ edit lines within the block; do not promote a step to a heading or split the blo
 ```
 [0] SCOPE      one independently mergeable task/slice. State the local and inherited epic
                invariants that must not break.
-[1] PLAN       local design doc, preferably Claude-led for hard planning. GitHub transport for Plan is
+[1] PLAN       local design doc, preferably Claude-led for hard planning. On the warmup track,
+               stop when the ready-to-drive facts are explicit; do not optimize the whole lap in prose.
+               GitHub transport for Plan is
                unreliable → plan LOCALLY into docs/designs/<NAME>.md. Requires Phase 0 (premise
                grill) on this slice first — see § Phase 0 (premise grill).
-[2] DUAL-MAGI  loop dual-magi-review on the doc until PLATEAU (see definition). N rounds.
+[2] DUAL-MAGI  heavy track: loop dual-magi-review on the doc until PLATEAU (see definition).
+               Warmup track: review may continue alongside reversible execution, but must reach
+               exact-revision plateau before any irreversible boundary. N rounds.
    ↻           each round: revise the doc with findings, re-review. Cross-family (codex) round
                is MANDATORY before any plateau claim.
 [2b] BATTLE    (optional, high-stakes only) red-vs-blue team battle over the plateau'd design:
@@ -199,7 +226,8 @@ edit lines within the block; do not promote a step to a heading or split the blo
                design, a cross-family blinded judge scores proven holes. Replaces the plateau
                漸近 tail with a scored verdict. Patch RED_WINS holes, then continue. Skill:
                `magi-battle`. Skip for reversible / low-stakes tasks.
-[3] CODE       implement the plateau'd design. Prefer Codex for repo-local coding. Scripts
+[3] CODE       implement the plateau'd design, or only the bounded reversible step admitted by the
+               warmup checkpoint. Prefer Codex for repo-local coding. Scripts
                repo-baked, idempotent, reversible
                (backup-first for canonical writes), schema-grounded.
 [4] BUG-HUNT   dual-magi / adversarial review of the IMPLEMENTATION (not the design): a
@@ -329,8 +357,10 @@ Drive it from the main loop, or from inside a Workflow:
 > 上の opus-pin の論旨そのもの）。cross-family round は Codex（枯渇しない）なので Claude が熱いときこそ
 > full weight で回す — 決して薄めない。cf. capacity-oracle-mcp#92 / docs/WIRING.md §3。
 
-- **Design gate** → invoke the `dual-magi-review` skill (it runs Claude×3 + codex per round and
-  synthesizes findings). Loop it (one invocation per round) until plateau.
+- **Design gate** → on the heavy track, invoke the `dual-magi-review` skill (it runs Claude×3 +
+  codex per round and synthesizes findings) until plateau. On the warmup track, start the bounded
+  reversible step at ready-to-drive and continue review only as needed before the next irreversible
+  boundary; do not run prose rounds merely to reach zero findings.
 - **Build** → write the repo-baked, backup-first, gated scripts.
 - **Implementation gate (bug-hunt)** → a Workflow with `parallel()` of 3–5 adversarial reviewer
   agents (**each spawned with `opts.model: "opus"`** — 上記) that RUN read-only verification and
@@ -362,11 +392,12 @@ never `build → swap` directly.
 
 ## Cost / cadence
 
-Per task: design gate ~2–4 dual-magi rounds (each ~10–20 min Claude + ~10 min codex), build
+Per heavy-track task: design gate ~2–4 dual-magi rounds (each ~10–20 min Claude + ~10 min codex), build
 varies, bug-hunt ~1 workflow (~10 min), code-review ~5 min. A hard canonical task is a multi-hour
 loop — that is the point; it is cheaper than restoring corrupted canonical data. Scope to the
-task's blast radius: a tiny diff doesn't need ultramagi (use /simplify); a 436K-row author dedup
-or a public launch does.
+task's blast radius. Warmup-track work starts at ready-to-drive and spends job wait time on the
+next-step reconnaissance instead of prose convergence. A tiny diff doesn't need ultramagi (use
+/simplify); a 436K-row author dedup or a public launch does.
 
 At each round's synthesis, report **round count vs budget + cumulative walltime** so runaway
 loops are visible in-flight, not post-mortem (the 41-round run burned ~4.7h before anyone
@@ -388,4 +419,5 @@ counted).
 | 2026-07-10 | 0.2.0 | **Convergence economics** — learned from the company-shared-hippocampus run (41 rounds, ~4.7h, findings never reached zero under Fable-class reviewers). Plateau redefined severity-gated (new CRITICAL/HIGH breaking the invariant blocks; MED/LOW → deferred ledger, never a doc revision). Added: round budget (soft 5 / hard 8 with user sign-off) + altitude checkpoint, revision churn rule (fix-minimal + diff-scoped re-review; the r34 fix was r35's CRITICAL), altitude rule (execution-derived not text-derived — enumerable detail goes to executable gates, not prose), scope freeze during review, per-round budget/walltime reporting. |
 | 2026-07-21 | 0.4.0 | **Headroom-aware child tier (capacity-oracle #92 / claude-harness#97)** — before a heavy review/verify fan-out, consult `capacity-oracle substitute -q '.keep'` (fail-open if the CLI is absent). Claude is the only family that routinely exhausts its subscription; when it's below the offload floor, downgrade same-family review children opus→sonnet (still an explicit tier, never inherited fable) to stretch its budget — quality is carried by multi-perspective breadth + the mandatory Codex round, not child tier. Cross-family (Codex) round stays full-weight. |
 | 2026-07-28 | 0.5.0 | **Phase 0 (premise grill) (claude-harness#233 slice ①)** — a per-slice premise-verification phase before [1] PLAN: read-only investigation against schema-as-code (`migrations/`, grep-verifiable by every family — not a live `\d` that Codex reviewers cannot re-run), ≤3 recommended-answer questions, and a `docs/designs/<slug>_REFINEMENT.md` memo whose every premise carries a `premise_id` + re-runnable evidence receipt. `LIVE-DB-UNVERIFIED` premises are carried by three structural placements (slice pre-flight, PR-body count that must reach 0 before merge, gh issue when it does not). Effect is measured as the premise re-flag rate (distinct premises, `severity_norm`, sub-doc-scoped under an Epic split), not by n=3 round-1 finding counts. The schema-grounding mandate is reconciled with it: schema-as-code is required of every family, live-DB checks only of reviewers whose rail permits psql. Also recorded that `[0]`–`[6]` are lines in one code block, not sections. |
+| 2026-08-01 | 0.6.0 | **Reversibility-classified briefing + warmup reconnaissance (#276).** Heavy briefing and exact-revision gates remain mandatory before destructive/canonical mutation, production cutover, and shipping. Bounded reversible work starts at the ready-to-drive checkpoint (invariant, first step, rollback, no known blocking finding); machine-derivable questions move to executable checks and background wait time is used for next-step reconnaissance. |
 | 2026-07-21 | 0.3.0 | **Drift reconciliation (#98)** — the live installed 0.2.0 (convergence economics) had never been committed to source, while source had independently gained the `Default family routing` section + `[2b] BATTLE` phase + flow routing hints. Merged both into a single canonical superset (installed 0.2.0 as base + source-only routing/battle content) and re-established source as SoT. No behavior removed from either side. |

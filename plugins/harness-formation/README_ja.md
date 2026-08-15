@@ -17,6 +17,7 @@
 - `bin/formation` ── worker lifecycle / mailbox / durable request を束ねる CLI:
   `spawn | msg | status | inbox | reap | report | done | ask | ack | resolve | remote-check`
 - `bin/formation-mail-nudge` ── 無視された badge 用の任意 one-shot / watcher。自動起動しない
+- `bin/formation-stall-watch` ── mailbox 沈黙と pane 安定性を組み合わせた structural stall observer
 - `bin/install-formation-mail-nudge-service` ── 任意 watcher の明示的 systemd user service install / uninstall
 - `bin/formation-window-status` ── journal 付き tmux window list の明示的 apply / status / revert
 - `lib/mailbox.sh` ── jsonl append-only の pane 間メッセージバス。recipient 毎カーソル、flock で書き込みガード
@@ -82,6 +83,9 @@ formation spawn ./briefing.md refactor-1
 # spawn — codex worker
 formation spawn --cli codex --model gpt-4.1-mini ./briefing.md refactor-1
 
+# Formation 外で起動済みの現在 pane を登録
+formation register --cli claude --task coordination lead
+
 # 監視
 formation status              # 全 worker と最新 pane 行
 formation inbox               # worker からの未読報告
@@ -92,6 +96,35 @@ formation msg refactor-1 "approach B に切り替えて"
 # 畳む
 formation reap refactor-1
 ```
+
+`formation register` は pane-local な `$TMUX_PANE` と、process ancestry /
+controlling TTY から独立解決した pane、targeted tmux lookup の一致を要求する。
+重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity との衝突は
+fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
+live `@formation_exclusive_input` option も解除する。relay は
+`DEAD/manual-registration-no-relay` と記録し、sender は既存の
+zero-keystroke direct signal fallback を使う。credential-shaped な `--task`
+または `--goal` は registry/pane 更新前に拒否する。既存 window name は維持し、
+mutable な表示名ではなく locked pane identity を routing source of truth とする。
+
+`FORMATION_PARENT` と `FORMATION_PARENT_PANE` を継承している場合は parent を
+先に登録する。parent の最新 registry row、pane id、locked identity が一致した
+時だけ route を採用する。両変数が無い pane は意図的に
+`parent=UNROUTABLE` となり、`formation msg` 受信と `formation inbox` は使えるが
+report 先を推測しない。untargeted な
+`tmux display-message -p '#{pane_id}'` は session の active pane を返し得るため、
+自己 pane の根拠に使わない。
+
+通常の zero-keystroke signal は
+`receipt=unconfirmed recipient_activity=unknown` を返す。durable row と badge
+は inbox read の証明ではない。同じ本文を再送せず、緊急時は
+`formation status` または明示起動した `formation-stall-watch` で確認する。
+
+option 更新失敗時は取得済みの全 pane option を復元し、row を追加しない。
+原因修正後は同じ id で再実行できる。異なる locked identity との衝突は
+fail-closed のまま残し、調査後の approved registry reset を要求する。rollback
+自体が失敗した場合は `PARTIAL REGISTRATION` と exit 8 を返す。表示された pane
+と registry を調査してから再実行する。
 
 ### 任意の ignored-badge escalation / window status
 
@@ -123,15 +156,34 @@ plugin install / `formation spawn` は watcher を起動しない。常駐は明
 systemd user service 選択で、installer は disposable caller worktree ではなく
 canonical checkout を解決する。
 
-`formation-window-status` も自動実行しない。`apply` は server-global format の
+`formation-window-status` の初回適用も明示実行。`apply` は server-global format の
 正確な preimage を journal し、`--arrange` は別 opt-in。`revert` は同じ tmux
-server の journal を復元し、`status` は read-only:
+server の journal を復元し、`status` は read-only。tmux global option は server
+メモリにしか無いため、server 再起動で適用済み format は silent に消える (#283)。
+mail-nudge watcher 稼働中は watch loop が journal の無い server に format を
+再適用する。明示的 `revert` は per-server marker を残し watcher はそれを尊重
+(次の `apply` か server 再起動まで revert が維持される)。watcher 側で
+`FORMATION_WINDOW_STATUS_AUTO=0` を設定すると再適用を完全停止:
 
 ```bash
 formation-window-status status
 formation-window-status apply --lead "$TMUX_PANE" --task "review"
 formation-window-status apply --arrange --dry-run
 formation-window-status revert
+```
+
+### Structural stall observer
+
+`formation-stall-watch` は mailbox silence と pane hash 安定の両 clock が
+満了した時だけ worker を `STALL` と分類する。pane snapshot は activity
+変化の検出専用で、input box の状態判定には使わない。`capture-pane` では
+editable draft / 直前入力 ghost / chassis auto-suggestion を区別できないため、
+全 result に `prompt_state=UNKNOWN` を返す。`STALL` は input box が詰まっている、
+または変更して安全という意味ではない。未解決 ASK は `WAITING_PARENT` とする。
+
+```bash
+formation-stall-watch --silence 900 --idle 900 --json
+formation-stall-watch --watch --quiet
 ```
 
 ### 3. worker 側 (worker の agent が Bash tool から叩く — claude/codex 共通)

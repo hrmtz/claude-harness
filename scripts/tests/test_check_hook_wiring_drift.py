@@ -82,6 +82,84 @@ class HookWiringDriftTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("IN SYNC", result.stdout)
 
+    def test_extensionless_bin_entrypoint_survives_live_path_rewrite(self) -> None:
+        self.write(
+            live={
+                "SessionStart": [
+                    block(
+                        '"/repo/plugins/harness-core/bin/'
+                        'install-cache-safe-entrypoints"'
+                    )
+                ]
+            },
+            plugin={
+                "SessionStart": [
+                    block(
+                        '"${CLAUDE_PLUGIN_ROOT}/bin/'
+                        'install-cache-safe-entrypoints"'
+                    )
+                ]
+            },
+        )
+        result = self.invoke()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("live-wired: 1  plugin-wired: 1", result.stdout)
+
+    def test_unresolved_plugin_root_is_drift_even_when_entrypoint_matches(self) -> None:
+        unresolved = (
+            '"${CLAUDE_PLUGIN_ROOT}/bin/'
+            'install-cache-safe-entrypoints"'
+        )
+        self.write(
+            live={"SessionStart": [block(unresolved)]},
+            plugin={"SessionStart": [block(unresolved)]},
+        )
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("UNRESOLVED_PLUGIN_ROOT", result.stdout)
+        self.assertIn("install-cache-safe-entrypoints", result.stdout)
+        self.assertNotIn("IN SYNC", result.stdout)
+
+    def test_missing_extensionless_bin_entrypoint_is_dormant(self) -> None:
+        self.write(
+            live={},
+            plugin={
+                "SessionStart": [
+                    block(
+                        '"${CLAUDE_PLUGIN_ROOT}/bin/'
+                        'install-cache-safe-entrypoints"'
+                    )
+                ]
+            },
+        )
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("DORMANT", result.stdout)
+        self.assertIn("install-cache-safe-entrypoints", result.stdout)
+
+    def test_dispatcher_bin_path_does_not_hide_actual_script(self) -> None:
+        dispatcher = (
+            'test -x "${HOME}/.local/bin/harness-hook" || '
+            'exec bash "${CLAUDE_PLUGIN_ROOT}/hooks/'
+        )
+        self.write(
+            live={
+                "PreToolUse": [
+                    block(dispatcher + 'live_guard.sh"; exit 0')
+                ]
+            },
+            plugin={
+                "PreToolUse": [
+                    block(dispatcher + 'plugin_guard.py"; exit 0')
+                ]
+            },
+        )
+        result = self.invoke()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("live_guard.sh", result.stdout)
+        self.assertIn("plugin_guard.py", result.stdout)
+        self.assertNotIn("[PreToolUse] harness-hook", result.stdout)
+
     def test_malformed_input_is_checker_error(self) -> None:
         self.live.write_text("{broken")
         self.hooks_json.write_text(json.dumps({"hooks": {}}))

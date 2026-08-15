@@ -12,6 +12,7 @@ Peer-pane Claude Code and Codex worker orchestration. Spawn long-running workers
 | `skills/babysit-pr/SKILL.md` | Receipt-gated CI monitoring, bounded source repair, and review follow-up for Formation-owned PRs |
 | `bin/formation` | CLI: worker coordination plus the read-only `integration-audit` report |
 | `bin/formation-mail-nudge` | Optional one-shot/watching escalation for ignored badges; never starts automatically |
+| `bin/formation-stall-watch` | Structural stall observer using mailbox silence and pane stability |
 | `bin/install-formation-mail-nudge-service` | Explicit systemd user-service install/uninstall for the optional watcher |
 | `bin/formation-window-status` | Explicit journaled tmux window-list apply/status/revert tool |
 | `lib/mailbox.sh` | Durable JSONL storage, locking, sequence allocation, and read cursors |
@@ -95,6 +96,47 @@ registry and `@formation_exclusive_input`. Only then may
 short pull nudge. The durable body always remains in the mailbox.
 Every injection remains `receipt unconfirmed` and uses the shared delayed-submit
 primitive.
+Normal zero-keystroke signals now report
+`receipt=unconfirmed recipient_activity=unknown`: a durable row and pane badge
+do not prove that the recipient read its inbox. Do not resend the body. For an
+urgent instruction, inspect `formation status` or the explicit
+`formation-stall-watch`; an idle recipient may not act until a later turn.
+
+### Registering an existing pane
+
+Use `formation register` inside a tmux pane that Formation did not spawn, or
+inside a surviving pane after an approved registry reset:
+
+```bash
+formation register --cli claude --task coordination lead
+```
+
+Registration requires the pane-local `$TMUX_PANE` to agree with independent
+process-ancestry/TTY resolution and with a targeted tmux lookup. It refuses a
+duplicate id, duplicate pane, inherited `FORMATION_SELF` mismatch, or existing
+pane identity conflict. A pre-existing pane is always registered with
+`exclusive_input=false`, and the live `@formation_exclusive_input` option is
+removed. Its relay state is explicitly `DEAD` with reason
+`manual-registration-no-relay`; mailbox senders therefore use the existing
+zero-keystroke direct signal fallback. Credential-shaped `--task` or `--goal`
+metadata is refused before registry or pane mutation. Registration preserves
+the existing window name; locked pane identity, not mutable display text,
+remains the routing source of truth.
+
+If the pane inherited both `FORMATION_PARENT` and `FORMATION_PARENT_PANE`,
+register the parent first. Registration accepts that route only when the latest
+parent registry row and its locked pane identity agree. With neither variable,
+the row is intentionally `parent=UNROUTABLE`: it can receive `formation msg`
+and read `formation inbox`, but has no inferred report destination.
+Never derive the caller pane with untargeted
+`tmux display-message -p '#{pane_id}'`; that returns the session's active pane,
+which may belong to another agent.
+
+If option update fails, registration restores every captured pane option and
+does not append a row. Re-run the same id after fixing the cause. A conflicting
+locked identity remains fail-closed and requires inspection before an approved
+registry reset. If rollback itself fails, the command exits 8 with
+`PARTIAL REGISTRATION`; inspect the named pane and registry before retrying.
 
 ### Optional ignored-badge escalation
 
@@ -127,16 +169,40 @@ Neither plugin install nor `formation spawn` starts the watcher. Persistent
 operation is an explicit systemd user-service choice; the installer resolves
 the canonical checkout rather than persisting a caller worktree.
 
-`formation-window-status` is likewise explicit. `apply` changes server-global
-window formats and journals their exact preimage; `--arrange` is separately
-opt-in. `revert` restores that journal for the same tmux server, and `status`
-is read-only:
+`formation-window-status` is likewise explicit for its first application.
+`apply` changes server-global window formats and journals their exact
+preimage; `--arrange` is separately opt-in. `revert` restores that journal for
+the same tmux server, and `status` is read-only. Because tmux global options
+live only in server memory, a tmux server restart silently drops an applied
+format; when the mail-nudge watcher is running, its watch loop re-applies the
+format for any server that has no journal (#283). An explicit `revert` leaves
+a per-server marker the watcher honors, so reverting sticks until the next
+`apply` or server restart. Set `FORMATION_WINDOW_STATUS_AUTO=0` on the watcher
+to disable re-application entirely:
 
 ```bash
 formation-window-status status
 formation-window-status apply --lead "$TMUX_PANE" --task "review"
 formation-window-status apply --arrange --dry-run
 formation-window-status revert
+```
+
+`formation-stall-watch` classifies a worker as stalled only when two
+independent clocks have both expired: the worker has emitted no mailbox row,
+and its captured pane hash has not changed. It validates the live pane identity
+against the latest registry row and stores observation state below
+`~/.formation/state/stall-watch/`. Kimi's idle TUI redraw changes its leading
+spinner glyph without doing work, so that glyph is normalized; semantic pane
+text remains part of the hash. Workers with an unresolved ASK report
+`WAITING_PARENT`, not `STALL`. Every result reports
+`prompt_state=UNKNOWN`: `capture-pane` cannot distinguish an editable draft,
+a last-input ghost, or a chassis-generated auto-suggestion. `STALL` therefore
+means only that the two structural clocks expired; it never claims that an
+input box is blocked or safe to modify.
+
+```bash
+formation-stall-watch --silence 900 --idle 900 --json
+formation-stall-watch --watch --quiet
 ```
 
 ASKs are durable semantic state, stored separately from mailbox transport.
@@ -167,6 +233,16 @@ pane-option preimages below `~/sanada_backup_persistent/` (override with
 Set-option or registry failures roll pane options back; closed/recycled child
 panes and mismatched non-null routes are refused. An already exact pane+row
 pair is a byte-for-byte no-op.
+
+Review work has a separate durable lifecycle. The requester runs
+`formation review-request <reviewer-id> <subject>` and retains the printed
+review id. Formation sends the id to the reviewer and copies the request to
+the requester's manager. The assigned reviewer closes it with
+`formation verdict <review-id> <PASS|BLOCK> <summary>`; the verdict is copied
+to both requester and manager. `formation reviews --stale-minutes <N>` exposes
+unanswered requests directly, so a watcher does not have to infer progress
+from mailbox unread counts or pane text.
+
 Lifecycle commands return exit `4` when the row/state is durable but a known
 pane could not be signaled. Do not automatically retry `report` or `done` on
 that code—the retry would append a duplicate row. A missing or unverified pane

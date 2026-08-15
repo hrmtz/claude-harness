@@ -137,6 +137,8 @@ before_revert="$(sha256sum "$STATE" "$JOURNAL")"
 [[ "$before_revert" == "$(sha256sum "$STATE" "$JOURNAL")" ]]
 "$HELPER" revert >/dev/null
 [[ ! -e "$JOURNAL" ]]
+MARKER="$FORMATION_HOME/state/window-status/4242.reverted"
+[[ -e "$MARKER" ]]
 [[ "$(find "$FORMATION_HOME/state/window-status/history" -type f | wc -l)" -eq 1 ]]
 jq -e '
   .globals["window-status-format"] == {present:true,value:"old format"}
@@ -152,6 +154,7 @@ jq -e '
 # Window-ID drift restores independent options, refuses every index move, and
 # retains the active journal so a later correction can complete recovery.
 "$HELPER" apply --arrange >/dev/null
+[[ ! -e "$MARKER" ]]
 jq '.windows += [{id:"@3",session:"s",index:2,worker:false}]' "$STATE" >"$STATE.tmp"
 mv "$STATE.tmp" "$STATE"
 : >"$LOG"
@@ -162,9 +165,12 @@ grep -Fq 'journal retained' "$TMP/drift.err"
 [[ -e "$JOURNAL" ]]
 [[ "$before_indices" == "$(jq -c '[.windows[] | {id,index}]' "$STATE")" ]]
 ! grep -Fq 'move-window' "$LOG"
+# Incomplete restoration must not claim "explicitly reverted".
+[[ ! -e "$MARKER" ]]
 jq '.windows |= map(select(.id != "@3"))' "$STATE" >"$STATE.tmp"
 mv "$STATE.tmp" "$STATE"
 "$HELPER" revert >/dev/null
 [[ ! -e "$JOURNAL" ]]
+[[ -e "$MARKER" ]]
 
 echo "test_window_status: passed"

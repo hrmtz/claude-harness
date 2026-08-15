@@ -432,6 +432,46 @@ class ConvergenceGateTest(unittest.TestCase):
         self.git("commit", "-qm", "implementation revision 2")
         self.target_sha = self.git("rev-parse", "HEAD")
 
+    def prepare_incremental_adapter_fixture(self) -> tuple[Path, Path, Path]:
+        old_artifact = file_sha(self.manifest)
+        old_target = self.target_sha
+        self.add_launch(1, "fanout", old_artifact, root="root-a")
+        self.add_launch(2, "xfamily", old_artifact, root="root-a")
+        history = [self.archive_manifest()]
+        self.advance_target()
+        self.write_manifest(
+            historical=history,
+            review_base=old_target,
+            incremental=True,
+        )
+        ledger_path = self.write_ledger()
+        output_state = self.repo / "incremental-state"
+        output_state.mkdir()
+        deja_root = Path(self.temp.name) / "deja-root"
+        deja_root.mkdir()
+        target_path_id = hashlib.sha256(
+            str(self.manifest.resolve()).encode()
+        ).hexdigest()[:16]
+        selected = run(
+            "python3",
+            str(DEJA),
+            "select",
+            "--target",
+            str(self.manifest),
+            "--magi-state",
+            str(output_state),
+            "--target-path-id",
+            target_path_id,
+            "--target-sha",
+            file_sha(self.manifest),
+            "--protocol-sha",
+            magi_protocol.protocol_sha(),
+            "--state-root",
+            str(deja_root),
+        )
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        return ledger_path, output_state, deja_root
+
     def finding_payload(
         self,
         *,
@@ -868,18 +908,7 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(payload["usage"], 5)
 
     def test_incremental_adapter_runs_one_authorized_persona_and_charges_one(self) -> None:
-        old_artifact = file_sha(self.manifest)
-        old_target = self.target_sha
-        self.add_launch(1, "fanout", old_artifact, root="root-a")
-        self.add_launch(2, "xfamily", old_artifact, root="root-a")
-        history = [self.archive_manifest()]
-        self.advance_target()
-        self.write_manifest(
-            historical=history,
-            review_base=old_target,
-            incremental=True,
-        )
-        ledger_path = self.write_ledger()
+        ledger_path, output_state, deja_root = self.prepare_incremental_adapter_fixture()
         stub_bin = Path(self.temp.name) / "bin"
         stub_bin.mkdir()
         codex = stub_bin / "codex"
@@ -888,7 +917,7 @@ class ConvergenceGateTest(unittest.TestCase):
 import json, re, sys
 args = sys.argv[1:]
 if args == ["exec", "--help"]:
-    print("--output-schema --output-last-message --ephemeral")
+    print("--output-schema --output-last-message --ephemeral --json")
     raise SystemExit(0)
 out = args[args.index("-o") + 1]
 prompt = sys.stdin.read()
@@ -911,31 +940,6 @@ print("incremental fixture")
 """
         )
         codex.chmod(0o755)
-        output_state = self.repo / "incremental-state"
-        output_state.mkdir()
-        deja_root = Path(self.temp.name) / "deja-root"
-        deja_root.mkdir()
-        target_path_id = hashlib.sha256(
-            str(self.manifest.resolve()).encode()
-        ).hexdigest()[:16]
-        selected = run(
-            "python3",
-            str(DEJA),
-            "select",
-            "--target",
-            str(self.manifest),
-            "--magi-state",
-            str(output_state),
-            "--target-path-id",
-            target_path_id,
-            "--target-sha",
-            file_sha(self.manifest),
-            "--protocol-sha",
-            magi_protocol.protocol_sha(),
-            "--state-root",
-            str(deja_root),
-        )
-        self.assertEqual(selected.returncode, 0, selected.stderr)
 
         result = run(
             str(FANOUT),
@@ -950,6 +954,8 @@ print("incremental fixture")
                 "PATH": f"{stub_bin}:{os.environ['PATH']}",
                 "HOME": str(self.fake_home),
                 "DEJA_REVIEW_STATE_ROOT": str(deja_root),
+                "TMUX": "",
+                "TMUX_PANE": "",
             },
         )
 
@@ -979,6 +985,76 @@ print("incremental fixture")
         ]
         self.assertEqual(launches[-1]["phase"], "targeted")
         self.assertEqual(launches[-1]["model_launches"], 1)
+
+    def test_incremental_startup_rejection_authorizes_weight_one_replacement(self) -> None:
+        ledger_path, output_state, deja_root = self.prepare_incremental_adapter_fixture()
+        stub_bin = Path(self.temp.name) / "bin"
+        stub_bin.mkdir()
+        codex = stub_bin / "codex"
+        codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "if sys.argv[1:] == ['exec', '--help']:\n"
+            "    print('--output-schema --output-last-message --ephemeral --json')\n"
+            "    raise SystemExit(0)\n"
+            "print(\"invalid_json_schema: In context=('properties', 'findings', 'items'), "
+            "'allOf' is not permitted.\", file=sys.stderr)\n"
+            "raise SystemExit(1)\n"
+        )
+        codex.chmod(0o755)
+
+        result = run(
+            str(FANOUT),
+            str(self.manifest),
+            "1",
+            str(output_state),
+            "--persona-set",
+            "bug-hunt",
+            "--review-mode",
+            "incremental",
+            env={
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "HOME": str(self.fake_home),
+                "DEJA_REVIEW_STATE_ROOT": str(deja_root),
+                "TMUX": "",
+                "TMUX_PANE": "",
+            },
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        failures = list(output_state.glob("round_1_fanout.*.FAILED.json"))
+        self.assertEqual(len(failures), 1)
+        evidence = json.loads(failures[0].read_text())
+        self.assertEqual(len(evidence["reviewers"]), 1)
+        self.assertEqual(evidence["reviewers"][0]["reviewer"], "GNAT")
+        self.assertEqual(
+            evidence["reviewers"][0]["classification"],
+            "provider-schema-startup-rejection",
+        )
+        ledger = json.loads(ledger_path.read_text())
+        launch = ledger["campaigns"][-1]["launches"][-1]
+        self.assertEqual(launch["phase"], "targeted")
+        self.assertEqual(launch["model_launches"], 1)
+        self.assertEqual(launch["status"], "startup-failed-recoverable")
+        self.assertEqual(len(launch["recovery"]["reviewers"]), 1)
+
+        retry = run(
+            sys.executable,
+            str(PLUGIN / "scripts" / "magi_campaign_guard.py"),
+            "claim",
+            str(self.manifest),
+            "1",
+            "targeted",
+            str(output_state),
+            env={"HOME": str(self.fake_home)},
+        )
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        reloaded = json.loads(ledger_path.read_text())
+        launches = reloaded["campaigns"][-1]["launches"]
+        self.assertEqual(len(launches), 2)
+        self.assertEqual(launches[1]["attempt"], 2)
+        self.assertEqual(launches[1]["replacement_for"], launches[0]["claim_id"])
+        self.assertEqual(guard.model_launches([reloaded["campaigns"][-1]]), 1)
 
     def test_surface_change_forces_full_fanout(self) -> None:
         old_artifact = file_sha(self.manifest)
@@ -1354,6 +1430,73 @@ print("incremental fixture")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["decision"], "BLOCKED")
         self.assertEqual(payload["reason_code"], "NEXT_FANOUT_UNAFFORDABLE")
+
+    def test_recoverable_retry_admission_uses_zero_incremental_weight(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact, status="failed")
+        launch = self.launches[-1]
+        launch["protocol_sha"] = "0" * 64
+        launch["status"] = "startup-failed-recoverable"
+        launch["finished_at"] = "2026-07-24T00:00:01+00:00"
+        launch["recovery"] = {
+            "kind": "claim-scoped-credit",
+            "reason_code": "PROVIDER_SCHEMA_STARTUP_REJECTION",
+            "requested_at": "2026-07-24T00:00:01+00:00",
+            "evidence_path": str(self.state / "failure.json"),
+            "evidence_sha256": "1" * 64,
+            "adapter_script_sha256": "2" * 64,
+            "process_cleanup": "verified-no-descendants",
+            "reviewers": [
+                {
+                    "reviewer": reviewer,
+                    "classification": "provider-schema-startup-rejection",
+                    "provider_exit_code": 1,
+                    "output_bytes": 0,
+                    "input_bytes": 0,
+                    "turn_observed": False,
+                }
+                for reviewer in ("MELCHIOR", "BALTHASAR", "CASPAR")
+            ],
+        }
+        self.write_ledger()
+        with (
+            mock.patch.object(
+                guard,
+                "bounded_admission_decision",
+                wraps=guard.bounded_admission_decision,
+            ) as admission,
+            mock.patch.dict(os.environ, {"HOME": str(self.fake_home)}),
+        ):
+            result = convergence.evaluate(self.manifest)
+        self.assertFalse(result["authorizes_shipping"])
+        fanout_calls = [
+            call for call in admission.call_args_list if call.args[4] == "fanout"
+        ]
+        self.assertTrue(fanout_calls)
+        self.assertEqual(fanout_calls[-1].kwargs.get("launch_weight"), 0)
+
+        payload = json.loads(self.manifest.read_text())
+        payload["scope_id"] = "issue-107-revised"
+        self.manifest.write_text(json.dumps(payload, indent=2) + "\n")
+        with (
+            mock.patch.object(
+                guard,
+                "bounded_admission_decision",
+                wraps=guard.bounded_admission_decision,
+            ) as revised_admission,
+            mock.patch.dict(os.environ, {"HOME": str(self.fake_home)}),
+        ):
+            convergence.evaluate(self.manifest)
+        revised_fanout = [
+            call
+            for call in revised_admission.call_args_list
+            if call.args[4] == "fanout"
+        ]
+        self.assertTrue(revised_fanout)
+        self.assertIsNone(
+            revised_fanout[-1].kwargs.get("launch_weight")
+        )
+        self.assertEqual(revised_fanout[-1].args[0], 0)
 
     def test_clean_review_never_emits_pass(self) -> None:
         artifact = file_sha(self.manifest)

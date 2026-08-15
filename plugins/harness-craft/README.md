@@ -22,6 +22,7 @@ gates).
 | `skill-tdd` | `writing-skills` | Structural-first entry gate: if a hook/regex can enforce the rule, write a hook, not a skill |
 | `atomized-briefing` | `writing-plans` | Reframed as the briefing format for harness-formation workers and subagent dispatch |
 | `root-cause-debugging` | `systematic-debugging` | 3-failed-fixes circuit breaker routes to dual-magi-review; complements the 仗助 fix loop (speed) with aim |
+| `calibrated-verification` | — (harness original, #281 / nakamura-fdr#46) | Every checker ships a known positive + negative control and prints its denominator; behavioral half of `harness-core/hooks/negative_claim_advisor.sh` |
 
 Deliberately NOT imported: TDD / code-review / worktree skills (covered by
 Claude Code built-ins and harness-magi), brainstorming (harness-magi's

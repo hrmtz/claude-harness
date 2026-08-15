@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Pin the v0.11.0 free-range reviewer prose contract."""
+"""Pin the v0.11.x free-range reviewer prose contract."""
 
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import unittest
 
@@ -22,17 +23,19 @@ class FreerangeContractTest(unittest.TestCase):
         cls.text = SKILL.read_text(encoding="utf-8")
 
     def test_flag_is_optional_fourth_reviewer_after_round_one(self) -> None:
-        self.assertIn("version: 0.11.0", self.text)
+        self.assertIn("version: 0.11.1", self.text)
         self.assertIn("[--freerange]", self.text)
         self.assertIn("round 2 以降だけ有効", self.text)
         self.assertIn("追加の 4 体目", self.text)
         self.assertIn("既存 reviewer の置換・必要 reviewer 集合への算入は禁止", self.text)
-        self.assertIn("`xfamily` / `freerange` は", " ".join(self.text.split()))
+        self.assertIn("built-in `--freerange` だけはこの予約語を所有する明示的例外", self.text)
 
     def test_output_stays_in_per_doc_namespace_and_return_is_bounded(self) -> None:
         self.assertIn("${magi_dir}/round_<N>_freerange.json", self.text)
         self.assertIn("${doc_dir}/.dual-magi/` flat 域への書込みは禁止", self.text)
         self.assertIn("返り値は通常 reviewer と同じく ≤200 words", self.text)
+        self.assertIn("freerange_artifact_digest", self.text)
+        self.assertIn("freerange_severity_counts", self.text)
 
     def test_severity_gate_is_prose_owned(self) -> None:
         normalized = " ".join(self.text.split())
@@ -80,6 +83,8 @@ class FreerangeContractTest(unittest.TestCase):
         self.assertIn("parent_verdict = 'verified'", self.text)
         self.assertIn("parent_verdict IN ('verified', 'disputed')", self.text)
         self.assertIn("`unreviewed` は coverage に数えない", self.text)
+        self.assertIn("'HOLD_DISPUTE'", self.text)
+        self.assertIn("RETIRE` は\nadvisory candidate", self.text)
         self.assertIn("WHERE NOT f.dropped", self.text)
         self.assertIn("'RETIRE'", self.text)
 
@@ -117,6 +122,44 @@ class FreerangeContractTest(unittest.TestCase):
             expected_reviewer="freerange",
             expected_round=2,
         )
+
+    def test_repeated_round_finding_counts_once_for_retirement(self) -> None:
+        """§7-6: round identity must not inflate one semantic blocker."""
+        connection = sqlite3.connect(":memory:")
+        connection.execute(
+            """
+            CREATE TABLE findings (
+                round_no INTEGER,
+                title_norm TEXT,
+                location_norm TEXT,
+                severity_norm TEXT,
+                parent_verdict TEXT
+            )
+            """
+        )
+        connection.executemany(
+            "INSERT INTO findings VALUES (?, ?, ?, ?, ?)",
+            [
+                (2, "unsafe cutover", "section 4", "HIGH", "verified"),
+                (3, "unsafe cutover", "section 4", "HIGH", "verified"),
+                (4, "unsafe cutover", "section 4", "HIGH", "verified"),
+                (4, "minor wording", "section 8", "LOW", "verified"),
+                (4, "unreviewed blocker", "section 9", "CRITICAL", "unreviewed"),
+            ],
+        )
+        count = connection.execute(
+            """
+            SELECT count(*) FROM (
+                SELECT DISTINCT title_norm, location_norm, severity_norm
+                FROM findings
+                WHERE severity_norm IN ('REJECT', 'CRITICAL', 'HIGH')
+                  AND parent_verdict = 'verified'
+            )
+            """
+        ).fetchone()[0]
+        connection.close()
+
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

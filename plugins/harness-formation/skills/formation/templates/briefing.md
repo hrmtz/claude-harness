@@ -71,6 +71,10 @@ discipline. Override only with a written reason below.
 - Skip your own outbound entries; only act on `from` ≠ self.
 - Do not let parent acks stall longer than 15 min unanswered: if you are
   blocked on a parent decision, that wait is parent's blocker too.
+- If the inbox contains `[REVIEW request_id=<id>]`, return the result with
+  `formation verdict <id> <PASS|BLOCK> "<summary>"`. Do not send a free-form
+  verdict: the command closes the durable request and copies the result to both
+  requester and manager.
 
 ### Reporting cadence
 - 30 min cadence: one-line `formation report "<status>"` covering position,

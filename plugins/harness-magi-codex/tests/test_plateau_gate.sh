@@ -64,7 +64,9 @@ findings = []
 if sev:
     findings = [{"finding_id":"x-1","severity":sev,"title":"a blocking defect","location":"§1",
                  "rationale":"r","required_fix":"f","confidence":"high","dup_flag":"new",
-                 "missed_angle":"m"}]
+                 "missed_angle":"m","subsystem":"gate","root_cause_id":"gate.root",
+                 "affected_invariant":"plateau safety","changes_design_invariant":False,
+                 "relation_to_prior":"none"}]
 json.dump({"reviewer":"CLAUDE-XFAMILY","round":2,
            "artifact_id":artifact_id,"artifact_sha":artifact_sha,"verdict":verdict,
            "schema_grounding_verdict":grounding,

@@ -984,6 +984,12 @@ def validate_artifact(payload: Any) -> dict[str, Any]:
         if not finding_id.strip() or finding_id in ids:
             raise Slice0Error("finding IDs must be non-empty and unique")
         ids.add(finding_id)
+        if finding["severity"] in {"REJECT", "CRITICAL", "HIGH"} and (
+            not finding.get("subsystem") or not finding.get("root_cause_id")
+        ):
+            raise Slice0Error(
+                "blocking finding requires subsystem and root_cause_id"
+            )
         for field in TEXT_FIELDS:
             value = finding[field]
             require_utf8(value, field)

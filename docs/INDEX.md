@@ -4,7 +4,8 @@
 
 | Doc | Topic |
 |---|---|
-| [`handouts/2026-07-28-orchestrated-day.md`](handouts/2026-07-28-orchestrated-day.md) | 統合オーケストレーター体制の初日: merge した 10 PR、#218 と #235 の測定契約 (窓を開ける前に固定した閾値)、#233 の設計 5 round と slice の現在地、実測が設計を上書きした 3 箇所、起票した構造欠陥 (#239 / #242 / #266)、運用の罠。**まずこれを読む** |
+| [`handouts/2026-07-29-fabrication-day.md`](handouts/2026-07-29-fabrication-day.md) | 捏造 user turn を検出 → 修正 → PreToolUse gate まで潰した日。3 model family の対照 (opus-5 に 9 件 / codex 0 / kimi 0)、観測可能な前提条件が全部外れたこと、検出器が 3 回取り逃した方法論の教訓、scrub が効かない実測、#239/#242/#243/#248/#228 の着地、v1.14.0 / v3.3.0 release。**まずこれを読む** |
+| [`handouts/2026-07-28-orchestrated-day.md`](handouts/2026-07-28-orchestrated-day.md) | 統合オーケストレーター体制の初日: merge した 10 PR、#218 と #235 の測定契約 (窓を開ける前に固定した閾値)、#233 の設計 5 round と slice の現在地、実測が設計を上書きした 3 箇所、起票した構造欠陥 (#239 / #242 / #266)、運用の罠 |
 | [`handouts/2026-07-27-next-session.md`](handouts/2026-07-27-next-session.md) | Ordering and rationale for the open work across claude-harness and hippocampus-mcp after v1.13.2, plus the traps that produced it. Read before starting anything hook-, formation-, or retrieval-related. |
 
 Handouts are written at the close of a session and are accurate as of that

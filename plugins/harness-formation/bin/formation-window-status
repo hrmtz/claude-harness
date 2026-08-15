@@ -95,6 +95,14 @@ def journal_path() -> tuple[int, Path]:
     return pid, home / "state" / "window-status" / f"{pid}.json"
 
 
+def revert_marker_path(path: Path, pid: int) -> Path:
+    # Distinguishes "this server was explicitly reverted" from "this server has
+    # never been applied": both leave no journal, but only the former must stop
+    # the mail-nudge watcher from re-applying. Keyed by server pid, so a server
+    # restart naturally invalidates it.
+    return path.with_name(f"{pid}.reverted")
+
+
 def new_journal(pid: int) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -268,6 +276,8 @@ def apply(args: argparse.Namespace, pid: int, path: Path) -> None:
 
     # The journal preimage is durable before the first tmux mutation.
     atomic_json(path, journal)
+    # An explicit apply overrides an earlier revert for this server.
+    revert_marker_path(path, pid).unlink(missing_ok=True)
     for name, value in FORMATS.items():
         tmux("set-option", "-g", name, value)
     for action, pane, value in mutations:
@@ -344,6 +354,7 @@ def revert(args: argparse.Namespace, pid: int, path: Path) -> None:
         history.mkdir(parents=True, exist_ok=True)
         destination = history / f"{pid}-{int(time.time())}-{os.getpid()}.json"
         os.replace(path, destination)
+        revert_marker_path(path, pid).touch()
     else:
         print(
             f"formation-window-status: restoration incomplete; journal retained at {path}",

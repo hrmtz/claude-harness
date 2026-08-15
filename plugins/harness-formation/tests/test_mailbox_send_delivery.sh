@@ -87,6 +87,8 @@ run_send "$FIXTURE/default.stdout" %42 "delivery fixture"
 
 grep -Fq 'appended seq=' "$FIXTURE/default.stdout"
 grep -Fq 'signal=sent-directly pane=%42' "$FIXTURE/default.stdout"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' "$FIXTURE/default.stdout"
+grep -Fq 'inbox read is not proven' "$FIXTURE/default.stdout"
 grep -Fq 'inject=skipped' "$FIXTURE/default.stdout"
 grep -Fq 'tmux set-option -p -t %42 @formation_mail_pending' "$TMUX_LOG"
 grep -Fq 'tmux display-message -t %42' "$TMUX_LOG"
@@ -353,6 +355,8 @@ fi
 [[ "$signal_failure_rc" -eq 4 ]]
 grep -Fq 'appended seq=' "$FIXTURE/signal-failure.stdout"
 grep -Fq 'could not be signaled' "$FIXTURE/signal-failure.stdout"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' \
+  "$FIXTURE/signal-failure.stdout"
 if grep -Fq 'signaled %42' "$FIXTURE/signal-failure.stdout"; then
   echo "FAIL: signal failure was falsely reported as success" >&2
   cat "$FIXTURE/signal-failure.stdout" >&2
@@ -371,6 +375,7 @@ printf '%s\n' "$relay_pid" > "$FORMATION_HOME_FIXTURE/formation/worker-42.relay_
 run_send "$FIXTURE/relay-owned.stdout" %42 "canonical worker fixture"
 grep -Fq 'to=worker-42' "$FIXTURE/relay-owned.stdout"
 grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/relay-owned.stdout"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' "$FIXTURE/relay-owned.stdout"
 if [[ -s "$TMUX_LOG" ]]; then
   echo "FAIL: mailbox-send duplicated signaling owned by the live relay" >&2
   cat "$TMUX_LOG" >&2
@@ -379,6 +384,8 @@ fi
 jq -e 'select(.to == "worker-42" and .body == "canonical worker fixture")' "$MAILBOX" >/dev/null
 run_send "$FIXTURE/worker-id.stdout" worker-42 "worker id addressing fixture" --no-nudge
 grep -Fq 'to=worker-42' "$FIXTURE/worker-id.stdout"
+grep -Fq 'signal=skipped (--no-nudge) receipt=unconfirmed recipient_activity=unknown' \
+  "$FIXTURE/worker-id.stdout"
 jq -e 'select(.to == "worker-42" and .body == "worker id addressing fixture")' "$MAILBOX" >/dev/null
 pkill -P "$relay_pid" 2>/dev/null || true
 kill "$relay_pid" 2>/dev/null || true
@@ -400,6 +407,7 @@ TMUX_LOG="$TMUX_LOG" TMUX_STATE="$TMUX_STATE" FORMATION_HOME="$FORMATION_HOME_FI
   bash "$HERE/../bin/formation" msg worker-42 "formation msg relay integration" \
     >"$FIXTURE/formation-msg.stdout"
 grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/formation-msg.stdout"
+grep -Fq 'receipt=unconfirmed recipient_activity=unknown' "$FIXTURE/formation-msg.stdout"
 for _ in $(seq 1 40); do
   grep -Fq 'tmux set-option -p -t %42 @formation_mail_pending' "$TMUX_LOG" && break
   sleep 0.05

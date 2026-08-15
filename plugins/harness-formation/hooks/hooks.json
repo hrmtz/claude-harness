@@ -37,6 +37,27 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash|Read|Edit|Write|Task|Agent|WebFetch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mailbox_unread_advisor.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-formation hooks/mailbox_unread_advisor.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mailbox_unread_stop_gate.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-formation hooks/mailbox_unread_stop_gate.sh",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
