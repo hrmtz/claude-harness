@@ -57,7 +57,7 @@ def require_regular(path: Path, label: str) -> os.stat_result:
     return info
 
 
-def require_committed_xfamily(doc: Path, state_dir: Path, round_number: int) -> None:
+def require_committed_xfamily(doc: Path, state_dir: Path, round_number: int) -> str:
     findings_path = state_dir / f"round_{round_number}_xfamily.json"
     meta_path = state_dir / f"round_{round_number}_xfamily.meta.json"
     require_regular(findings_path, "cross-family findings")
@@ -103,6 +103,7 @@ def require_committed_xfamily(doc: Path, state_dir: Path, round_number: int) -> 
         raise ValueError(
             "cross-family canonical pair lacks one matching successful ledger claim"
         )
+    return reviewer
 
 
 @contextmanager
@@ -166,6 +167,7 @@ def load_sources(
     persona_set: str,
     schema: dict,
     doc: Path,
+    xfamily_reviewer: str | None = None,
 ) -> list[tuple[Path, dict, bytes]]:
     loaded = []
     artifact_identity = None
@@ -191,7 +193,14 @@ def load_sources(
         expected_persona = path.stem.rsplit("_", 1)[-1]
         reviewer = str(payload.get("reviewer", "")).lower()
         if persona_set == "xfamily":
-            if reviewer not in {"claude", "grok"}:
+            expected_reviewers = {
+                xfamily_reviewer,
+                f"{xfamily_reviewer}-cross-family",
+            }
+            if (
+                xfamily_reviewer not in {"claude", "grok"}
+                or reviewer not in expected_reviewers
+            ):
                 raise ValueError(f"source has wrong reviewer identity: {path.name}")
         elif reviewer != expected_persona:
             raise ValueError(f"source has wrong reviewer identity: {path.name}")
@@ -301,11 +310,19 @@ def main() -> int:
         raise ValueError("findings schema must be a JSON object")
 
     with document_lock(doc):
+        xfamily_reviewer = None
         if args.persona_set == "xfamily":
-            require_committed_xfamily(doc, state_dir, args.round)
+            xfamily_reviewer = require_committed_xfamily(doc, state_dir, args.round)
         paths = source_paths(state_dir, args.round, output, args.persona_set)
         envelope = build_envelope(
-            load_sources(paths, args.round, args.persona_set, schema_payload, doc),
+            load_sources(
+                paths,
+                args.round,
+                args.persona_set,
+                schema_payload,
+                doc,
+                xfamily_reviewer,
+            ),
             args.round,
         )
 
