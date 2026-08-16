@@ -426,6 +426,29 @@ class DesignConvergenceGateTest(unittest.TestCase):
         self.assertEqual(result["usage"], guard.DEFAULT_MAX_MODEL_LAUNCHES + 1)
         self.assertEqual(result["ceiling"], guard.GLOBAL_MAX_MODEL_LAUNCHES)
 
+    def test_protocol_rollover_ignores_old_review_evidence_but_keeps_its_cost(self) -> None:
+        artifact = self.current_sha()
+        self.add_pair(
+            fanout_round=1,
+            artifact_sha=artifact,
+            root=None,
+            subsystem="old-protocol",
+        )
+        for launch in self.launches:
+            launch["protocol_sha"] = "0" * 64
+
+        self.campaigns.append(self.new_campaign())
+        self.add_pair(
+            fanout_round=1,
+            artifact_sha=artifact,
+            root=None,
+            subsystem="current-protocol",
+        )
+        result = self.assert_decision(
+            "PLATEAU_CANDIDATE", "DESIGN_READY_FOR_EXISTING_PLATEAU_GATE"
+        )
+        self.assertEqual(result["usage"], 8)
+
     def test_recoverable_retry_admission_uses_zero_incremental_weight(self) -> None:
         artifact = self.current_sha()
         self.add_launch(
