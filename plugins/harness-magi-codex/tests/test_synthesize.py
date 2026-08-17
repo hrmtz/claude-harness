@@ -311,7 +311,9 @@ def main() -> None:
 
         # Cross-family synthesis: family-accurate name accepted, family-mislabeling name refused.
         artifact_sha = hashlib.sha256(doc.read_bytes()).hexdigest()
-        xfamily_source = finding("CLAUDE", artifact_id, artifact_sha, "MED")
+        xfamily_source = finding(
+            "CLAUDE-CROSS-FAMILY", artifact_id, artifact_sha, "MED"
+        )
         xfamily_source["round"] = 2
         (state / "round_2_xfamily.json").write_text(
             json.dumps(xfamily_source), encoding="utf-8"
@@ -381,6 +383,35 @@ def main() -> None:
         assert [item["path"] for item in payload["source_artifacts"]] == [
             "round_2_xfamily.json"
         ]
+
+        # The durable metadata pins the provider family. A valid findings/meta pair must not
+        # relabel a Claude review as Grok (or vice versa), including the provider's normal
+        # "-cross-family" reviewer label.
+        xfamily_source["reviewer"] = "GROK-CROSS-FAMILY"
+        (state / "round_2_xfamily.json").write_text(
+            json.dumps(xfamily_source), encoding="utf-8"
+        )
+        meta_path = state / "round_2_xfamily.meta.json"
+        meta_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta_payload["output_sha"] = hashlib.sha256(
+            (state / "round_2_xfamily.json").read_bytes()
+        ).hexdigest()
+        meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
+        wrong_family = subprocess.run(
+            [
+                str(SCRIPT),
+                str(doc),
+                "2",
+                str(state),
+                str(xfamily_output),
+                "--persona-set",
+                "xfamily",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert wrong_family.returncode == 1
+        assert "source has wrong reviewer identity" in wrong_family.stderr
 
         mislabeled = subprocess.run(
             [

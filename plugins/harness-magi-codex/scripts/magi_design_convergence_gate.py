@@ -292,6 +292,8 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     used = guard.model_launches(campaigns)
     ceiling = guard.GLOBAL_MAX_MODEL_LAUNCHES
     campaign_ceiling = guard.base_ceiling()
+    current_protocol_sha = guard.protocol_sha()
+    current_artifact_sha = guard.file_sha(doc)
 
     launches = [
         launch
@@ -321,7 +323,10 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     reviews_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
     revision_order: list[str] = []
     for launch in launches:
-        if launch.get("status") != "success":
+        if (
+            launch.get("status") != "success"
+            or launch.get("protocol_sha") != current_protocol_sha
+        ):
             continue
         launch_sha = str(launch["artifact_sha"])
         if launch_sha not in reviews_by_revision:
@@ -343,8 +348,6 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
     active_launches = active["launches"]
     assert isinstance(active_launches, list)
     active_used = guard.model_launches([active])
-    current_protocol_sha = guard.protocol_sha()
-    current_artifact_sha = guard.file_sha(doc)
     current_phases = {
         str(launch["phase"])
         for launch in active_launches
@@ -359,7 +362,11 @@ def evaluate(doc_raw: Path) -> dict[str, Any]:
             continue
         pending: str | None = None
         for launch in campaign.get("launches", []):
-            if not isinstance(launch, dict) or launch.get("status") != "success":
+            if (
+                not isinstance(launch, dict)
+                or launch.get("status") != "success"
+                or launch.get("protocol_sha") != current_protocol_sha
+            ):
                 continue
             if launch.get("phase") == "fanout":
                 pending = str(launch["artifact_sha"])
