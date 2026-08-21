@@ -632,9 +632,8 @@ def evaluate(manifest_path: Path) -> dict[str, Any]:
         and manifest["incremental_review"].get("surface_changes", {}).get(
             "design_invariant"
         )
-    ) or any(
-        finding.get("changes_design_invariant") is True
-        for finding in delta["current_summary"]["roots"].values()
+    ) or bool(
+        delta["current_summary"].get("design_invariant_changed", False)
     )
 
     def admission_for(phase: str) -> dict[str, object]:

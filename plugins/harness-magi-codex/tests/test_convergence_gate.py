@@ -1206,6 +1206,21 @@ print("incremental fixture")
         self.assertEqual(payload["decision"], "REDESIGN")
         self.assertEqual(payload["reason_code"], "DESIGN_INVARIANT_CHANGED")
 
+    def test_one_reviewer_design_invariant_change_redesigns(self) -> None:
+        artifact = file_sha(self.manifest)
+        self.add_launch(1, "fanout", artifact, root="root-a")
+        caspar = self.state / "round_1_caspar.json"
+        payload = json.loads(caspar.read_text())
+        payload["findings"][0]["changes_design_invariant"] = True
+        caspar.write_text(json.dumps(payload) + "\n")
+        self.write_ledger()
+
+        result, payload = self.evaluate()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["decision"], "REDESIGN")
+        self.assertEqual(payload["reason_code"], "DESIGN_INVARIANT_CHANGED")
+
     def test_repeated_explicit_root_redesigns(self) -> None:
         old_artifact = file_sha(self.manifest)
         self.add_launch(1, "fanout", old_artifact, root="root-a")
