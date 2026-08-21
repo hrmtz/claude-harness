@@ -38,34 +38,52 @@ def normalize_root(finding: dict[str, Any]) -> str:
 def summarize_revision(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     """Collapse validated reviews into unique blocking roots at maximum severity."""
     roots: dict[str, dict[str, Any]] = {}
+    has_regression = False
+    design_invariant_changed = False
     for review in reviews:
         for finding in review.get("findings") or []:
             if not isinstance(finding, dict) or finding.get("severity") not in BLOCKING:
                 continue
+            has_regression = has_regression or (
+                finding.get("dup_flag") == "regression"
+                or finding.get("relation_to_prior") == "fix-induced-regression"
+            )
+            design_invariant_changed = design_invariant_changed or (
+                finding.get("changes_design_invariant") is True
+            )
             root = normalize_root(finding)
             current = roots.get(root)
-            if (
-                current is not None
-                and current.get("subsystem")
-                and finding.get("subsystem")
-                and current["subsystem"] != finding["subsystem"]
-            ):
-                raise KernelInputError(
-                    f"root_cause_id {root!r} has contradictory subsystems"
-                )
+            subsystems = set(current.get("subsystems", ())) if current else set()
+            if finding.get("subsystem"):
+                subsystems.add(str(finding["subsystem"]))
             if current is None or SEVERITY_MASS[finding["severity"]] > SEVERITY_MASS[
                 current["severity"]
             ]:
-                roots[root] = finding
+                current = dict(finding)
+                roots[root] = current
+            current["subsystems"] = tuple(sorted(subsystems))
     return {
         "roots": roots,
         "mass": sum(SEVERITY_MASS[item["severity"]] for item in roots.values()),
-        "has_regression": any(
-            finding.get("dup_flag") == "regression"
-            or finding.get("relation_to_prior") == "fix-induced-regression"
-            for finding in roots.values()
-        ),
+        "has_regression": has_regression,
+        "design_invariant_changed": design_invariant_changed,
     }
+
+
+def _subsystems_for_roots(
+    summary: dict[str, Any], roots: set[str] | list[str]
+) -> set[str]:
+    """Return every observed subsystem label for the selected normalized roots."""
+    subsystems: set[str] = set()
+    for root in roots:
+        finding = summary["roots"][root]
+        normalized = finding.get("subsystems")
+        if normalized:
+            subsystems.update(str(item) for item in normalized if item)
+        # Compatibility for summaries produced before multi-label normalization.
+        elif finding.get("subsystem"):
+            subsystems.add(str(finding["subsystem"]))
+    return subsystems
 
 
 def revision_delta(
@@ -92,11 +110,7 @@ def revision_delta(
     new_roots = sorted(current_roots - previous_roots)
     resolved_roots = sorted(previous_roots - current_roots)
     previous_new_subsystems: set[str] = set()
-    current_new_subsystems = {
-        str(current_summary["roots"][root].get("subsystem"))
-        for root in new_roots
-        if current_summary["roots"][root].get("subsystem")
-    }
+    current_new_subsystems = _subsystems_for_roots(current_summary, new_roots)
     if previous_summary is not None:
         previous_index = (
             revision_order.index(current_target_sha) - 1
@@ -109,11 +123,9 @@ def revision_delta(
                 summaries[revision_order[previous_index - 1]]["roots"]
             )
         previous_new_roots = set(previous_summary["roots"]) - roots_before_previous
-        previous_new_subsystems = {
-            str(previous_summary["roots"][root].get("subsystem"))
-            for root in previous_new_roots
-            if previous_summary["roots"][root].get("subsystem")
-        }
+        previous_new_subsystems = _subsystems_for_roots(
+            previous_summary, previous_new_roots
+        )
 
     mass_stalled = (
         len(revision_order) >= 3
