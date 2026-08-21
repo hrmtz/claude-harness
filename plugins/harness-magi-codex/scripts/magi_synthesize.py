@@ -196,6 +196,7 @@ def load_sources(
             expected_reviewers = {
                 xfamily_reviewer,
                 f"{xfamily_reviewer}-cross-family",
+                f"{xfamily_reviewer}-xfamily",
             }
             if (
                 xfamily_reviewer not in {"claude", "grok"}

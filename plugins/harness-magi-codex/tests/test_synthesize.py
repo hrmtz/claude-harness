@@ -311,9 +311,9 @@ def main() -> None:
 
         # Cross-family synthesis: family-accurate name accepted, family-mislabeling name refused.
         artifact_sha = hashlib.sha256(doc.read_bytes()).hexdigest()
-        xfamily_source = finding(
-            "CLAUDE-CROSS-FAMILY", artifact_id, artifact_sha, "MED"
-        )
+        # Current adapters stamp "<provider>-xfamily"; keep accepting the
+        # legacy "<provider>-cross-family" spelling in the synthesizer too.
+        xfamily_source = finding("CLAUDE-XFAMILY", artifact_id, artifact_sha, "MED")
         xfamily_source["round"] = 2
         (state / "round_2_xfamily.json").write_text(
             json.dumps(xfamily_source), encoding="utf-8"
@@ -386,7 +386,7 @@ def main() -> None:
 
         # The durable metadata pins the provider family. A valid findings/meta pair must not
         # relabel a Claude review as Grok (or vice versa), including the provider's normal
-        # "-cross-family" reviewer label.
+        # "-cross-family" or "-xfamily" reviewer label.
         xfamily_source["reviewer"] = "GROK-CROSS-FAMILY"
         (state / "round_2_xfamily.json").write_text(
             json.dumps(xfamily_source), encoding="utf-8"
