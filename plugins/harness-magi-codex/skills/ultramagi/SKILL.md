@@ -220,6 +220,14 @@ rerolling until a model happens to say GO and do not pause for user acknowledgem
 ready-to-drive conditions still hold, continue only the reversible warmup and use executable
 evidence to narrow the next design revision.
 
+A cross-family claim must match the exact document and review-protocol identity of its successful
+same-family source. After changing the target, restart at round 1 fan-out in a revision-scoped state
+directory such as `.dual-magi/revisions/<artifact-sha-prefix>`. Existing round basenames belong to
+the prior successful launch; the guard refuses reuse of their state directory across exact
+revisions before accounting. Do not overwrite or relocate them. A legacy cross-revision failure
+sequence can roll over only to the matching new revision's round 1 fan-out, with all failed
+launches still charged and the global fuse unchanged.
+
 If requirements change while an adapter owns a live claim, do not edit the target or relaunch
 around it. Cancel that exact charged revision first:
 

@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, str(HERE.parent / "scripts"))
 import magi_autorun as autorun_module  # noqa: E402
-from magi_campaign_guard import DEFAULT_MAX_MODEL_LAUNCHES  # noqa: E402
+from magi_campaign_guard import DEFAULT_MAX_MODEL_LAUNCHES, protocol_sha  # noqa: E402
 
 
 class AutorunTest(unittest.TestCase):
@@ -136,7 +136,7 @@ class AutorunTest(unittest.TestCase):
             "model_launches": weight if weight is not None else (3 if phase == "fanout" else 1),
             "status": status,
             "artifact_sha": hashlib.sha256(self.doc.read_bytes()).hexdigest(),
-            "protocol_sha": "fixture",
+            "protocol_sha": protocol_sha(),
             "state_dir": str(self.root / "reviews"),
         }
 

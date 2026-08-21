@@ -872,6 +872,114 @@ def replacement_source(
     return launches[-1]
 
 
+def exact_revision_matches(
+    launch: dict[str, object], artifact_sha: str, review_protocol_sha: str
+) -> bool:
+    return (
+        launch.get("artifact_sha") == artifact_sha
+        and launch.get("protocol_sha") == review_protocol_sha
+    )
+
+
+def xfamily_source_revision_matches(
+    launch: dict[str, object], artifact_sha: str, review_protocol_sha: str
+) -> bool:
+    """Keep the pre-protocol-ledger migration path artifact-bound."""
+    return (
+        launch.get("artifact_sha") == artifact_sha
+        and launch.get("protocol_sha") in {review_protocol_sha, "legacy-unknown"}
+    )
+
+
+def xfamily_revision_source(
+    launches: list[object], round_no: int
+) -> tuple[dict[str, object], list[dict[str, object]]] | None:
+    """Return the successful same-family source and trailing xfamily attempts."""
+    trailing: list[dict[str, object]] = []
+    index = len(launches) - 1
+    while index >= 0:
+        launch = launches[index]
+        if not isinstance(launch, dict):
+            return None
+        if launch.get("phase") != "xfamily" or launch.get("round") != round_no:
+            break
+        trailing.append(launch)
+        index -= 1
+    if index < 0:
+        return None
+    source = launches[index]
+    if (
+        not isinstance(source, dict)
+        or source.get("phase") not in {"fanout", "targeted"}
+        or source.get("status") != "success"
+        or source.get("round") != round_no - 1
+    ):
+        return None
+    trailing.reverse()
+    return source, trailing
+
+
+def stranded_cross_revision_xfamily(
+    launches: list[object], artifact_sha: str
+) -> bool:
+    """Recognize one exact new revision stranded behind invalid xfamily failures."""
+    if not launches or not isinstance(launches[-1], dict):
+        return False
+    last = launches[-1]
+    round_no = last.get("round")
+    if type(round_no) is not int or last.get("phase") != "xfamily":
+        return False
+    source_and_attempts = xfamily_revision_source(launches, round_no)
+    if source_and_attempts is None:
+        return False
+    source, attempts = source_and_attempts
+    attempt_protocols = {attempt.get("protocol_sha") for attempt in attempts}
+    if len(attempt_protocols) != 1:
+        return False
+    attempt_protocol = next(iter(attempt_protocols))
+    source_is_distinct = source.get("artifact_sha") != artifact_sha or (
+        source.get("protocol_sha") != "legacy-unknown"
+        and source.get("protocol_sha") != attempt_protocol
+    )
+    return (
+        bool(attempts)
+        and all(
+            attempt.get("status") in {"failed", "abandoned"}
+            and attempt.get("artifact_sha") == artifact_sha
+            for attempt in attempts
+        )
+        and source_is_distinct
+    )
+
+
+def reused_revision_state(
+    campaigns: list[object],
+    state: Path,
+    artifact_sha: str,
+    review_protocol_sha: str,
+    *,
+    allowed_claim_id: object = None,
+) -> dict[str, object] | None:
+    """Return a prior launch that binds this state directory to another revision."""
+    for campaign in campaigns:
+        if not isinstance(campaign, dict):
+            continue
+        launches = campaign.get("launches")
+        if not isinstance(launches, list):
+            continue
+        for launch in launches:
+            if (
+                isinstance(launch, dict)
+                and launch.get("claim_id") != allowed_claim_id
+                and launch.get("state_dir") == str(state)
+                and not xfamily_source_revision_matches(
+                    launch, artifact_sha, review_protocol_sha
+                )
+            ):
+                return launch
+    return None
+
+
 def validate_transition(launches: list[object], round_no: int, phase: str) -> int:
     transition = next_transition(launches)
     if (
@@ -1337,7 +1445,6 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
         current_protocol_sha = protocol_sha()
         rollover_available = (
             isinstance(last, dict)
-            and last.get("artifact_sha") != current_artifact_sha
             and last.get("status") not in NONTERMINAL_STATUSES
             and may_rollover(
                 ledger,
@@ -1408,6 +1515,11 @@ def may_rollover(
         return False
     if last.get("status") in NONTERMINAL_STATUSES:
         return False
+    if (
+        phase == "fanout"
+        and stranded_cross_revision_xfamily(launches, artifact_sha)
+    ):
+        return True
     if last.get("status") == "superseded-by-requirement-revision":
         return phase == "fanout" and last.get("artifact_sha") != artifact_sha
     if phase == "targeted":
@@ -1490,6 +1602,26 @@ def claim(
                 attempt = validate_transition(launches, round_no, phase)
             except TransitionError as exc:
                 transition_error = exc
+            else:
+                if phase == "xfamily":
+                    source_and_attempts = xfamily_revision_source(launches, round_no)
+                    if (
+                        source_and_attempts is None
+                        or not xfamily_source_revision_matches(
+                            source_and_attempts[0],
+                            current_artifact_sha,
+                            current_protocol_sha,
+                        )
+                        or any(
+                            not exact_revision_matches(
+                                launch, current_artifact_sha, current_protocol_sha
+                            )
+                            for launch in source_and_attempts[1]
+                        )
+                    ):
+                        transition_error = TransitionError(
+                            "current exact revision requires round 1 fanout before xfamily"
+                        )
         if transition_error is not None:
             if not may_rollover(
                 ledger,
@@ -1512,11 +1644,25 @@ def claim(
             assert isinstance(launches, list)
             attempt = 1
             planned_rollover = True
+        replacement = replacement_source(launches, phase)
+        reused = reused_revision_state(
+            campaigns,
+            state,
+            current_artifact_sha,
+            current_protocol_sha,
+            allowed_claim_id=(
+                replacement.get("claim_id") if replacement is not None else None
+            ),
+        )
+        if reused is not None:
+            raise TransitionError(
+                "exact revision requires a revision-scoped state directory; "
+                f"state is already bound to claim {reused.get('claim_id')}"
+            )
         campaign_ceiling = base_ceiling()
         campaign_used = model_launches([campaign])
         total_used = model_launches(campaigns)
         global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
-        replacement = replacement_source(launches, phase)
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,

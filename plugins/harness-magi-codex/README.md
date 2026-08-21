@@ -315,6 +315,22 @@ Timeout and signal cleanup release the canonical lock, close the claim as failed
 bounded retry. Exit `4` is reserved for the global fuse; state corruption exits `2`, and illegal
 phase transitions exit `64`.
 
+Each cross-family claim must match the document and review-protocol identity of its successful
+same-family source. If the document changes between fan-out and cross-family, the cross-family
+claim is refused before accounting and the new exact revision must start at round 1 fan-out. A
+legacy history already stranded by terminal cross-family failures on one different exact revision
+has one mechanically recognized recovery: round 1 fan-out starts a new campaign for that revision.
+The failed launches stay charged, no replacement credit is created, and the fixed global fuse still
+applies. Same-revision retry exhaustion remains blocked.
+
+Use a revision-scoped state directory such as
+`.dual-magi/revisions/$(sha256sum "$D" | cut -c1-16)` whenever round numbering restarts. Successful
+launches retain their `state_dir` as exact-revision convergence evidence. The guard refuses reuse
+of a state directory already bound to another document/protocol revision before accounting, while
+fan-out also refuses existing same-round persona basenames before claiming. Same-revision
+cross-family retries may clear their own stale canonical output after a new charged claim; they
+cannot reach output promotion through a state directory bound to another exact revision.
+
 If requirements change while an adapter owns a live claim, cancel that exact charged revision
 before modifying the document:
 
