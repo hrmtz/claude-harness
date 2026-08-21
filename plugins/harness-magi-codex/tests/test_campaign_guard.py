@@ -458,6 +458,10 @@ class CampaignGuardTest(unittest.TestCase):
         if process.stderr is not None:
             process.stderr.close()
 
+    def revision_state(self, suffix: str = "") -> Path:
+        digest = hashlib.sha256(self.doc.read_bytes()).hexdigest()[:16]
+        return self.root / "revisions" / f"{digest}{suffix}"
+
     def test_per_campaign_ceiling_requires_revision(self) -> None:
         self.fill_default_campaign()
         denied = self.claim(self.filled_rounds + 1, "fanout")
@@ -470,7 +474,7 @@ class CampaignGuardTest(unittest.TestCase):
     def test_requirement_revision_can_reach_but_not_exceed_global_fuse(self) -> None:
         self.fill_default_campaign()
         self.doc.write_text("# revised requirement\n")
-        rollover = self.claim(1, "fanout")
+        rollover = self.claim(1, "fanout", self.revision_state())
         self.assertEqual(rollover.returncode, 0, rollover.stderr)
         self.assertIn(
             f"global model launches 15/{GLOBAL_MAX_MODEL_LAUNCHES}",
@@ -480,7 +484,7 @@ class CampaignGuardTest(unittest.TestCase):
             f"campaign model launches 3/{DEFAULT_MAX_MODEL_LAUNCHES}",
             rollover.stdout,
         )
-        diverse = self.claim(2, "xfamily")
+        diverse = self.claim(2, "xfamily", self.revision_state())
         self.assertEqual(diverse.returncode, 0, diverse.stderr)
         self.assertIn(
             f"global model launches 16/{GLOBAL_MAX_MODEL_LAUNCHES}",
@@ -488,7 +492,7 @@ class CampaignGuardTest(unittest.TestCase):
         )
 
         self.doc.write_text("# second revised requirement\n")
-        denied = self.claim(1, "fanout")
+        denied = self.claim(1, "fanout", self.revision_state())
         self.assertEqual(denied.returncode, 4)
         self.assertIn("global campaign history", denied.stderr)
         self.assertIn(
@@ -614,7 +618,7 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertEqual(admission["required"], 4)
 
         claimed = self.guard(
-            "claim", str(self.doc), "1", "fanout", str(self.state)
+            "claim", str(self.doc), "1", "fanout", str(self.revision_state())
         )
         self.assertEqual(claimed.returncode, 0, claimed.stderr)
         ledger = json.loads(ledger_path.read_text())
@@ -735,11 +739,12 @@ class CampaignGuardTest(unittest.TestCase):
             self.assertEqual(repairs[0]["credited_model_launches"], 3)
             self.assertEqual(campaign_guard.model_launches(ledger["campaigns"]), 11)
 
-            campaign_guard.claim(str(self.doc), "1", "fanout", str(self.state))
+            new_state = self.revision_state()
+            campaign_guard.claim(str(self.doc), "1", "fanout", str(new_state))
             ledger = json.loads(ledger_path.read_text())
             fanout_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
             campaign_guard.finish(str(self.doc), fanout_claim, "success")
-            campaign_guard.claim(str(self.doc), "2", "xfamily", str(self.state))
+            campaign_guard.claim(str(self.doc), "2", "xfamily", str(new_state))
             ledger = json.loads(ledger_path.read_text())
             xfamily_claim = ledger["campaigns"][-1]["launches"][-1]["claim_id"]
             campaign_guard.finish(str(self.doc), xfamily_claim, "success")
@@ -1088,7 +1093,7 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertIn("changed artifact", same_sha.stderr)
 
         self.doc.write_text("# revised requirement\n")
-        rollover = self.claim(1, "fanout")
+        rollover = self.claim(1, "fanout", self.revision_state())
         self.assertEqual(rollover.returncode, 0, rollover.stderr)
         self.assertIn(
             f"global model launches 6/{GLOBAL_MAX_MODEL_LAUNCHES}", rollover.stdout
@@ -1122,10 +1127,167 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertEqual(self.claim(1, "fanout", finish="failed").returncode, 0)
         self.assertEqual(self.claim(1, "fanout", finish="failed").returncode, 0)
         self.doc.write_text("# revised design\n")
-        self.assertEqual(self.claim(1, "fanout").returncode, 0)
+        self.assertEqual(
+            self.claim(1, "fanout", self.revision_state()).returncode, 0
+        )
         ledger = json.loads(next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json")).read_text())
         self.assertEqual(len(ledger["campaigns"]), 2)
         self.assertEqual(ledger["campaigns"][-1]["started_by"], "automatic-rollover")
+
+    def test_cross_family_claim_requires_preceding_exact_revision(self) -> None:
+        first = self.claim(1, "fanout")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        ledger_path = next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json"))
+        before = ledger_path.read_bytes()
+
+        self.doc.write_text("# revised before mandatory cross-family\n")
+        denied = self.claim(2, "xfamily", finish=None)
+        self.assertEqual(denied.returncode, 64)
+        self.assertIn("requires round 1 fanout", denied.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+        reused_state = self.claim(1, "fanout", finish=None)
+        self.assertEqual(reused_state.returncode, 64)
+        self.assertIn("revision-scoped state directory", reused_state.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before)
+
+        revision_state = self.root / "revisions" / hashlib.sha256(
+            self.doc.read_bytes()
+        ).hexdigest()[:16]
+        rollover = self.claim(1, "fanout", revision_state)
+        self.assertEqual(rollover.returncode, 0, rollover.stderr)
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 2)
+        self.assertEqual(
+            ledger["campaigns"][-1]["launches"][0]["artifact_sha"],
+            hashlib.sha256(self.doc.read_bytes()).hexdigest(),
+        )
+
+        before_xfamily = ledger_path.read_bytes()
+        wrong_state = self.claim(2, "xfamily", self.state, finish=None)
+        self.assertEqual(wrong_state.returncode, 64)
+        self.assertIn("revision-scoped state directory", wrong_state.stderr)
+        self.assertEqual(ledger_path.read_bytes(), before_xfamily)
+        xfamily = self.claim(2, "xfamily", revision_state)
+        self.assertEqual(xfamily.returncode, 0, xfamily.stderr)
+
+    def test_stranded_cross_revision_xfamily_retries_allow_round_one_rollover(self) -> None:
+        current_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        current_protocol = protocol_sha()
+
+        def launch(
+            claim_id: str,
+            *,
+            sequence: int,
+            round_no: int,
+            phase: str,
+            attempt: int,
+            artifact_sha: str,
+            launch_protocol: str,
+            status: str,
+        ) -> dict[str, object]:
+            return {
+                "claim_id": claim_id,
+                "sequence": sequence,
+                "round": round_no,
+                "phase": phase,
+                "attempt": attempt,
+                "model_launches": PHASE_WEIGHT[phase],
+                "state_dir": str(self.state.resolve()),
+                "artifact_sha": artifact_sha,
+                "protocol_sha": launch_protocol,
+                "claimed_at": f"2026-01-01T00:00:0{sequence}Z",
+                "finished_at": f"2026-01-01T00:01:0{sequence}Z",
+                "status": status,
+            }
+
+        ledger_path = self.seed_ledger(
+            [
+                launch(
+                    "10000000-0000-4000-8000-000000000001",
+                    sequence=1,
+                    round_no=1,
+                    phase="fanout",
+                    attempt=1,
+                    artifact_sha="a" * 64,
+                    launch_protocol=current_protocol,
+                    status="success",
+                ),
+                launch(
+                    "10000000-0000-4000-8000-000000000002",
+                    sequence=2,
+                    round_no=2,
+                    phase="xfamily",
+                    attempt=1,
+                    artifact_sha=current_sha,
+                    launch_protocol="b" * 64,
+                    status="failed",
+                ),
+                launch(
+                    "10000000-0000-4000-8000-000000000003",
+                    sequence=3,
+                    round_no=2,
+                    phase="xfamily",
+                    attempt=2,
+                    artifact_sha=current_sha,
+                    launch_protocol="b" * 64,
+                    status="failed",
+                ),
+            ]
+        )
+
+        admission = campaign_guard.campaign_admission_status(self.doc)
+        self.assertEqual(admission["kind"], "candidate")
+        self.assertEqual(admission["round"], 1)
+        self.assertEqual(admission["phase"], "fanout")
+        self.assertEqual(admission["weight"], PHASE_WEIGHT["fanout"])
+
+        revision_state = self.root / "revisions" / current_sha[:16]
+        rollover = self.claim(1, "fanout", revision_state)
+        self.assertEqual(rollover.returncode, 0, rollover.stderr)
+        self.assertIn(
+            f"global model launches 8/{GLOBAL_MAX_MODEL_LAUNCHES}",
+            rollover.stdout,
+        )
+        ledger = json.loads(ledger_path.read_text())
+        self.assertEqual(len(ledger["campaigns"]), 2)
+        replacement = ledger["campaigns"][-1]["launches"][0]
+        self.assertNotIn("replacement_for", replacement)
+        self.assertEqual(replacement["artifact_sha"], current_sha)
+
+    def test_same_revision_xfamily_retry_exhaustion_remains_blocked(self) -> None:
+        current_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+        current_protocol = protocol_sha()
+        launches = []
+        for sequence, attempt, phase, status in (
+            (1, 1, "fanout", "success"),
+            (2, 1, "xfamily", "failed"),
+            (3, 2, "xfamily", "failed"),
+        ):
+            launches.append(
+                {
+                    "claim_id": f"10000000-0000-4000-8000-{sequence:012d}",
+                    "sequence": sequence,
+                    "round": 1 if phase == "fanout" else 2,
+                    "phase": phase,
+                    "attempt": attempt,
+                    "model_launches": PHASE_WEIGHT[phase],
+                    "state_dir": str(self.state.resolve()),
+                    "artifact_sha": current_sha,
+                    "protocol_sha": current_protocol,
+                    "claimed_at": f"2026-01-01T00:00:0{sequence}Z",
+                    "finished_at": f"2026-01-01T00:01:0{sequence}Z",
+                    "status": status,
+                }
+            )
+        ledger_path = self.seed_ledger(launches)
+        before = ledger_path.read_bytes()
+
+        admission = campaign_guard.campaign_admission_status(self.doc)
+        self.assertEqual(admission["kind"], "transition-blocked")
+        denied = self.claim(1, "fanout", finish=None)
+        self.assertEqual(denied.returncode, 64)
+        self.assertEqual(ledger_path.read_bytes(), before)
 
     def test_tightening_env_cannot_be_used_to_extend(self) -> None:
         for round_no, phase in ((1, "fanout"), (2, "xfamily")):
@@ -1208,7 +1370,9 @@ class CampaignGuardTest(unittest.TestCase):
             for round_no, phase, status in history
         ]
         ledger_path = self.seed_ledger(launches)
-        denied = self.guard("claim", str(self.doc), "1", "fanout", str(self.state))
+        denied = self.guard(
+            "claim", str(self.doc), "1", "fanout", str(self.revision_state())
+        )
         self.assertEqual(denied.returncode, 4, denied.stderr)
         ledger = json.loads(ledger_path.read_text())
         self.assertEqual(len(ledger["campaigns"]), 1)
@@ -1421,9 +1585,10 @@ class CampaignGuardTest(unittest.TestCase):
         self.assertEqual(self.claim(2, "xfamily").returncode, 0)
         self.doc.write_text("# fixture\n\nsmall fix\n")
 
-        targeted = self.claim(1, "targeted")
+        new_state = self.revision_state()
+        targeted = self.claim(1, "targeted", new_state)
         self.assertEqual(targeted.returncode, 0, targeted.stderr)
-        final = self.claim(2, "xfamily")
+        final = self.claim(2, "xfamily", new_state)
         self.assertEqual(final.returncode, 0, final.stderr)
 
         ledger = json.loads(next((self.doc.parent / ".dual-magi").glob("CAMPAIGN.*.json")).read_text())
@@ -1454,9 +1619,14 @@ class CampaignGuardTest(unittest.TestCase):
         ledger["campaigns"][-1]["launches"][-1]["protocol_sha"] = "stale-protocol"
         ledger_path.write_text(json.dumps(ledger))
 
+        admission = campaign_guard.campaign_admission_status(self.doc)
+        self.assertEqual(admission["kind"], "candidate")
+        self.assertEqual(admission["round"], 1)
+        self.assertEqual(admission["phase"], "fanout")
+
         targeted = self.claim(1, "targeted", finish=None)
         self.assertEqual(targeted.returncode, 64)
-        fanout = self.claim(1, "fanout")
+        fanout = self.claim(1, "fanout", self.revision_state())
         self.assertEqual(fanout.returncode, 0, fanout.stderr)
 
     def test_targeted_cannot_bootstrap_or_replace_requirement_revision(self) -> None:
@@ -1473,7 +1643,7 @@ class CampaignGuardTest(unittest.TestCase):
 
         targeted = self.claim(1, "targeted", finish=None)
         self.assertEqual(targeted.returncode, 64)
-        fanout = self.claim(1, "fanout")
+        fanout = self.claim(1, "fanout", self.revision_state())
         self.assertEqual(fanout.returncode, 0, fanout.stderr)
 
     def test_claim_rejects_stale_incremental_authorization_sha(self) -> None:

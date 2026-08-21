@@ -200,6 +200,36 @@ PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
 [ $? -eq 5 ] && ok "existing sibling artifacts reject rerun" \
               || bad "existing sibling artifacts did not return exit 5"
 
+# A genuine document revision also restarts at round 1, but the old round_1 basenames remain
+# exact-revision evidence for the prior successful launch. Reusing their directory must refuse
+# before another claim/provider launch; a revision-scoped directory preserves both histories.
+ledger="$TMP/.dual-magi/CAMPAIGN.$(printf '%s' "$(realpath "$DOC")" | sha256sum | cut -c1-16).json"
+ledger_before_revision_rerun="$(sha256sum "$ledger" | cut -d' ' -f1)"
+printf '%s\n' 'a revised design' > "$DOC"
+revision_sha="$(sha256sum "$DOC" | cut -d' ' -f1)"
+PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$TMP/out" >/dev/null 2>&1
+revision_same_dir_rc=$?
+ledger_after_revision_rerun="$(sha256sum "$ledger" | cut -d' ' -f1)"
+if [ "$revision_same_dir_rc" -eq 5 ] \
+    && [ "$ledger_before_revision_rerun" = "$ledger_after_revision_rerun" ]; then
+  ok "revised round 1 refuses stale canonical basenames before accounting"
+else
+  bad "revised round 1 reused stale canonical basenames or changed accounting"
+fi
+
+revision_out="$TMP/revisions/${revision_sha:0:16}"
+mkdir -p "$revision_out"
+PATH="$TMP/bin:$PATH" "$FANOUT" "$DOC" 1 "$revision_out" >/dev/null 2>&1
+revision_scoped_rc=$?
+if [ "$revision_scoped_rc" -eq 0 ] \
+    && [ "$(jq -r '.campaigns | length' "$ledger")" -eq 2 ] \
+    && [ "$(jq -r '.campaigns[-1].launches[0].artifact_sha' "$ledger")" = "$revision_sha" ] \
+    && [ "$(jq -r '.campaigns[-1].launches[0].state_dir' "$ledger")" = "$revision_out" ]; then
+  ok "revision-scoped state preserves old artifacts and admits new round 1"
+else
+  bad "revision-scoped round 1 failed to preserve exact-revision history"
+fi
+
 mkdir -p "$TMP/invalid"
 INVALID_DOC="$TMP/invalid-design.md"; printf '%s\n' 'another design' > "$INVALID_DOC"
 STUB_INVALID=1 PATH="$TMP/bin:$PATH" "$FANOUT" "$INVALID_DOC" 1 "$TMP/invalid" >/dev/null 2>&1

@@ -164,6 +164,19 @@ changed, the guard automatically rolls over without user acknowledgement. Every 
 shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
 result; never pause for an acknowledgement and never reset history through a fresh state directory.
 
+Cross-family admission is bound to the exact document and protocol identity of the immediately
+preceding successful same-family phase. A changed document cannot consume cross-family retries from
+the old fan-out; start the new revision at round 1 fan-out. A legacy ledger already stranded by
+failed cross-family claims on one different exact revision may recover only through that round 1
+fan-out rollover. All failed launches remain charged, replacement credit is unavailable, and
+same-revision retry exhaustion remains blocked.
+
+Give every exact revision that restarts round numbering its own state directory, for example
+`.dual-magi/revisions/<artifact-sha-prefix>`. Prior successful launch directories are immutable
+convergence evidence. The guard refuses state-directory reuse across exact revisions before
+accounting, and fan-out separately refuses existing same-round persona basenames before claiming.
+Do not delete, overwrite, or move prior evidence to make a rerun fit the old directory.
+
 The finalized #271 incident predates the trustworthy `turn_observed` classification. Its only
 historical repair is the reviewed closed attestation in `magi_campaign_guard.py`, invoked through
 `scripts/magi_campaign_guard.py repair-historical-startup <doc> <claim-id>`. The attestation pins
