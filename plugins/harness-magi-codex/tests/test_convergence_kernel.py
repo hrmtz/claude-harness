@@ -91,14 +91,56 @@ class SharedPrimitiveTest(unittest.TestCase):
         self.assertEqual(result["roots"]["root-a"]["severity"], "CRITICAL")
         self.assertEqual(result["mass"], 8)
 
-    def test_revision_summary_rejects_missing_or_contradictory_roots(self) -> None:
+    def test_revision_summary_rejects_missing_roots(self) -> None:
         with self.assertRaisesRegex(kernel.KernelInputError, "lacks stable"):
             summary({"finding_id": "bad", "severity": "HIGH"})
-        with self.assertRaisesRegex(kernel.KernelInputError, "contradictory"):
-            summary(
-                finding("same", "parser"),
-                finding("same", "scheduler", severity="CRITICAL"),
-            )
+
+    def test_revision_summary_normalizes_contradictory_subsystems(self) -> None:
+        parser = finding("same", "parser")
+        scheduler = finding("same", "scheduler", severity="CRITICAL")
+
+        forward = summary(parser, scheduler)
+        reverse = summary(scheduler, parser)
+
+        self.assertEqual(forward["roots"]["same"]["severity"], "CRITICAL")
+        self.assertEqual(
+            forward["roots"]["same"]["subsystems"], ("parser", "scheduler")
+        )
+        self.assertEqual(
+            forward["roots"]["same"]["subsystems"],
+            reverse["roots"]["same"]["subsystems"],
+        )
+        self.assertEqual(forward["mass"], 8)
+
+    def test_revision_summary_preserves_regression_across_tied_reviewers(self) -> None:
+        regression = finding("same", "parser", regression=True)
+        ordinary = finding("same", "scheduler")
+
+        self.assertTrue(summary(regression, ordinary)["has_regression"])
+        self.assertTrue(summary(ordinary, regression)["has_regression"])
+
+    def test_revision_summary_preserves_design_change_across_tied_reviewers(self) -> None:
+        changed = finding("same", "parser")
+        changed["changes_design_invariant"] = True
+        ordinary = finding("same", "scheduler")
+
+        self.assertTrue(summary(changed, ordinary)["design_invariant_changed"])
+        self.assertTrue(summary(ordinary, changed)["design_invariant_changed"])
+
+    def test_revision_delta_uses_every_normalized_subsystem(self) -> None:
+        revisions = ["1" * 40, "2" * 40]
+        summaries = {
+            revisions[0]: summary(
+                finding("ambiguous", "parser"),
+                finding("ambiguous", "scheduler"),
+            ),
+            revisions[1]: summary(finding("new", "scheduler")),
+        }
+
+        delta = kernel.revision_delta(revisions, summaries, revisions[-1])
+
+        self.assertEqual(delta["previous_new_subsystems"], {"parser", "scheduler"})
+        self.assertEqual(delta["current_new_subsystems"], {"scheduler"})
 
     def test_revision_delta_reports_new_resolved_repeated_and_regression(self) -> None:
         revisions = ["1" * 40, "2" * 40]

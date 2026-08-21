@@ -315,6 +315,28 @@ class DesignConvergenceGateTest(unittest.TestCase):
             "SCOPE_SPLIT", "DESIGN_SAME_SUBSYSTEM_NEW_ROOTS_RECURRED"
         )
 
+    def test_contradictory_reviewer_subsystems_are_normalized(self) -> None:
+        current = self.current_sha()
+        state = self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root="family-routing.phase-contract-drift",
+            subsystem="review-orchestration",
+        )
+        melchior = state / "round_1_melchior.json"
+        payload = json.loads(melchior.read_text())
+        payload["findings"][0]["subsystem"] = "family-routing"
+        melchior.write_text(json.dumps(payload) + "\n")
+
+        result = self.assert_decision(
+            "FINAL_REVIEW_REQUIRED", "DESIGN_FINAL_DIVERSE_RECHECK_REQUIRED"
+        )
+
+        self.assertEqual(
+            result["new_blocking_roots"], ["family-routing.phase-contract-drift"]
+        )
+
     def test_three_revision_stalled_mass_blocks(self) -> None:
         first = self.current_sha()
         self.add_pair(
