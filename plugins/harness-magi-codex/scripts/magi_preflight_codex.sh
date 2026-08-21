@@ -5,6 +5,7 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SELF_DIR/.." && pwd)"
 SCHEMA="$PLUGIN_DIR/schemas/preflight-review.schema.json"
+SCHEMA_PREFLIGHT="$SELF_DIR/magi_codex_schema_preflight.py"
 SCRUB="$SELF_DIR/magi_scrub.py"
 EVALUATOR="$SELF_DIR/magi_preflight.py"
 # shellcheck source=magi_target_root.sh
@@ -20,6 +21,8 @@ BRIEF="$1"
 OUT_DIR="$2"
 case "$BRIEF" in /*) ;; *) echo "preflight: brief path must be absolute" >&2; exit 64 ;; esac
 [ ! -L "$OUT_DIR" ] || { echo "preflight: output directory must not be a symlink" >&2; exit 64; }
+# Reject provider-incompatible output schemas before output-directory mutation or model spend.
+python3 "$SCHEMA_PREFLIGHT" "$SCHEMA" || exit $?
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(realpath "$OUT_DIR")"
 # Reviewers must be able to verify the brief's claims against the repository that owns it, not

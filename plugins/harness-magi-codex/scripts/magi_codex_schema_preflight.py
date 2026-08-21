@@ -41,6 +41,8 @@ def main() -> int:
 
     def visit(value, location="$"):
         if isinstance(value, dict):
+            if "const" in value and "type" not in value:
+                found.append(f"{location}.type required for const")
             properties = value.get("properties")
             if value.get("type") == "object" or isinstance(properties, dict):
                 if value.get("additionalProperties") is not False:
