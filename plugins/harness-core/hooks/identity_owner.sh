@@ -165,6 +165,35 @@ _hi_tmux_get() {
     tmux display-message -p -t "$HARNESS_IDENTITY_PANE" "$1" 2>/dev/null || true
 }
 
+# A /tmp cleaner (WSL2 does this) can unlink a live tmux server's socket file
+# while the server keeps running: every `tmux` client then fails with ENOENT and
+# this core, unable to resolve the pane, REFUSEs no-tmux — leaving the pane
+# unnamed for the rest of the session even though the server is perfectly alive.
+# tmux recreates its socket on SIGUSR1; that is exactly what the signal is for.
+# When $TMUX names a server pid that is still alive but whose socket path is
+# gone, poke that one pid and wait for the pathname to reappear. Targeted at our
+# own server only — never a pgrep broadcast — and silent, since this runs inside
+# a hook whose stdout is the identity markdown.
+_hi_tmux_socket_reheal() {
+    [ -n "${TMUX:-}" ] || return 1
+    local sock pid rest
+    IFS=',' read -r sock pid rest <<EOF
+$TMUX
+EOF
+    [ -n "$sock" ] && [ -n "$pid" ] || return 1
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ -S "$sock" ] && return 1              # socket present → nothing to heal
+    kill -0 "$pid" 2>/dev/null || return 1  # server gone → not a socket problem
+    kill -USR1 "$pid" 2>/dev/null || return 1
+    local i=0
+    while [ "$i" -lt 20 ]; do
+        [ -S "$sock" ] && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    [ -S "$sock" ]
+}
+
 # ── codename generation ──────────────────────────────────────────────────────
 # One pool for every chassis. The chassis lives in the prefix, so a shared pool
 # only widens the space each family draws from.
@@ -344,6 +373,14 @@ harness_identity_resolve() {
 
     local resolved_pane
     resolved_pane=$(_hi_tmux_get '#{pane_id}')
+    if [ -z "$resolved_pane" ]; then
+        # A live server whose socket a /tmp cleaner removed is indistinguishable
+        # from no-tmux at this point. Try to bring the socket back before giving
+        # up; on success the pane resolves normally and naming proceeds.
+        if _hi_tmux_socket_reheal; then
+            resolved_pane=$(_hi_tmux_get '#{pane_id}')
+        fi
+    fi
     [ -n "$resolved_pane" ] || { _hi_decide REFUSE no-tmux; return 0; }
     # A stale TMUX_PANE can name a pane that exists but is not ours; targeting
     # every command with -t is necessary and not sufficient.
