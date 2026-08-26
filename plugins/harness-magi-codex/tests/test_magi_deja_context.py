@@ -225,6 +225,32 @@ class MagiDejaContextTest(unittest.TestCase):
         self.assertEqual(self.select().returncode, 0)
         self.assertEqual(first, (self.state / "deja-context.json").read_bytes())
 
+    def test_overflowing_state_root_bounds_scan_instead_of_failing(self) -> None:
+        # Regression: once the state root outgrows MAX_CAMPAIGNS the scan must
+        # degrade to inspecting the newest campaigns, not abort the whole
+        # selection into "unavailable". The relevant campaign is the newest, so
+        # it survives truncation and its finding is still selected.
+        relevant = self.prepare(
+            "relevant-newest",
+            artifact(self.target_sha, finding("SURVIVOR", severity="REJECT")),
+        )
+        old_ns = 1_000_000_000_000_000_000
+        for index in range(300):
+            filler = self.corpus / f"filler-{index:04d}"
+            filler.mkdir()
+            os.utime(filler, ns=(old_ns, old_ns))
+        os.utime(relevant, ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000))
+        result = self.select()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads((self.state / "deja-context.json").read_text())
+        self.assertEqual(context["status"], "injected-candidate")
+        self.assertEqual([item["severity"] for item in context["findings"]], ["REJECT"])
+        receipt = json.loads((self.state / "deja-context.receipt.json").read_text())
+        self.assertTrue(
+            any(err.startswith("campaign-count-truncated:") for err in receipt["errors"]),
+            receipt["errors"],
+        )
+
     def test_selection_stops_at_eight_and_records_truncation(self) -> None:
         findings = [
             finding(

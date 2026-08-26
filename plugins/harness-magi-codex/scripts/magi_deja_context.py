@@ -365,16 +365,28 @@ def scan(
     root = state_root.resolve(strict=True)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        names = []
+        entries: list[tuple[str, int]] = []
         for name in sorted(os.listdir(root_fd)):
             try:
                 info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             except OSError as exc:
                 raise DejaError("state-root-entry-unreadable") from exc
             if stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                names.append(name)
-        if len(names) > MAX_CAMPAIGNS:
-            raise DejaError("campaign-count-limit")
+                entries.append((name, info.st_mtime_ns))
+        total_campaigns = len(entries)
+        if total_campaigns > MAX_CAMPAIGNS:
+            # The state root accumulates one directory per captured Magi
+            # campaign and has no lifecycle owner here (retention belongs to
+            # hippocampus-mcp #222). Rather than fail the whole scan once the
+            # root outgrows the ceiling — which turns an abundance of prior
+            # reviews into a total loss of Deja context — bound inspection
+            # work to the most recent MAX_CAMPAIGNS by mtime and degrade
+            # gracefully. Older campaigns are almost always for a different
+            # target_sha and thus irrelevant to exact-bytes retrieval.
+            entries.sort(key=lambda entry: (entry[1], entry[0]), reverse=True)
+            entries = entries[:MAX_CAMPAIGNS]
+            metrics["errors"].append(f"campaign-count-truncated:{total_campaigns}")
+        names = sorted(name for name, _ in entries)
     finally:
         os.close(root_fd)
 
