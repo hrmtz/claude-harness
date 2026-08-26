@@ -15,6 +15,7 @@
       },
       "harness-core/hooks/sanada_autobackup.sh",
       "harness-core/hooks/bash_command_guard.sh",
+      "harness-core/hooks/subaruedit_hex_codec_guard.py",
       {
         "path": "harness-core/hooks/credential_file_read_guard.sh",
         "event": "PreToolUse",

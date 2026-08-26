@@ -62,6 +62,11 @@
           },
           {
             "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subaruedit_hex_codec_guard.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/subaruedit_hex_codec_guard.py",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/branch_policy_guard.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/branch_policy_guard.sh",
             "timeout": 5
           },
