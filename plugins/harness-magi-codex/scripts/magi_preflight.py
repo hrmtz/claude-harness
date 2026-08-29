@@ -253,6 +253,11 @@ def validate_review(
         finding_ids.add(finding_id)
         root_ids.add(root_id)
         recommended_actions.add(finding["recommended_decision"])
+        impacts = finding["impact"]
+        if len(impacts) != len(set(impacts)):
+            raise UnsafeInput(
+                f"duplicate impact in {source.path}#{finding_id}"
+            )
         for evidence in finding["evidence"]:
             actual = line_slice_sha(
                 brief_lines, evidence["start_line"], evidence["end_line"]

@@ -107,12 +107,13 @@ BRIEF_JSON="${BRIEF_FIELDS[3]}"
 
 PERSONAS=(MELCHIOR BALTHASAR CASPAR)
 FINAL_MANIFEST="$OUT_DIR/preflight-run.json"
+FAILURE_DIAGNOSTIC="$OUT_DIR/preflight-failure.json"
 FINAL_OUTPUTS=(
     "$OUT_DIR/preflight-melchior.json"
     "$OUT_DIR/preflight-balthasar.json"
     "$OUT_DIR/preflight-caspar.json"
 )
-for path in "$FINAL_MANIFEST" "${FINAL_OUTPUTS[@]}"; do
+for path in "$FINAL_MANIFEST" "$FAILURE_DIAGNOSTIC" "${FINAL_OUTPUTS[@]}"; do
     [ ! -e "$path" ] || {
         echo "preflight: one-shot output already exists: $path" >&2
         exit 5
@@ -217,13 +218,74 @@ for index in 0 1 2; do
 done
 
 rc=0
-for pid in "${PIDS[@]}"; do wait "$pid" || rc=1; done
+PROVIDER_RCS=()
+for pid in "${PIDS[@]}"; do
+    provider_rc=0
+    wait "$pid" || provider_rc=$?
+    PROVIDER_RCS+=("$provider_rc")
+    [ "$provider_rc" -eq 0 ] || rc=1
+done
 for fd in "${FIFO_FDS[@]}"; do eval "exec ${fd}>&-"; done
 FIFO_FDS=()
-for pid in "${SCRUB_PIDS[@]}"; do wait "$pid" || rc=1; done
+SCRUB_RCS=()
+for pid in "${SCRUB_PIDS[@]}"; do
+    scrub_rc=0
+    wait "$pid" || scrub_rc=$?
+    SCRUB_RCS+=("$scrub_rc")
+    [ "$scrub_rc" -eq 0 ] || rc=1
+done
 PIDS=()
 SCRUB_PIDS=()
-[ "$rc" -eq 0 ] || { echo "preflight: reviewer process failed" >&2; exit 1; }
+if [ "$rc" -ne 0 ]; then
+    FAILURE_STAGE="$STAGE/preflight-failure.json"
+    PYTHONDONTWRITEBYTECODE=1 python3 - \
+        "$FAILURE_STAGE" "${PROVIDER_RCS[@]}" "${SCRUB_RCS[@]}" <<'PY'
+import json
+import pathlib
+import sys
+
+destination = pathlib.Path(sys.argv[1])
+provider_codes = [int(value) for value in sys.argv[2:5]]
+scrubber_codes = [int(value) for value in sys.argv[5:8]]
+personas = ("MELCHIOR", "BALTHASAR", "CASPAR")
+reviewers = []
+for persona, provider_code, scrubber_code in zip(
+    personas, provider_codes, scrubber_codes
+):
+    if scrubber_code != 0:
+        classification = "scrubber-failure"
+    elif provider_code in {124, 137}:
+        classification = "provider-timeout"
+    elif provider_code != 0:
+        classification = "provider-exit"
+    else:
+        classification = "ok"
+    reviewers.append(
+        {
+            "reviewer": persona,
+            "classification": classification,
+            "provider_exit_code": provider_code,
+            "scrubber_exit_code": scrubber_code,
+        }
+    )
+destination.write_text(
+    json.dumps(
+        {
+            "schema": "magi-preflight-failure/v1",
+            "status": "failed",
+            "reviewers": reviewers,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+    mv -- "$FAILURE_STAGE" "$FAILURE_DIAGNOSTIC"
+    echo "preflight: reviewer process failed; diagnostic: $FAILURE_DIAGNOSTIC" >&2
+    exit 1
+fi
 
 # Validate staged bytes before any canonical output name appears.
 PYTHONDONTWRITEBYTECODE=1 python3 - \

@@ -345,6 +345,16 @@ class PreflightTest(unittest.TestCase):
         with self.assertRaisesRegex(preflight.UnsafeInput, "duplicate root_cause_id"):
             self.evaluate()
 
+    def test_duplicate_impact_within_one_finding_is_rejected(self) -> None:
+        finding = self.finding(
+            "M1",
+            "duplicate.impact",
+            impact=["technical", "technical"],
+        )
+        self.write_reviews({"MELCHIOR": [finding]})
+        with self.assertRaisesRegex(preflight.UnsafeInput, "duplicate impact"):
+            self.evaluate()
+
     def test_mutation_detected_during_final_resample(self) -> None:
         with mock.patch.object(
             preflight,
@@ -494,6 +504,86 @@ output.write_text(json.dumps(payload) + "\\n")
         self.assertEqual(result.returncode, 3)
         self.assertIn("another run owns", result.stderr)
         self.assertFalse((output / "preflight-run.json").exists())
+
+    def test_structural_runner_publishes_bounded_process_failure(self) -> None:
+        fake_bin = self.root / "failure-bin"
+        fake_bin.mkdir()
+        codex = fake_bin / "codex"
+        codex.write_text(
+            """#!/usr/bin/env python3
+import json, pathlib, re, sys
+args = sys.argv[1:]
+output = pathlib.Path(args[args.index("-o") + 1])
+prompt = sys.stdin.read()
+def field(name):
+    match = re.search(rf"^{name}: (.+)$", prompt, re.M)
+    if not match:
+        raise SystemExit(9)
+    return match.group(1)
+persona = field("REVIEWER")
+if persona == "CASPAR":
+    raise SystemExit(42)
+payload = {
+    "schema": "magi-preflight-review/v1",
+    "reviewer": persona,
+    "round": 1,
+    "brief": {
+        "canonical_path": field("BRIEF_CANONICAL_PATH"),
+        "artifact_id": field("BRIEF_ARTIFACT_ID"),
+        "sha256": field("BRIEF_SHA256"),
+    },
+    "verdict": "PROCEED",
+    "findings": [],
+}
+output.write_text(json.dumps(payload) + "\\n")
+""",
+            encoding="utf-8",
+        )
+        codex.chmod(0o755)
+        output = self.root / "failed-runner-output"
+        env = os.environ.copy()
+        env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+        result = subprocess.run(
+            ["bash", str(RUNNER), str(self.brief.resolve()), str(output)],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((output / "preflight-run.json").exists())
+        self.assertEqual(
+            sorted(path.name for path in output.glob("preflight-*.json")),
+            ["preflight-failure.json"],
+        )
+        diagnostic = json.loads((output / "preflight-failure.json").read_text())
+        self.assertEqual(diagnostic["schema"], "magi-preflight-failure/v1")
+        self.assertEqual(
+            diagnostic["reviewers"],
+            [
+                {
+                    "classification": "ok",
+                    "provider_exit_code": 0,
+                    "reviewer": "MELCHIOR",
+                    "scrubber_exit_code": 0,
+                },
+                {
+                    "classification": "ok",
+                    "provider_exit_code": 0,
+                    "reviewer": "BALTHASAR",
+                    "scrubber_exit_code": 0,
+                },
+                {
+                    "classification": "provider-exit",
+                    "provider_exit_code": 42,
+                    "reviewer": "CASPAR",
+                    "scrubber_exit_code": 0,
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":

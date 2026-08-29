@@ -68,6 +68,28 @@ def test_deeply_nested_const_without_type_is_rejected(tmp_path: Path) -> None:
     assert "properties['items'].items.properties['kind'].type required for const" in result.stderr
 
 
+def test_unique_items_is_rejected_before_provider_launch(tmp_path: Path) -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+    path = tmp_path / "unique-items.json"
+    path.write_text(json.dumps(schema))
+
+    result = run_checker(path)
+
+    assert result.returncode == 64
+    assert "properties['items'].uniqueItems" in result.stderr
+
+
 def test_one_shot_runner_preflights_schema_before_output_mutation(tmp_path: Path) -> None:
     plugin = tmp_path / "plugin"
     scripts = plugin / "scripts"
