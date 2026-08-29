@@ -44,6 +44,10 @@ Allowed severities: `CRITICAL`, `HIGH`, `MED`, `LOW`. Allowed impacts:
 `technical`, `operational`, `commercial`, `security`, `data-loss`,
 `irreversibility`. `recommended_decision` is `PIVOT` or `ABORT`.
 
-Use evidence only when the cited exact brief lines support the claim. A
-self-asserted grounding flag is invalid. Use the same stable `root_cause_id`
-for the same underlying cause; do not coordinate with sibling reviewers.
+Use evidence only when the cited exact brief lines support the claim. Select the
+exact line range and provide any 64-character lowercase hexadecimal placeholder
+in `sha256`; the trusted runner replaces it with the SHA-256 of those exact line
+bytes before validation and publication. `BRIEF_SHA256` is not a line-slice
+digest. A self-asserted grounding flag is invalid. Use the same stable
+`root_cause_id` for the same underlying cause; do not coordinate with sibling
+reviewers.

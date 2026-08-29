@@ -57,6 +57,19 @@ esac
     echo "preflight: MAGI_PREFLIGHT_TIMEOUT_S must be in 1..900" >&2
     exit 64
 }
+CODEX_MODEL="${MAGI_PREFLIGHT_MODEL:-gpt-5.6-luna}"
+[ -n "$CODEX_MODEL" ] || {
+    echo "preflight: MAGI_PREFLIGHT_MODEL must not be empty" >&2
+    exit 64
+}
+CODEX_REASONING_EFFORT="${MAGI_PREFLIGHT_REASONING_EFFORT:-low}"
+case "$CODEX_REASONING_EFFORT" in
+    low|medium|high|xhigh|max|ultra) ;;
+    *)
+        echo "preflight: MAGI_PREFLIGHT_REASONING_EFFORT must be low, medium, high, xhigh, max, or ultra" >&2
+        exit 64
+        ;;
+esac
 CODEX_STATE="${CODEX_HOME:-${HOME:?HOME must be set}/.codex}"
 [ -d "$CODEX_STATE" ] || {
     echo "preflight: Codex state directory is unavailable: $CODEX_STATE" >&2
@@ -198,7 +211,10 @@ for index in 0 1 2; do
             --ro-bind "$prompt" "$prompt" --bind "$fifo" "$fifo" \
             -- timeout --signal=TERM --kill-after=2s "$TIMEOUT_S" \
             env -u TMUX_PANE TMPDIR="$runtime/tmp" \
-            codex exec --skip-git-repo-check -s read-only --ephemeral \
+            codex exec --ignore-user-config --ignore-rules \
+            --skip-git-repo-check -s read-only --ephemeral \
+            -m "$CODEX_MODEL" \
+            -c "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"" \
             -C "$TARGET_ROOT" --output-schema "$SCHEMA" -o "$fifo" - < "$prompt" \
             >/dev/null 2>&1
     ) &
@@ -318,6 +334,14 @@ for expected, raw in zip(personas, sys.argv[4:]):
         except preflight.UnsafeInput:
             classification = "invalid-reviewer-json"
         else:
+            if preflight.bind_provider_evidence_digests(payload, lines):
+                pathlib.Path(raw).write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                source = preflight.stable_read(
+                    pathlib.Path(raw), limit=preflight.MAX_REVIEW_BYTES
+                )
             try:
                 preflight.validate_review(
                     payload,

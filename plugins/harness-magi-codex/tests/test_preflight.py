@@ -148,6 +148,28 @@ class PreflightTest(unittest.TestCase):
     def evaluate(self) -> dict[str, object]:
         return preflight.evaluate(self.brief, self.manifest)
 
+    def test_review_prompt_forbids_guessing_evidence_digest(self) -> None:
+        stable = preflight.stable_read(
+            self.brief, limit=preflight.MAX_BRIEF_BYTES
+        )
+        prompt = preflight.review_prompt(stable, "MELCHIOR").decode("utf-8")
+        self.assertIn("trusted runner", prompt)
+        self.assertIn("64-hex sha256 placeholder", prompt)
+
+    def test_provider_evidence_digest_is_bound_to_exact_brief_lines(self) -> None:
+        finding = self.finding(
+            "M1", "provider.placeholder", evidence=self.evidence()
+        )
+        finding["evidence"][0]["sha256"] = "0" * 64
+        payload = {"findings": [finding]}
+        lines = self.brief.read_bytes().splitlines(keepends=True)
+        self.assertTrue(preflight.bind_provider_evidence_digests(payload, lines))
+        self.assertEqual(
+            payload["findings"][0]["evidence"][0]["sha256"],
+            preflight.line_slice_sha(lines, 2, 2),
+        )
+        self.assertFalse(preflight.bind_provider_evidence_digests(payload, lines))
+
     def run_cli(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
@@ -447,6 +469,13 @@ class PreflightTest(unittest.TestCase):
             """#!/usr/bin/env python3
 import json, os, pathlib, re, sys
 args = sys.argv[1:]
+required = {"--ignore-user-config", "--ignore-rules", "-m", "-c"}
+if not required.issubset(args):
+    raise SystemExit(12)
+if args[args.index("-m") + 1] != "gpt-5.6-luna":
+    raise SystemExit(13)
+if args[args.index("-c") + 1] != 'model_reasoning_effort="low"':
+    raise SystemExit(14)
 output = pathlib.Path(args[args.index("-o") + 1])
 prompt = sys.stdin.read()
 def field(name):
