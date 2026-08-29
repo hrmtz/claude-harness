@@ -16,6 +16,7 @@ UNSUPPORTED = {
     "else",
     "dependentRequired",
     "dependentSchemas",
+    "uniqueItems",
 }
 
 

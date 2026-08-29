@@ -62,6 +62,1564 @@ FINAL_XFAMILY_RESERVE = PHASE_WEIGHT["xfamily"]
 # this boundary, and one shipped-blocking CRITICAL appeared at the 4th
 # cross-family round. Depth stays available; it just has to be earned.
 GLOBAL_MAX_MODEL_LAUNCHES = 16
+SCOPED_GLOBAL_CEILING_OVERRIDES: dict[str, dict[str, object]] = {
+    "/home/hrmtz/projects/ZN6/ecu-re-abc-calibration-bind-20260824/docs/re/"
+    "RACEROM_ABC_CHANGER_V1.md": {
+        "authority_id": "ZN6-ABC-RUNTIME-I4-AUDIT-2026-08-25-27-31",
+        "doc_id": "12044291bf20ce79",
+        "scope": (
+            "ABC runtime I4-pinned v17 exact revision after bounded status admission, "
+            "RESYNC rearm, status egress, and feature-disable completion remediation; "
+            "one Codex fanout then one Claude xfamily"
+        ),
+        "authority_reference": (
+            "parent scoped drift audit authorized one bounded exact-revision cycle "
+            "from canonical ledger usage 27 on 2026-08-25"
+        ),
+        "drift_audit": {
+            "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+            "prior_review_artifact_sha256": (
+                "6e116691a6b4a5be6ad5de308a06697a14f28943bf956aa5150b720259fe1b60"
+            ),
+            "authorized_artifact_sha256": (
+                "0ade043db0a7482d29762b0cbebb0d475d50e0c6103730a42a211e83eb14dcff"
+            ),
+            "prior_review_finding_count": 4,
+            "remediated_roots": [
+                "status_admission_projection",
+                "resync_corrupt_active_rearm",
+                "status_egress_private_buffer_generation_protocol",
+                "feature_disable_actual_a_vs_old_bc_completion_semantics",
+            ],
+            "frozen_implementation_commit": "847856de48f21ff6a5b299a57e4c563b8a8af375",
+            "v17_contract_sha256": (
+                "5960f8b96a53e27f8c411a6df00721a6640febbe70b7fb5a731b6c52b38ef4e3"
+            ),
+            "v17_receipt_sha256": (
+                "fe8887becdcbae537347e63432d3389f34712bf786aab8fcf74a71178c998f3e"
+            ),
+            "v17_manifest_sha256": (
+                "bc56ab8a4b979407f9bd874a5eaaa1206bd90cd59d2f3c027f0bff3f6f0cb807"
+            ),
+            "outcome_changed": False,
+            "calibration_values_changed": False,
+            "implementation_authority_changed": False,
+            "consumer_authority_changed": False,
+            "rom_authority_changed": False,
+            "flash_authority_added": False,
+            "hardware_authority_added": False,
+            "classification": "BOUNDED_FINDING_REMEDIATION",
+        },
+        "authorized_artifact_sha256": (
+            "0ade043db0a7482d29762b0cbebb0d475d50e0c6103730a42a211e83eb14dcff"
+        ),
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 27,
+        "authorized_max_ceiling": 31,
+        "checkpoint_interval": 4,
+        "prior_usage": 27,
+        "additional_slots": 4,
+        "authorized_cycle_weight": 4,
+        "authorized_phase_plan": [
+            {"phase": "fanout", "weight": 3, "family": "codex"},
+            {"phase": "xfamily", "weight": 1, "family": "claude"},
+        ],
+        "quota_conservation_constraints_removed": True,
+        "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+        "new_ceiling": 31,
+    },
+    "/home/hrmtz/projects/ZN6/ecu-tuning-abc-fp-20260824/docs/designs/"
+    "ABC_FP_CALIBRATION_IMPLEMENTATION_REVIEW.md": {
+        "authority_id": "ZN6-ABC-FP-ORCHESTRATOR-AUDIT-2026-08-24-14-18",
+        "doc_id": "5e25a5a6211c2849",
+        "scope": (
+            "ABC FP calibration exact revision after replay shared-oracle remediation; "
+            "one Codex fanout then one Claude xfamily"
+        ),
+        "authority_reference": (
+            "user explicitly reset review limits and delegated autonomous completion "
+            "on 2026-08-24"
+        ),
+        "drift_audit": {
+            "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+            "prior_artifact_sha256": (
+                "0ffafbfa8b07a9f21f0110aef921aa4609e39f9a472cc931d504c0b15cc10df2"
+            ),
+            "authorized_artifact_sha256": (
+                "e430616b0761f71a8a7c4a4c8775902d9b496895e08ef42c2d0b33861ec2e7cf"
+            ),
+            "prior_lines": 153,
+            "authorized_lines": 158,
+            "blocking_root_count": 1,
+            "blocking_root": "replay.shared_oracle",
+            "independent_oracle_sha256": (
+                "6807b6c414ce7873f943aa9ef51a63716d5bf95c4181119eec46782a49e809a7"
+            ),
+            "oracle_tests_sha256": (
+                "6ea6791da0e45d142a70d78cc642bb03874224d3bd43289453c9e0929f45cbc2"
+            ),
+            "executable_evidence_sha256": (
+                "ef85505c0f0e899f1e939ef367f92986097cc3c655872ce3fb8f4b0f7c8ff8c0"
+            ),
+            "dedicated_tests": 37,
+            "full_tests": 399,
+            "outcome_changed": False,
+            "calibration_values_changed": False,
+            "implementation_authority_changed": False,
+            "rom_authority_changed": False,
+            "flash_authority_added": False,
+            "classification": "BOUNDED_FINDING_REMEDIATION",
+        },
+        "authorized_artifact_sha256": (
+            "e430616b0761f71a8a7c4a4c8775902d9b496895e08ef42c2d0b33861ec2e7cf"
+        ),
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 16,
+        "authorized_max_ceiling": 18,
+        "checkpoint_interval": 4,
+        "prior_usage": 14,
+        "additional_slots": 4,
+        "authorized_cycle_weight": 4,
+        "authorized_phase_plan": [
+            {"phase": "fanout", "weight": 3, "family": "codex"},
+            {"phase": "xfamily", "weight": 1, "family": "claude"},
+        ],
+        "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+        "new_ceiling": 18,
+    },
+    "/home/hrmtz/projects/ZN6/ecu-tuning/docs/designs/"
+    "TELEMETRY-FI-CALIBRATION-HARDENING/01a-canonical-inventory-publication.md": {
+        "authority_id": "ZN6-01A-USER-ACK-2026-08-22-TO-36",
+        "doc_id": "af61a5fa1b729d66",
+        "scope": "Slice 01a exact-revision design review only",
+        "authorized_at": "2026-08-22T01:02:12Z",
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 20,
+        "intermediate_authorized_ceiling": 24,
+        "additional_slots": 12,
+        "new_ceiling": 36,
+    },
+    "/home/hrmtz/projects/ZN6/ecu-re/docs/designs/TORQUE-CONTROL-REHOME/"
+    "E2a3a1-publisher-hardening-worktree.md": {
+        "authority_id": "ZN6-E2A3A1-USER-PASS-2026-08-23-CHECKPOINT-30-34",
+        "doc_id": "a3be751c394d935f",
+        "scope": "E2a3a1 final exact cycle after zero-writer risk acceptance",
+        "authority_reference": "user accepted zero-writer threat model and said pass on 2026-08-23",
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 30,
+        "authorized_max_ceiling": 34,
+        "checkpoint_interval": 4,
+        "prior_usage": 30,
+        "additional_slots": 4,
+        "new_ceiling": 34,
+    },
+    "/home/hrmtz/projects/ZN6/ecu-re/docs/designs/TORQUE-AR-ROM-INTEGRATION/"
+    "S08A-RELOCATABLE-SHADOW-PACK.md": {
+        "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-24-REV20-76-80",
+        "doc_id": "a4cb34578437a22f",
+        "scope": (
+            "S08A Claude-authored revision 20 exact design review; "
+            "one Codex fanout then one Claude xfamily"
+        ),
+        "authority_reference": (
+            "user defined the global fuse as an orchestrator drift-audit "
+            "checkpoint and delegated bounded continuation on 2026-08-23"
+        ),
+        "drift_audit": {
+            "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+            "revision_19_artifact_sha256": (
+                "792d9e230ceda396c33c03d4081b27943a6b5003accb1c811c3f0c6998aec11e"
+            ),
+            "revision_20_artifact_sha256": (
+                "3239fd7debc143ec32de23c88a56bf6f73ca6b5ac81d6e1ceed4884c9d01b9c6"
+            ),
+            "revision_19_lines": 5694,
+            "revision_20_lines": 5793,
+            "same_family_finding_count": 9,
+            "cross_family_finding_count": 6,
+            "blocking_root_count": 2,
+            "authoring_receipt_sha256": (
+                "8b8f28e56b48f18e3374d72432a40aafdeb8c53fc8df4fb273a843fa89fc9b86"
+            ),
+            "lifecycle_status_sha256": (
+                "ef4fd5e5ceb3b639e658b20ea127f4a97be1d728de372f03d1975564bc284a9d"
+            ),
+            "epic_sha256": (
+                "93ae8e3cacf296beb7dbe331b17eee5abd94544078da5e3b983f0fb4d2b46725"
+            ),
+            "accepted_remediation_root_count": 2,
+            "parent_audit_same_root_count": 0,
+            "parent_audit_fix_passes": 2,
+            "bounded_calibration_authorization_added": False,
+            "rejected_scope_expansions": [
+                "bootstrap script implementation",
+                "new artifact or acknowledgement type",
+                "daemon, service, catalog, or lock",
+                "ROM or hardware authorization",
+            ],
+            "outcome_changed": False,
+            "component_inventory_changed": False,
+            "implementation_authority_changed": False,
+            "rom_authority_changed": False,
+            "classification": "BOUNDED_FINDING_REMEDIATION",
+        },
+        "authorized_artifact_sha256": (
+            "3239fd7debc143ec32de23c88a56bf6f73ca6b5ac81d6e1ceed4884c9d01b9c6"
+        ),
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 76,
+        "authorized_max_ceiling": 80,
+        "checkpoint_interval": 4,
+        "prior_usage": 76,
+        "additional_slots": 4,
+        "authorized_cycle_weight": 4,
+        "authorized_phase_plan": [
+            {"phase": "fanout", "weight": 3, "family": "codex"},
+            {"phase": "xfamily", "weight": 1, "family": "claude"},
+        ],
+        "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+        "new_ceiling": 80,
+    },
+    "/home/hrmtz/projects/ZN6/ecu-re-knock-telemetry-f0-overlay/docs/re/"
+    "KNOCK_TELEMETRY_F0_OVERLAY_WIRE.md": {
+        "authority_id": (
+            "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-"
+            "SEQ4689-SCOPE4708-4709-23-27"
+        ),
+        "doc_id": "c2c6bef4d687838c",
+        "scope": (
+            "F0 overlay scope-corrected proportional operational-boundary "
+            "exact WIRE review; "
+            "one Codex fanout then one Claude xfamily"
+        ),
+        "authority_reference_mailbox_seq": 4689,
+        "scope_correction_mailbox_seqs": [4708, 4709],
+        "prior_authority_id": (
+            "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-SEQ4689-19-23"
+        ),
+        "scope_basis_campaign_id": "e6348644-1bea-45cf-92c1-0192cf06cb5d",
+        "scope_basis_claim_id": "396758f8-fbe5-4301-8998-c81da0a96b63",
+        "scope_basis_review_output_sha256": (
+            "6f9af979bc9fb0c18b565cd03c17da962ded039d8c85e8e26846bd609af50721"
+        ),
+        "scope_basis_finding_id": "XF-R2-001",
+        "scope_basis_root_cause_id": "recorder.namespace_generation_unbound",
+        "scope_basis_reported_severity": "HIGH",
+        "scope_corrected_classification": "OPTIONAL_OPERATIONAL_HARDENING",
+        "scope_corrected_rom_admission_blocker": False,
+        "scope_correction_is_safety_remediation": False,
+        "removed_transactional_recorder_gates": [
+            "REC_PATH_DURABLE",
+            "REC_PROFILE_DURABLE",
+        ],
+        "retained_operational_requirements": [
+            "RAWOUT_ONLY_F0_ANALYSIS",
+            "OUT_NON_ADMISSIBLE_UNDER_F0_SINGLE_PENDING_V1",
+            "ACTIVE_MODE_01_SEPARATE_CAN_AUTHORITY",
+        ],
+        "authorized_artifact_sha256": (
+            "084a4c8dd7ea0fca25df7256039617b4defa337117a8366db1de073f45f16637"
+        ),
+        "default_ceiling": 16,
+        "previous_scoped_ceiling": 23,
+        "authorized_max_ceiling": 27,
+        "checkpoint_interval": 4,
+        "prior_usage": 23,
+        "additional_slots": 4,
+        "authorized_cycle_weight": 4,
+        "authorized_phase_plan": [
+            {"phase": "fanout", "weight": 3, "family": "codex"},
+            {"phase": "xfamily", "weight": 1, "family": "claude"},
+        ],
+        "quota_conservation_constraints_removed": True,
+        "authority_continuation_kind": "STANDING_FURTHER_CYCLE_AUTHORITY",
+        "new_ceiling": 27,
+    },
+}
+HISTORICAL_SCOPED_GLOBAL_CEILING_AUTHORITIES: dict[str, tuple[dict[str, object], ...]] = {
+    "/home/hrmtz/projects/ZN6/ecu-re-abc-calibration-bind-20260824/docs/re/"
+    "RACEROM_ABC_CHANGER_V1.md": (
+        {
+            "authority_id": "ZN6-ABC-RUNTIME-ORCHESTRATOR-AUDIT-2026-08-24-15-19",
+            "doc_id": "12044291bf20ce79",
+            "scope": (
+                "ABC runtime frozen post-I3 v10 exact revision after bounded v7 "
+                "finding remediation; one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user explicitly reset review limits, removed quota-conservation "
+                "restrictions, and delegated autonomous completion on 2026-08-24"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "prior_review_artifact_sha256": (
+                    "2f8c4f284fc207d54becfee05cad1591c1fac56a755f910e3aef2653697cacf7"
+                ),
+                "authorized_artifact_sha256": (
+                    "bc21ae94bb2a19ce06bb559cc8593695b0ecf89659b24c3af8d4759e1ad7ef99"
+                ),
+                "prior_review_finding_count": 3,
+                "frozen_implementation_commit": "76c3507e8684882780d1536b6b02cb2aee558144",
+                "contract_sha256": (
+                    "90531015c60e9fbe14d3bd6f7f3e5cd50fd52658d6f3c1d64cdfca093709007c"
+                ),
+                "v10_manifest_sha256": (
+                    "45947bd0a56d472d2f680b5560e3b9d93808833aedad3490d56c4d0da61d6525"
+                ),
+                "outcome_changed": False,
+                "calibration_values_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "flash_authority_added": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "bc21ae94bb2a19ce06bb559cc8593695b0ecf89659b24c3af8d4759e1ad7ef99"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 16,
+            "authorized_max_ceiling": 19,
+            "checkpoint_interval": 4,
+            "prior_usage": 15,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "quota_conservation_constraints_removed": True,
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 19,
+        },
+        {
+            "authority_id": "ZN6-ABC-RUNTIME-ORCHESTRATOR-AUDIT-2026-08-24-19-23",
+            "doc_id": "12044291bf20ce79",
+            "scope": (
+                "ABC runtime exact revision after bounded writer inventory/proof, "
+                "decoder exact-type, strict duplicate-JSON, and actual reviewer-"
+                "provenance remediation; one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user explicitly reset review limits, removed quota-conservation "
+                "restrictions, and delegated autonomous completion on 2026-08-24"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "prior_review_artifact_sha256": (
+                    "bc21ae94bb2a19ce06bb559cc8593695b0ecf89659b24c3af8d4759e1ad7ef99"
+                ),
+                "authorized_artifact_sha256": (
+                    "2d5a41341dae37ef67dcf05bad26f0e1cf18b6deed279e152a5e859d101e3e98"
+                ),
+                "prior_review_finding_count": 5,
+                "remediated_roots": [
+                    "effective_valid_writer_inventory_and_structural_proof",
+                    "command_decoder_exact_input_types",
+                    "strict_duplicate_json_rejection",
+                    "actual_cross_family_reviewer_provenance",
+                ],
+                "accepted_nonblocking_risks": [
+                    "oversized_input",
+                    "sparse_file",
+                    "symlink_input",
+                ],
+                "frozen_implementation_commit": (
+                    "76c3507e8684882780d1536b6b02cb2aee558144"
+                ),
+                "contract_sha256": (
+                    "90531015c60e9fbe14d3bd6f7f3e5cd50fd52658d6f3c1d64cdfca093709007c"
+                ),
+                "v10_manifest_sha256": (
+                    "45947bd0a56d472d2f680b5560e3b9d93808833aedad3490d56c4d0da61d6525"
+                ),
+                "outcome_changed": False,
+                "calibration_values_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "flash_authority_added": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "2d5a41341dae37ef67dcf05bad26f0e1cf18b6deed279e152a5e859d101e3e98"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 19,
+            "authorized_max_ceiling": 23,
+            "checkpoint_interval": 4,
+            "prior_usage": 19,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "quota_conservation_constraints_removed": True,
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 23,
+        },
+        {
+            "authority_id": "ZN6-ABC-RUNTIME-ORCHESTRATOR-AUDIT-2026-08-24-23-27",
+            "doc_id": "12044291bf20ce79",
+            "scope": (
+                "ABC runtime exact revision after bounded non-finite JSON rejection, "
+                "typed nested authority/requirements, and visible-ASCII reviewer-model "
+                "remediation; one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "parent audit authorized bounded exact-revision completion after the "
+                "invalidated G8 marker on 2026-08-24"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "prior_review_artifact_sha256": (
+                    "2d5a41341dae37ef67dcf05bad26f0e1cf18b6deed279e152a5e859d101e3e98"
+                ),
+                "authorized_artifact_sha256": (
+                    "6e116691a6b4a5be6ad5de308a06697a14f28943bf956aa5150b720259fe1b60"
+                ),
+                "prior_review_finding_count": 4,
+                "remediated_roots": [
+                    "strict_json_nonfinite_constants",
+                    "typed_nested_authority_and_requirements",
+                    "visible_ascii_reviewer_model",
+                ],
+                "accepted_nonblocking_risks": [
+                    "trusted_local_oversized_sparse_symlink_input",
+                    "self_declared_reviewer_provenance",
+                ],
+                "invalidated_historical_marker": {
+                    "basename": "PLATEAU.12044291bf20ce79.2d5a41341dae37ef",
+                    "sha256": (
+                        "60a95cde2b9f998f5dc9ba0792586a5a51b5b23511d0d617ea0174bd9a716d0a"
+                    ),
+                    "status": "INVALIDATED_G8_CARRIED_SEVERITY_DOWNGRADE",
+                    "shipping_authority": False,
+                },
+                "frozen_implementation_commit": (
+                    "76c3507e8684882780d1536b6b02cb2aee558144"
+                ),
+                "v13_contract_sha256": (
+                    "61366e48a8e87e7e328c6119b023dedcf3e133c8c214d391ff3edd8fe1d0e058"
+                ),
+                "v13_receipt_sha256": (
+                    "c5732fc03288b87a37d20330ca8f496ffe77c2ae79cc9de49f152875e23acea7"
+                ),
+                "v13_manifest_sha256": (
+                    "8f037e9592ce499fadd080c70c54ce604041c8d03c176b0234f820c702770b88"
+                ),
+                "outcome_changed": False,
+                "calibration_values_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "flash_authority_added": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "6e116691a6b4a5be6ad5de308a06697a14f28943bf956aa5150b720259fe1b60"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 23,
+            "authorized_max_ceiling": 27,
+            "checkpoint_interval": 4,
+            "prior_usage": 23,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "quota_conservation_constraints_removed": True,
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 27,
+        },
+    ),
+    "/home/hrmtz/projects/ZN6/ecu-tuning/docs/designs/"
+    "TELEMETRY-FI-CALIBRATION-HARDENING/01a-canonical-inventory-publication.md": (
+        {
+            "authority_id": "ZN6-01A-USER-ACK-2026-08-22",
+            "doc_id": "af61a5fa1b729d66",
+            "scope": "Slice 01a exact-revision design review only",
+            "authorized_at": "2026-08-22T00:34:33Z",
+            "old_ceiling": 16,
+            "new_ceiling": 20,
+        },
+    ),
+    "/home/hrmtz/projects/ZN6/ecu-re/docs/designs/TORQUE-CONTROL-REHOME/"
+    "E2a3a1-publisher-hardening-worktree.md": (
+        {
+            "authority_id": "ZN6-E2A3A1-USER-ACK-2026-08-22-CHECKPOINT-14-18",
+            "doc_id": "a3be751c394d935f",
+            "scope": "E2a3a1 material successor cycle; torque-integrator review required at 18",
+            "authority_reference_mailbox_seq": 4401,
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 16,
+            "authorized_max_ceiling": 32,
+            "checkpoint_interval": 4,
+            "prior_usage": 14,
+            "additional_slots": 2,
+            "new_ceiling": 18,
+        },
+        {
+            "authority_id": "ZN6-E2A3A1-USER-ACK-2026-08-22-CHECKPOINT-18-22",
+            "doc_id": "a3be751c394d935f",
+            "scope": "E2a3a1 exact repair recheck; torque-integrator review required at 22",
+            "authority_reference_mailbox_seq": 4401,
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 18,
+            "authorized_max_ceiling": 32,
+            "checkpoint_interval": 4,
+            "prior_usage": 18,
+            "additional_slots": 4,
+            "new_ceiling": 22,
+        },
+        {
+            "authority_id": "ZN6-E2A3A1-USER-ACK-2026-08-22-CHECKPOINT-22-26",
+            "doc_id": "a3be751c394d935f",
+            "scope": "E2a3a1 immutable snapshot repair recheck; torque-integrator review required at 26",
+            "authority_reference_mailbox_seq": 4401,
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 22,
+            "authorized_max_ceiling": 32,
+            "checkpoint_interval": 4,
+            "prior_usage": 22,
+            "additional_slots": 4,
+            "new_ceiling": 26,
+        },
+        {
+            "authority_id": "ZN6-E2A3A1-USER-ACK-2026-08-22-CHECKPOINT-26-30",
+            "doc_id": "a3be751c394d935f",
+            "scope": "E2a3a1 recovery and provider repair recheck; torque-integrator review required at 30",
+            "authority_reference_mailbox_seq": 4401,
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 26,
+            "authorized_max_ceiling": 32,
+            "checkpoint_interval": 4,
+            "prior_usage": 26,
+            "additional_slots": 4,
+            "new_ceiling": 30,
+        },
+    ),
+    "/home/hrmtz/projects/ZN6/ecu-re/docs/designs/TORQUE-AR-ROM-INTEGRATION/"
+    "S08A-RELOCATABLE-SHADOW-PACK.md": (
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-13-17",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 5 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_4_artifact_sha256": (
+                    "a138a3494b56d17bfe93fe98bb4a2debe6d72e67d822409af5cafc36ebdbaa36"
+                ),
+                "revision_5_artifact_sha256": (
+                    "2cb92a25b2349fc88c31bd5a345eda7325a79a3d03dc87793076f8cef9196e5c"
+                ),
+                "revision_4_lines": 2287,
+                "revision_5_lines": 2669,
+                "synthesis_finding_count": 9,
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "2cb92a25b2349fc88c31bd5a345eda7325a79a3d03dc87793076f8cef9196e5c"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 16,
+            "authorized_max_ceiling": 17,
+            "checkpoint_interval": 4,
+            "prior_usage": 13,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 17,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-17-21",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 6 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_5_artifact_sha256": (
+                    "2cb92a25b2349fc88c31bd5a345eda7325a79a3d03dc87793076f8cef9196e5c"
+                ),
+                "revision_6_artifact_sha256": (
+                    "b9508e6c508c5ce155c88620e832e7bc6901cb47e4204c78cd5da937b9870b11"
+                ),
+                "revision_5_lines": 2669,
+                "revision_6_lines": 3095,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 10,
+                "blocking_root_count": 7,
+                "authoring_receipt_sha256": (
+                    "3d70029496ebb8b466aefb36e1e5d12fdeeddaf80944fd48e10e71bb8347eb13"
+                ),
+                "rejected_scope_expansions": [
+                    "NON_PUBLISH_CALIBRATION_SUBSYSTEM",
+                    "POINTER_TARGET_RELEASE_DESCRIPTOR_REPLACEMENT",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "b9508e6c508c5ce155c88620e832e7bc6901cb47e4204c78cd5da937b9870b11"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 17,
+            "authorized_max_ceiling": 21,
+            "checkpoint_interval": 4,
+            "prior_usage": 17,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 21,
+        },
+        {
+            "authority_id": (
+                "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-"
+                "CAPACITY-RECOVERY-20-24"
+            ),
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A revision 6 exact design review after a zero-evidence "
+                "Codex usage-limit fanout failure; one replacement Codex fanout "
+                "then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_5_artifact_sha256": (
+                    "2cb92a25b2349fc88c31bd5a345eda7325a79a3d03dc87793076f8cef9196e5c"
+                ),
+                "revision_6_artifact_sha256": (
+                    "b9508e6c508c5ce155c88620e832e7bc6901cb47e4204c78cd5da937b9870b11"
+                ),
+                "revision_5_lines": 2669,
+                "revision_6_lines": 3095,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 10,
+                "blocking_root_count": 7,
+                "authoring_receipt_sha256": (
+                    "3d70029496ebb8b466aefb36e1e5d12fdeeddaf80944fd48e10e71bb8347eb13"
+                ),
+                "rejected_scope_expansions": [
+                    "NON_PUBLISH_CALIBRATION_SUBSYSTEM",
+                    "POINTER_TARGET_RELEASE_DESCRIPTOR_REPLACEMENT",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+                "provider_failure_classification": "provider-exit",
+                "failed_reviewer_turns": 3,
+                "valid_review_artifacts_produced": 0,
+                "failure_receipt_sha256": (
+                    "7111be87184c994243e459bf8d8c64396331e3fc69609e4582e15a884df1dac9"
+                ),
+                "capacity_reset_redeemed": True,
+                "recovery_classification": (
+                    "EXTERNAL_CAPACITY_FAILURE_NOT_SCOPE_DRIFT"
+                ),
+            },
+            "authorized_artifact_sha256": (
+                "b9508e6c508c5ce155c88620e832e7bc6901cb47e4204c78cd5da937b9870b11"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 21,
+            "authorized_max_ceiling": 24,
+            "checkpoint_interval": 4,
+            "prior_usage": 20,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": (
+                "ONE_EXACT_REVISION_CAPACITY_RECOVERY_CYCLE"
+            ),
+            "new_ceiling": 24,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV7-24-28",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 7 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_6_artifact_sha256": (
+                    "b9508e6c508c5ce155c88620e832e7bc6901cb47e4204c78cd5da937b9870b11"
+                ),
+                "revision_7_artifact_sha256": (
+                    "ec1e3b58982bd750e1b2e9a852d6a44cad4d2767ed3533f6534e0959b1fe0db8"
+                ),
+                "revision_6_lines": 3095,
+                "revision_7_lines": 3406,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 8,
+                "blocking_root_count": 8,
+                "authoring_receipt_sha256": (
+                    "003c2b5033ec31170cc023cabbd34de74a6902f956d1525999af14b47193459d"
+                ),
+                "lifecycle_status_sha256": (
+                    "4fefb66721e61ce4815958bf2ef3e8220f1143cdfe71cc1f22d1cf8b7f9abcba"
+                ),
+                "epic_sha256": (
+                    "f7dbba10f06700424bcabab4dfb6848dcd47ba1fb4bf2647017ed58457b925b6"
+                ),
+                "accepted_remediation_root_count": 8,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "ec1e3b58982bd750e1b2e9a852d6a44cad4d2767ed3533f6534e0959b1fe0db8"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 24,
+            "authorized_max_ceiling": 28,
+            "checkpoint_interval": 4,
+            "prior_usage": 24,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 28,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV8-28-32",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 8 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_7_artifact_sha256": (
+                    "ec1e3b58982bd750e1b2e9a852d6a44cad4d2767ed3533f6534e0959b1fe0db8"
+                ),
+                "revision_8_artifact_sha256": (
+                    "1f35249cde256e16175084d9e1538ed13aa6c0c647e13c5396705e3b68f4a1fd"
+                ),
+                "revision_7_lines": 3406,
+                "revision_8_lines": 3592,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 8,
+                "blocking_root_count": 7,
+                "authoring_receipt_sha256": (
+                    "b774782dee8cc52efb4e75b06637d04e986ef2d238d646c380dbe0f51f7fd7b4"
+                ),
+                "lifecycle_status_sha256": (
+                    "0a14ab69e3fe1b60795c8e2dc16e9848fbef411bad98d9581a7a57851b56e34b"
+                ),
+                "epic_sha256": (
+                    "5906ed92fa5ed08b101b59e5c85be298f0d78e9b9e2b4a0d8faabd3b486bea85"
+                ),
+                "accepted_remediation_root_count": 7,
+                "orchestrator_process_root_count": 1,
+                "orchestrator_process_roots_closed": 1,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "1f35249cde256e16175084d9e1538ed13aa6c0c647e13c5396705e3b68f4a1fd"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 28,
+            "authorized_max_ceiling": 32,
+            "checkpoint_interval": 4,
+            "prior_usage": 28,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 32,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV9-32-36",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 9 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_8_artifact_sha256": (
+                    "1f35249cde256e16175084d9e1538ed13aa6c0c647e13c5396705e3b68f4a1fd"
+                ),
+                "revision_9_artifact_sha256": (
+                    "214a06f2501c02d612957dbfc0ed603d44406ac22c9c5aac10316191e4fee94d"
+                ),
+                "revision_8_lines": 3592,
+                "revision_9_lines": 3949,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 8,
+                "blocking_root_count": 8,
+                "authoring_receipt_sha256": (
+                    "78c8192a341b0ac799679041d5474341daeff8b92eb468e82d8032c8009c7b02"
+                ),
+                "lifecycle_status_sha256": (
+                    "b258ebfcf146f326d843f30c14f82b42619d94fde6cb16a777ffae58f535f07f"
+                ),
+                "epic_sha256": (
+                    "0dc1ac48a4c79b2e458a0200c3c3486644426e66be759a26bcbd9fec03ebdf37"
+                ),
+                "accepted_remediation_root_count": 11,
+                "parent_audit_same_root_count": 4,
+                "parent_audit_fix_passes": 2,
+                "bounded_calibration_authorization_added": True,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "214a06f2501c02d612957dbfc0ed603d44406ac22c9c5aac10316191e4fee94d"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 32,
+            "authorized_max_ceiling": 36,
+            "checkpoint_interval": 4,
+            "prior_usage": 32,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 36,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV10-36-40",
+            "doc_id": "a4cb34578437a22f",
+            "scope": "S08A Claude-authored revision 10 exact design review; one Codex fanout then one Claude xfamily",
+            "authority_reference": "user defined the global fuse as an orchestrator drift-audit checkpoint and delegated bounded continuation on 2026-08-23",
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_9_artifact_sha256": "214a06f2501c02d612957dbfc0ed603d44406ac22c9c5aac10316191e4fee94d",
+                "revision_10_artifact_sha256": "abdd11dca80eab7fc6be24134cee03781a4de4e5a367f6dbc25ca16c2f56423e",
+                "revision_9_lines": 3949,
+                "revision_10_lines": 4199,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 8,
+                "blocking_root_count": 6,
+                "authoring_receipt_sha256": "c278cc7b0e5add1d5020dac63bb0f874ee76c433108831104e28714165220d57",
+                "lifecycle_status_sha256": "f7bd043b0091e55982ad8320fdcb43b8109e657fcff26cd03c2249d7149a677b",
+                "epic_sha256": "0b357c8a2170df6a78b30b2248a8c2c240a890ef458120b1b870c981dd8c823b",
+                "accepted_remediation_root_count": 7,
+                "parent_audit_same_root_count": 1,
+                "parent_audit_fix_passes": 1,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": "abdd11dca80eab7fc6be24134cee03781a4de4e5a367f6dbc25ca16c2f56423e",
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 36,
+            "authorized_max_ceiling": 40,
+            "checkpoint_interval": 4,
+            "prior_usage": 36,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 40,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV11-40-44",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 11 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_10_artifact_sha256": "abdd11dca80eab7fc6be24134cee03781a4de4e5a367f6dbc25ca16c2f56423e",
+                "revision_11_artifact_sha256": "89364f8b09da4b36f309ea973599305cec6ed30dc6ab6d779626b1ebc5bf2227",
+                "revision_10_lines": 4199,
+                "revision_11_lines": 4339,
+                "same_family_finding_count": 8,
+                "cross_family_finding_count": 11,
+                "blocking_root_count": 4,
+                "authoring_receipt_sha256": "d3663826b70bf64459dfb85d93b986468e4df3960e5d8fec4df8b4c014d71ce8",
+                "lifecycle_status_sha256": "965d98a384c5d47f7cbff34585d3639acfd3b0c8f2e0fe8923f898a45ffe7538",
+                "epic_sha256": "61303866f9f0a7e7ade6d59acd881f2f98e7017fe4a53072f4a004a9c60e390e",
+                "accepted_remediation_root_count": 8,
+                "parent_audit_same_root_count": 0,
+                "parent_audit_fix_passes": 0,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": "89364f8b09da4b36f309ea973599305cec6ed30dc6ab6d779626b1ebc5bf2227",
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 40,
+            "authorized_max_ceiling": 44,
+            "checkpoint_interval": 4,
+            "prior_usage": 40,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 44,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV12-44-48",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 12 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_11_artifact_sha256": (
+                    "89364f8b09da4b36f309ea973599305cec6ed30dc6ab6d779626b1ebc5bf2227"
+                ),
+                "revision_12_artifact_sha256": (
+                    "5f6efc22ed994c10954892f11c2c01da11cddb37adf06f215862bc7f0603ac3f"
+                ),
+                "revision_11_lines": 4339,
+                "revision_12_lines": 4546,
+                "same_family_finding_count": 9,
+                "cross_family_finding_count": 9,
+                "blocking_root_count": 5,
+                "authoring_receipt_sha256": (
+                    "252ba0993540f20e86f01288f7024efb7347eecac886a7c596274281137323ca"
+                ),
+                "lifecycle_status_sha256": (
+                    "bc5f99c68b9d4e438d14b3795cf49b432a2b92ed1e6f388cb3ad4ceadff3bcf5"
+                ),
+                "epic_sha256": (
+                    "379a8afdcc00ff2622f20b67cdf7b2a30c34c9c51a0625b96d3bcd43bb908a8a"
+                ),
+                "accepted_remediation_root_count": 6,
+                "parent_audit_same_root_count": 2,
+                "parent_audit_fix_passes": 3,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "5f6efc22ed994c10954892f11c2c01da11cddb37adf06f215862bc7f0603ac3f"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 44,
+            "authorized_max_ceiling": 48,
+            "checkpoint_interval": 4,
+            "prior_usage": 44,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 48,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV13-48-52",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 13 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_12_artifact_sha256": (
+                    "5f6efc22ed994c10954892f11c2c01da11cddb37adf06f215862bc7f0603ac3f"
+                ),
+                "revision_13_artifact_sha256": (
+                    "fbf8edcaf1cb90e40fc0646a77adc6b5da817031a695906df85795c09a95c80b"
+                ),
+                "revision_12_lines": 4546,
+                "revision_13_lines": 4706,
+                "same_family_finding_count": 8,
+                "cross_family_finding_count": 11,
+                "blocking_root_count": 6,
+                "authoring_receipt_sha256": (
+                    "0cc83de38bec1b5d72ed368367574ffb7946d8aa2baa485721dc9a061eed2f91"
+                ),
+                "lifecycle_status_sha256": (
+                    "7ff4de7cacacd1d8d7f4e143ceb345e83cd577fa6adcde0e030c5300baee7e00"
+                ),
+                "epic_sha256": (
+                    "be3247cecda90587e2a99bb53e1b4a0d802eb5c96aed0cd06968098163382403"
+                ),
+                "accepted_remediation_root_count": 6,
+                "parent_audit_same_root_count": 1,
+                "parent_audit_fix_passes": 1,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": ["off-host checkpoint replication"],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "fbf8edcaf1cb90e40fc0646a77adc6b5da817031a695906df85795c09a95c80b"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 48,
+            "authorized_max_ceiling": 52,
+            "checkpoint_interval": 4,
+            "prior_usage": 48,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 52,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV14-52-56",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 14 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_13_artifact_sha256": (
+                    "fbf8edcaf1cb90e40fc0646a77adc6b5da817031a695906df85795c09a95c80b"
+                ),
+                "revision_14_artifact_sha256": (
+                    "f3b17f2e7387ab5f239de3eca23e206ce291c3aab27448cb0e1931818be9bf80"
+                ),
+                "revision_13_lines": 4706,
+                "revision_14_lines": 4896,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 8,
+                "blocking_root_count": 4,
+                "authoring_receipt_sha256": (
+                    "139fb3c667ad46f25bcc041beebc8909a5a8fdff70e69101d54178b704f227d3"
+                ),
+                "lifecycle_status_sha256": (
+                    "61a10e6c136ec4b88315f78b84ffae3a6fd3cea4c3d4a85546b49e64b94bbbc5"
+                ),
+                "epic_sha256": (
+                    "d88ed43cd153f916381b16037d745fef8ffc6007143296d152709bee126c8bbe"
+                ),
+                "accepted_remediation_root_count": 4,
+                "parent_audit_same_root_count": 1,
+                "parent_audit_fix_passes": 1,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": ["design-layer review-spend budgeting"],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "f3b17f2e7387ab5f239de3eca23e206ce291c3aab27448cb0e1931818be9bf80"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 52,
+            "authorized_max_ceiling": 56,
+            "checkpoint_interval": 4,
+            "prior_usage": 52,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 56,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV15-56-60",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 15 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_14_artifact_sha256": (
+                    "f3b17f2e7387ab5f239de3eca23e206ce291c3aab27448cb0e1931818be9bf80"
+                ),
+                "revision_15_artifact_sha256": (
+                    "c0ac043ef86e4319c23409a601afc72d25c87ff4bb28bc157ba3a34dd2af4533"
+                ),
+                "revision_14_lines": 4896,
+                "revision_15_lines": 5156,
+                "same_family_finding_count": 8,
+                "cross_family_finding_count": 9,
+                "blocking_root_count": 4,
+                "authoring_receipt_sha256": (
+                    "8664ecc7b5eda41a8480debe6296d48b7617ef576389bb15d1e28070c62ae37c"
+                ),
+                "lifecycle_status_sha256": (
+                    "cc54726f4b988b8698a3085dcb2bdf10c491be5e603c4067564892a6cf73fdf2"
+                ),
+                "epic_sha256": (
+                    "2d87b5be495d6a5711166162202dc8aeb00ebd20b7bcdad7915089824918e615"
+                ),
+                "accepted_remediation_root_count": 4,
+                "parent_audit_same_root_count": 3,
+                "parent_audit_fix_passes": 3,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [
+                    "process monitor",
+                    "second lock",
+                    "supervisor IPC",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "c0ac043ef86e4319c23409a601afc72d25c87ff4bb28bc157ba3a34dd2af4533"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 56,
+            "authorized_max_ceiling": 60,
+            "checkpoint_interval": 4,
+            "prior_usage": 56,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 60,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV16-60-64",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 16 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_15_artifact_sha256": (
+                    "c0ac043ef86e4319c23409a601afc72d25c87ff4bb28bc157ba3a34dd2af4533"
+                ),
+                "revision_16_artifact_sha256": (
+                    "d322fccdf093322cab1d62b37d19c4b31dfd6ceb0d444ddc9ff8e1688f9dd0d6"
+                ),
+                "revision_15_lines": 5156,
+                "revision_16_lines": 5266,
+                "same_family_finding_count": 8,
+                "cross_family_finding_count": 9,
+                "blocking_root_count": 2,
+                "authoring_receipt_sha256": (
+                    "baa9406dc4df78c2a2a7389cca2d88833dae7b22dc54cfed39cf13297f69cae0"
+                ),
+                "lifecycle_status_sha256": (
+                    "d9cdd52ed03f69e7f9910848ef26fbf7c7868a3f5cd3e2a048e5700a05db57a8"
+                ),
+                "epic_sha256": (
+                    "c33b7ed677b846120407fd5c10aae16e10d7fc334852367de575d8aa25de6f1e"
+                ),
+                "accepted_remediation_root_count": 3,
+                "parent_audit_same_root_count": 3,
+                "parent_audit_fix_passes": 4,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [
+                    "process monitor",
+                    "second lock",
+                    "fencing token",
+                    "coordination daemon",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "d322fccdf093322cab1d62b37d19c4b31dfd6ceb0d444ddc9ff8e1688f9dd0d6"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 60,
+            "authorized_max_ceiling": 64,
+            "checkpoint_interval": 4,
+            "prior_usage": 60,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 64,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-23-REV17-64-68",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 17 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_16_artifact_sha256": (
+                    "d322fccdf093322cab1d62b37d19c4b31dfd6ceb0d444ddc9ff8e1688f9dd0d6"
+                ),
+                "revision_17_artifact_sha256": (
+                    "a6d56327a05b465a0a29e649e3e9ff1715540c28b9855d7c5086e3d2219ce499"
+                ),
+                "revision_16_lines": 5266,
+                "revision_17_lines": 5425,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 5,
+                "blocking_root_count": 1,
+                "authoring_receipt_sha256": (
+                    "4a4457e3ff6519a1c363e4f1df7b9d2d339741e5269824cb12e0fd3fb5b1c2ce"
+                ),
+                "lifecycle_status_sha256": (
+                    "bb8eb906c4d1d292f048f1cc0ec7cda6cc392948247ac3bbe6836dc50d5b678b"
+                ),
+                "epic_sha256": (
+                    "1586602f0659289362e11d67b44ff204ce3c3f321739b9d15d6270960cbcba43"
+                ),
+                "accepted_remediation_root_count": 2,
+                "parent_audit_same_root_count": 2,
+                "parent_audit_fix_passes": 2,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [
+                    "global mutable catalog",
+                    "second lock",
+                    "fencing token",
+                    "service or daemon",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "a6d56327a05b465a0a29e649e3e9ff1715540c28b9855d7c5086e3d2219ce499"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 64,
+            "authorized_max_ceiling": 68,
+            "checkpoint_interval": 4,
+            "prior_usage": 64,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 68,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-24-REV18-68-72",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 18 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_17_artifact_sha256": (
+                    "a6d56327a05b465a0a29e649e3e9ff1715540c28b9855d7c5086e3d2219ce499"
+                ),
+                "revision_18_artifact_sha256": (
+                    "e3f3f2290025fce79bd2d1b2d2fca7096370f6670744241416de559545c643a2"
+                ),
+                "revision_17_lines": 5425,
+                "revision_18_lines": 5566,
+                "same_family_finding_count": 9,
+                "cross_family_finding_count": 7,
+                "blocking_root_count": 3,
+                "authoring_receipt_sha256": (
+                    "fc19120770f2f5bbf145c995e014acd7ee45b423a4ff78eecb8c6166e81e5619"
+                ),
+                "lifecycle_status_sha256": (
+                    "2eb2fd316f81a5b0ddbd4687c9fa6dbddcd1520042b537bcb5a6dbb4326935da"
+                ),
+                "epic_sha256": (
+                    "a8e6be91621c4a7516a31814297b44a03d970a79a8370d03cfaefb4f3d4952a2"
+                ),
+                "accepted_remediation_root_count": 5,
+                "parent_audit_same_root_count": 1,
+                "parent_audit_fix_passes": 1,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [
+                    "pointer-removal transaction",
+                    "global all-shard readability requirement",
+                    "checkpointed incremental GC or persistent catalog",
+                    "daemon or second coordinator",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "e3f3f2290025fce79bd2d1b2d2fca7096370f6670744241416de559545c643a2"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 68,
+            "authorized_max_ceiling": 72,
+            "checkpoint_interval": 4,
+            "prior_usage": 68,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 72,
+        },
+        {
+            "authority_id": "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-24-REV19-72-76",
+            "doc_id": "a4cb34578437a22f",
+            "scope": (
+                "S08A Claude-authored revision 19 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "revision_18_artifact_sha256": (
+                    "e3f3f2290025fce79bd2d1b2d2fca7096370f6670744241416de559545c643a2"
+                ),
+                "revision_19_artifact_sha256": (
+                    "792d9e230ceda396c33c03d4081b27943a6b5003accb1c811c3f0c6998aec11e"
+                ),
+                "revision_18_lines": 5566,
+                "revision_19_lines": 5694,
+                "same_family_finding_count": 7,
+                "cross_family_finding_count": 7,
+                "blocking_root_count": 2,
+                "authoring_receipt_sha256": (
+                    "d3170a544a26abeaacd83978415664ee5763ced1262fa8735f0c82cb44995d7d"
+                ),
+                "lifecycle_status_sha256": (
+                    "f693e9a712ec75fda6c942a0c8921a1e40e8718814982b010363096fd7d69ce3"
+                ),
+                "epic_sha256": (
+                    "df7231534fc4987e43d171f1c6d087f4ebd61947fb8a818edf75a131b17cce45"
+                ),
+                "accepted_remediation_root_count": 2,
+                "parent_audit_same_root_count": 0,
+                "parent_audit_fix_passes": 2,
+                "bounded_calibration_authorization_added": False,
+                "rejected_scope_expansions": [
+                    "owner acknowledgement release gate",
+                    "global all-shard genesis admission scan",
+                    "persistent catalog or second lock",
+                    "daemon or new service",
+                ],
+                "outcome_changed": False,
+                "component_inventory_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "792d9e230ceda396c33c03d4081b27943a6b5003accb1c811c3f0c6998aec11e"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 72,
+            "authorized_max_ceiling": 76,
+            "checkpoint_interval": 4,
+            "prior_usage": 72,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 76,
+        },
+    ),
+    "/home/hrmtz/projects/ZN6/ecu-re-knock-telemetry-f0-overlay/docs/re/"
+    "KNOCK_TELEMETRY_F0_OVERLAY_WIRE.md": (
+        {
+            "authority_id": "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-SEQ4668-15-19",
+            "doc_id": "c2c6bef4d687838c",
+            "scope": "F0 overlay exact WIRE revision; one Codex fanout then one Claude xfamily",
+            "authority_reference_mailbox_seq": 4668,
+            "authority_guard_correction_mailbox_seq": 4669,
+            "authorized_artifact_sha256": (
+                "8620b3e52f64bdd9a7b7719bf335f5c0298e0349948a39ca0991a48c30df0d6e"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 16,
+            "authorized_max_ceiling": 19,
+            "checkpoint_interval": 4,
+            "prior_usage": 15,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "new_ceiling": 19,
+        },
+        {
+            "authority_id": "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-SEQ4689-19-23",
+            "doc_id": "c2c6bef4d687838c",
+            "scope": (
+                "F0 overlay scope-corrected exact WIRE revision; "
+                "one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference_mailbox_seq": 4689,
+            "scope_correction_mailbox_seqs": [4691, 4692],
+            "authorized_artifact_sha256": (
+                "d35f07c44c5e534e5985e4bda01501c2ec59fbd8e359b959bdf876356cdc2ff1"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 19,
+            "authorized_max_ceiling": 23,
+            "checkpoint_interval": 4,
+            "prior_usage": 19,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "quota_conservation_constraints_removed": True,
+            "valid_blocker_continuation": "FRESH_NARROW_COMPLETE_CYCLE_AUTHORITY",
+            "new_ceiling": 23,
+        },
+    ),
+}
+FINAL_CYCLE_CLOSED_DOC = (
+    "/home/hrmtz/projects/ZN6/ecu-tuning/docs/designs/"
+    "TELEMETRY-FI-CALIBRATION-HARDENING/01a-canonical-inventory-publication.md"
+)
+FINAL_CYCLE_CLOSED_RECEIPT = Path(
+    "/home/hrmtz/projects/ZN6/ecu-tuning/docs/designs/"
+    "TELEMETRY-FI-CALIBRATION-HARDENING/.dual-magi-01a/"
+    "FINAL-CYCLE-CLOSED.ZN6-01A-2026-08-22.json"
+)
+FINAL_CYCLE_CLOSED_RECEIPT_SHA256 = (
+    "cc1d5503c427e83edbd5792cd7798b4d7df6b977511c5a386fa893e3d1dcf857"
+)
+FINAL_CYCLE_CLOSED_USAGE = 32
 TERMINAL_STATUSES = {
     "success",
     "failed",
@@ -159,6 +1717,632 @@ def canonical_doc(raw: str) -> Path:
 
 def doc_id(doc: Path) -> str:
     return hashlib.sha256(os.fsencode(doc)).hexdigest()[:16]
+
+
+def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
+    authority = SCOPED_GLOBAL_CEILING_OVERRIDES.get(str(doc))
+    if authority is None:
+        return GLOBAL_MAX_MODEL_LAUNCHES, None
+    cycle_weight = authority.get("authorized_cycle_weight")
+    if cycle_weight is None:
+        cycle_arithmetic_valid = True
+    else:
+        prior_usage = authority.get("prior_usage")
+        additional_slots = authority.get("additional_slots")
+        new_ceiling = authority.get("new_ceiling")
+        phase_plan = authority.get("authorized_phase_plan")
+        phase_plan_valid = (
+            isinstance(phase_plan, list)
+            and bool(phase_plan)
+            and all(
+                isinstance(step, dict)
+                and set(step) == {"phase", "weight", "family"}
+                and step.get("phase") in PHASE_WEIGHT
+                and type(step.get("weight")) is int
+                and step.get("weight") == PHASE_WEIGHT[step["phase"]]
+                and step.get("family") in {"codex", "claude", "grok"}
+                for step in phase_plan
+            )
+        )
+        cycle_arithmetic_valid = (
+            type(cycle_weight) is int
+            and type(prior_usage) is int
+            and type(additional_slots) is int
+            and type(new_ceiling) is int
+            and phase_plan_valid
+            and cycle_weight > 0
+            and additional_slots > 0
+            and new_ceiling == prior_usage + additional_slots
+            and cycle_weight == additional_slots
+            and cycle_weight == sum(step["weight"] for step in phase_plan)
+        )
+    authorized_artifact_sha = authority.get("authorized_artifact_sha256")
+    artifact_scope_valid = (
+        authorized_artifact_sha is None
+        or is_sha256(authorized_artifact_sha)
+    )
+    common_valid = (
+        authority.get("doc_id") == doc_id(doc)
+        and authority.get("default_ceiling") == GLOBAL_MAX_MODEL_LAUNCHES
+        and cycle_arithmetic_valid
+        and artifact_scope_valid
+    )
+    if authority.get("authority_id") == "ZN6-01A-USER-ACK-2026-08-22-TO-36":
+        specific_valid = (
+            authority.get("previous_scoped_ceiling") == 20
+            and authority.get("intermediate_authorized_ceiling") == 24
+            and authority.get("additional_slots") == 12
+            and authority.get("new_ceiling") == 36
+        )
+    elif authority.get("authority_id") == "ZN6-E2A3A1-USER-PASS-2026-08-23-CHECKPOINT-30-34":
+        specific_valid = (
+            authority.get("authority_reference")
+            == "user accepted zero-writer threat model and said pass on 2026-08-23"
+            and authority.get("previous_scoped_ceiling") == 30
+            and authority.get("authorized_max_ceiling") == 34
+            and authority.get("checkpoint_interval") == 4
+            and authority.get("prior_usage") == 30
+            and authority.get("additional_slots") == 4
+            and authority.get("new_ceiling") == 34
+        )
+    elif (
+        authority.get("authority_id")
+        == "ZN6-ABC-RUNTIME-I4-AUDIT-2026-08-25-27-31"
+    ):
+        exact_keys = {
+            "authority_id",
+            "doc_id",
+            "scope",
+            "authority_reference",
+            "drift_audit",
+            "authorized_artifact_sha256",
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "authorized_phase_plan",
+            "quota_conservation_constraints_removed",
+            "authority_continuation_kind",
+            "new_ceiling",
+        }
+        exact_integer_fields = {
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "new_ceiling",
+        }
+        specific_valid = (
+            set(authority) == exact_keys
+            and all(
+                type(authority.get(field)) is int for field in exact_integer_fields
+            )
+            and authority.get("scope")
+            == (
+                "ABC runtime I4-pinned v17 exact revision after bounded status admission, "
+                "RESYNC rearm, status egress, and feature-disable completion remediation; "
+                "one Codex fanout then one Claude xfamily"
+            )
+            and authority.get("authority_reference")
+            == (
+                "parent scoped drift audit authorized one bounded exact-revision cycle "
+                "from canonical ledger usage 27 on 2026-08-25"
+            )
+            and exact_json_equal(
+                authority.get("drift_audit"),
+                {
+                    "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                    "prior_review_artifact_sha256": (
+                        "6e116691a6b4a5be6ad5de308a06697a14f28943bf956aa5150b720259fe1b60"
+                    ),
+                    "authorized_artifact_sha256": (
+                        "0ade043db0a7482d29762b0cbebb0d475d50e0c6103730a42a211e83eb14dcff"
+                    ),
+                    "prior_review_finding_count": 4,
+                    "remediated_roots": [
+                        "status_admission_projection",
+                        "resync_corrupt_active_rearm",
+                        "status_egress_private_buffer_generation_protocol",
+                        "feature_disable_actual_a_vs_old_bc_completion_semantics",
+                    ],
+                    "frozen_implementation_commit": (
+                        "847856de48f21ff6a5b299a57e4c563b8a8af375"
+                    ),
+                    "v17_contract_sha256": (
+                        "5960f8b96a53e27f8c411a6df00721a6640febbe70b7fb5a731b6c52b38ef4e3"
+                    ),
+                    "v17_receipt_sha256": (
+                        "fe8887becdcbae537347e63432d3389f34712bf786aab8fcf74a71178c998f3e"
+                    ),
+                    "v17_manifest_sha256": (
+                        "bc56ab8a4b979407f9bd874a5eaaa1206bd90cd59d2f3c027f0bff3f6f0cb807"
+                    ),
+                    "outcome_changed": False,
+                    "calibration_values_changed": False,
+                    "implementation_authority_changed": False,
+                    "consumer_authority_changed": False,
+                    "rom_authority_changed": False,
+                    "flash_authority_added": False,
+                    "hardware_authority_added": False,
+                    "classification": "BOUNDED_FINDING_REMEDIATION",
+                },
+            )
+            and authority.get("authorized_artifact_sha256")
+            == "0ade043db0a7482d29762b0cbebb0d475d50e0c6103730a42a211e83eb14dcff"
+            and authority.get("previous_scoped_ceiling") == 27
+            and authority.get("authorized_max_ceiling") == 31
+            and authority.get("checkpoint_interval") == 4
+            and authority.get("prior_usage") == 27
+            and authority.get("additional_slots") == 4
+            and authority.get("authorized_cycle_weight") == 4
+            and exact_json_equal(
+                authority.get("authorized_phase_plan"),
+                [
+                    {"phase": "fanout", "weight": 3, "family": "codex"},
+                    {"phase": "xfamily", "weight": 1, "family": "claude"},
+                ],
+            )
+            and authority.get("quota_conservation_constraints_removed") is True
+            and authority.get("authority_continuation_kind")
+            == "ONE_EXACT_REVISION_COMPLETE_CYCLE"
+            and authority.get("new_ceiling") == 31
+        )
+    elif (
+        authority.get("authority_id")
+        == "ZN6-ABC-FP-ORCHESTRATOR-AUDIT-2026-08-24-14-18"
+    ):
+        exact_keys = {
+            "authority_id", "doc_id", "scope", "authority_reference",
+            "drift_audit", "authorized_artifact_sha256", "default_ceiling",
+            "previous_scoped_ceiling", "authorized_max_ceiling",
+            "checkpoint_interval", "prior_usage", "additional_slots",
+            "authorized_cycle_weight", "authorized_phase_plan",
+            "authority_continuation_kind", "new_ceiling",
+        }
+        exact_integer_fields = {
+            "default_ceiling", "previous_scoped_ceiling", "authorized_max_ceiling",
+            "checkpoint_interval", "prior_usage", "additional_slots",
+            "authorized_cycle_weight", "new_ceiling",
+        }
+        specific_valid = (
+            set(authority) == exact_keys
+            and all(type(authority.get(field)) is int for field in exact_integer_fields)
+            and authority.get("scope")
+            == (
+                "ABC FP calibration exact revision after replay shared-oracle remediation; "
+                "one Codex fanout then one Claude xfamily"
+            )
+            and authority.get("authority_reference")
+            == (
+                "user explicitly reset review limits and delegated autonomous completion "
+                "on 2026-08-24"
+            )
+            and exact_json_equal(
+                authority.get("drift_audit"),
+                {
+                    "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                    "prior_artifact_sha256": (
+                        "0ffafbfa8b07a9f21f0110aef921aa4609e39f9a472cc931d504c0b15cc10df2"
+                    ),
+                    "authorized_artifact_sha256": (
+                        "e430616b0761f71a8a7c4a4c8775902d9b496895e08ef42c2d0b33861ec2e7cf"
+                    ),
+                    "prior_lines": 153,
+                    "authorized_lines": 158,
+                    "blocking_root_count": 1,
+                    "blocking_root": "replay.shared_oracle",
+                    "independent_oracle_sha256": (
+                        "6807b6c414ce7873f943aa9ef51a63716d5bf95c4181119eec46782a49e809a7"
+                    ),
+                    "oracle_tests_sha256": (
+                        "6ea6791da0e45d142a70d78cc642bb03874224d3bd43289453c9e0929f45cbc2"
+                    ),
+                    "executable_evidence_sha256": (
+                        "ef85505c0f0e899f1e939ef367f92986097cc3c655872ce3fb8f4b0f7c8ff8c0"
+                    ),
+                    "dedicated_tests": 37,
+                    "full_tests": 399,
+                    "outcome_changed": False,
+                    "calibration_values_changed": False,
+                    "implementation_authority_changed": False,
+                    "rom_authority_changed": False,
+                    "flash_authority_added": False,
+                    "classification": "BOUNDED_FINDING_REMEDIATION",
+                },
+            )
+            and authority.get("authorized_artifact_sha256")
+            == "e430616b0761f71a8a7c4a4c8775902d9b496895e08ef42c2d0b33861ec2e7cf"
+            and authority.get("previous_scoped_ceiling") == 16
+            and authority.get("authorized_max_ceiling") == 18
+            and authority.get("checkpoint_interval") == 4
+            and authority.get("prior_usage") == 14
+            and authority.get("additional_slots") == 4
+            and authority.get("authorized_cycle_weight") == 4
+            and exact_json_equal(
+                authority.get("authorized_phase_plan"),
+                [
+                    {"phase": "fanout", "weight": 3, "family": "codex"},
+                    {"phase": "xfamily", "weight": 1, "family": "claude"},
+                ],
+            )
+            and authority.get("authority_continuation_kind")
+            == "ONE_EXACT_REVISION_COMPLETE_CYCLE"
+            and authority.get("new_ceiling") == 18
+        )
+    elif (
+        authority.get("authority_id")
+        == "ZN6-S08A-ORCHESTRATOR-AUDIT-2026-08-24-REV20-76-80"
+    ):
+        exact_keys = {
+            "authority_id",
+            "doc_id",
+            "scope",
+            "authority_reference",
+            "drift_audit",
+            "authorized_artifact_sha256",
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "authorized_phase_plan",
+            "authority_continuation_kind",
+            "new_ceiling",
+        }
+        exact_integer_fields = {
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "new_ceiling",
+        }
+        specific_valid = (
+            set(authority) == exact_keys
+            and all(
+                type(authority.get(field)) is int for field in exact_integer_fields
+            )
+            and authority.get("scope")
+            == (
+                "S08A Claude-authored revision 20 exact design review; "
+                "one Codex fanout then one Claude xfamily"
+            )
+            and authority.get("authority_reference")
+            == (
+                "user defined the global fuse as an orchestrator drift-audit "
+                "checkpoint and delegated bounded continuation on 2026-08-23"
+            )
+            and exact_json_equal(
+                authority.get("drift_audit"),
+                {
+                    "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                    "revision_19_artifact_sha256": (
+                        "792d9e230ceda396c33c03d4081b27943a6b5003accb1c811c3f0c6998aec11e"
+                    ),
+                    "revision_20_artifact_sha256": (
+                        "3239fd7debc143ec32de23c88a56bf6f73ca6b5ac81d6e1ceed4884c9d01b9c6"
+                    ),
+                    "revision_19_lines": 5694,
+                    "revision_20_lines": 5793,
+                    "same_family_finding_count": 9,
+                    "cross_family_finding_count": 6,
+                    "blocking_root_count": 2,
+                    "authoring_receipt_sha256": (
+                        "8b8f28e56b48f18e3374d72432a40aafdeb8c53fc8df4fb273a843fa89fc9b86"
+                    ),
+                    "lifecycle_status_sha256": (
+                        "ef4fd5e5ceb3b639e658b20ea127f4a97be1d728de372f03d1975564bc284a9d"
+                    ),
+                    "epic_sha256": (
+                        "93ae8e3cacf296beb7dbe331b17eee5abd94544078da5e3b983f0fb4d2b46725"
+                    ),
+                    "accepted_remediation_root_count": 2,
+                    "parent_audit_same_root_count": 0,
+                    "parent_audit_fix_passes": 2,
+                    "bounded_calibration_authorization_added": False,
+                    "rejected_scope_expansions": [
+                        "bootstrap script implementation",
+                        "new artifact or acknowledgement type",
+                        "daemon, service, catalog, or lock",
+                        "ROM or hardware authorization",
+                    ],
+                    "outcome_changed": False,
+                    "component_inventory_changed": False,
+                    "implementation_authority_changed": False,
+                    "rom_authority_changed": False,
+                    "classification": "BOUNDED_FINDING_REMEDIATION",
+                },
+            )
+            and authority.get("authorized_artifact_sha256")
+            == "3239fd7debc143ec32de23c88a56bf6f73ca6b5ac81d6e1ceed4884c9d01b9c6"
+            and authority.get("previous_scoped_ceiling") == 76
+            and authority.get("authorized_max_ceiling") == 80
+            and authority.get("checkpoint_interval") == 4
+            and authority.get("prior_usage") == 76
+            and authority.get("additional_slots") == 4
+            and authority.get("authorized_cycle_weight") == 4
+            and exact_json_equal(
+                authority.get("authorized_phase_plan"),
+                [
+                    {"phase": "fanout", "weight": 3, "family": "codex"},
+                    {"phase": "xfamily", "weight": 1, "family": "claude"},
+                ],
+            )
+            and authority.get("authority_continuation_kind")
+            == "ONE_EXACT_REVISION_COMPLETE_CYCLE"
+            and authority.get("new_ceiling") == 80
+        )
+    elif (
+        authority.get("authority_id")
+        == "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-SEQ4689-SCOPE4708-4709-23-27"
+    ):
+        exact_keys = {
+            "authority_id",
+            "doc_id",
+            "scope",
+            "authority_reference_mailbox_seq",
+            "scope_correction_mailbox_seqs",
+            "prior_authority_id",
+            "scope_basis_campaign_id",
+            "scope_basis_claim_id",
+            "scope_basis_review_output_sha256",
+            "scope_basis_finding_id",
+            "scope_basis_root_cause_id",
+            "scope_basis_reported_severity",
+            "scope_corrected_classification",
+            "scope_corrected_rom_admission_blocker",
+            "scope_correction_is_safety_remediation",
+            "removed_transactional_recorder_gates",
+            "retained_operational_requirements",
+            "authorized_artifact_sha256",
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "authorized_phase_plan",
+            "quota_conservation_constraints_removed",
+            "authority_continuation_kind",
+            "new_ceiling",
+        }
+        exact_integer_fields = {
+            "authority_reference_mailbox_seq",
+            "default_ceiling",
+            "previous_scoped_ceiling",
+            "authorized_max_ceiling",
+            "checkpoint_interval",
+            "prior_usage",
+            "additional_slots",
+            "authorized_cycle_weight",
+            "new_ceiling",
+        }
+        specific_valid = (
+            set(authority) == exact_keys
+            and all(
+                type(authority.get(field)) is int for field in exact_integer_fields
+            )
+            and authority.get("scope")
+            == (
+                "F0 overlay scope-corrected proportional operational-boundary "
+                "exact WIRE review; one Codex fanout then one Claude xfamily"
+            )
+            and authority.get("authority_reference_mailbox_seq") == 4689
+            and exact_json_equal(
+                authority.get("scope_correction_mailbox_seqs"), [4708, 4709]
+            )
+            and authority.get("prior_authority_id")
+            == "ZN6-KNOCK-F0-USER-AUTH-2026-08-23-SEQ4689-19-23"
+            and authority.get("scope_basis_campaign_id")
+            == "e6348644-1bea-45cf-92c1-0192cf06cb5d"
+            and authority.get("scope_basis_claim_id")
+            == "396758f8-fbe5-4301-8998-c81da0a96b63"
+            and authority.get("scope_basis_review_output_sha256")
+            == "6f9af979bc9fb0c18b565cd03c17da962ded039d8c85e8e26846bd609af50721"
+            and authority.get("scope_basis_finding_id") == "XF-R2-001"
+            and authority.get("scope_basis_root_cause_id")
+            == "recorder.namespace_generation_unbound"
+            and authority.get("scope_basis_reported_severity") == "HIGH"
+            and authority.get("scope_corrected_classification")
+            == "OPTIONAL_OPERATIONAL_HARDENING"
+            and authority.get("scope_corrected_rom_admission_blocker") is False
+            and authority.get("scope_correction_is_safety_remediation") is False
+            and exact_json_equal(
+                authority.get("removed_transactional_recorder_gates"),
+                ["REC_PATH_DURABLE", "REC_PROFILE_DURABLE"],
+            )
+            and exact_json_equal(
+                authority.get("retained_operational_requirements"),
+                [
+                    "RAWOUT_ONLY_F0_ANALYSIS",
+                    "OUT_NON_ADMISSIBLE_UNDER_F0_SINGLE_PENDING_V1",
+                    "ACTIVE_MODE_01_SEPARATE_CAN_AUTHORITY",
+                ],
+            )
+            and authority.get("authorized_artifact_sha256")
+            == "084a4c8dd7ea0fca25df7256039617b4defa337117a8366db1de073f45f16637"
+            and authority.get("previous_scoped_ceiling") == 23
+            and authority.get("authorized_max_ceiling") == 27
+            and authority.get("checkpoint_interval") == 4
+            and authority.get("prior_usage") == 23
+            and authority.get("additional_slots") == 4
+            and authority.get("authorized_cycle_weight") == 4
+            and exact_json_equal(
+                authority.get("authorized_phase_plan"),
+                [
+                    {"phase": "fanout", "weight": 3, "family": "codex"},
+                    {"phase": "xfamily", "weight": 1, "family": "claude"},
+                ],
+            )
+            and authority.get("quota_conservation_constraints_removed") is True
+            and authority.get("authority_continuation_kind")
+            == "STANDING_FURTHER_CYCLE_AUTHORITY"
+            and authority.get("new_ceiling") == 27
+        )
+    else:
+        specific_valid = False
+    if not common_valid or not specific_valid:
+        raise StateError("scoped global fuse authority is malformed")
+    return int(authority["new_ceiling"]), dict(authority)
+
+
+def enforce_scoped_artifact_sha(
+    authority: dict[str, object] | None, current_artifact_sha: str
+) -> None:
+    """Bind a structurally valid scoped authority to live document bytes."""
+    if authority is None:
+        return
+    expected = authority.get("authorized_artifact_sha256")
+    if expected is not None and expected != current_artifact_sha:
+        raise StateError("scoped fuse authority belongs to another exact artifact")
+
+
+def exact_json_equal(left: object, right: object) -> bool:
+    """Compare JSON-shaped authority values without bool/int coercion."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        assert isinstance(right, dict)
+        return set(left) == set(right) and all(
+            exact_json_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        assert isinstance(right, list)
+        return len(left) == len(right) and all(
+            exact_json_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return left == right
+
+
+def scoped_reviewer_families(
+    authority: dict[str, object], phase: str
+) -> set[str]:
+    phase_plan = authority.get("authorized_phase_plan")
+    if phase_plan is None:
+        return set()
+    if not isinstance(phase_plan, list):
+        raise StateError("scoped launch plan is malformed")
+    return {
+        str(step["family"])
+        for step in phase_plan
+        if isinstance(step, dict) and step.get("phase") == phase
+    }
+
+
+def scoped_launch_plan_step(
+    authority: dict[str, object], total_used: int
+) -> tuple[int, dict[str, object]] | None:
+    """Resolve one exact authorized phase at a model-launch boundary."""
+    phase_plan = authority.get("authorized_phase_plan")
+    if phase_plan is None:
+        return None
+    if not isinstance(phase_plan, list):
+        raise StateError("scoped launch plan is malformed")
+    prior_usage = authority.get("prior_usage")
+    if type(prior_usage) is not int or total_used < prior_usage:
+        raise StateError("scoped launch usage predates its authority")
+    offset = total_used - prior_usage
+    consumed = 0
+    for index, step in enumerate(phase_plan):
+        if not isinstance(step, dict) or type(step.get("weight")) is not int:
+            raise StateError("scoped launch plan step is malformed")
+        if offset == consumed:
+            return index, dict(step)
+        consumed += int(step["weight"])
+        if offset < consumed:
+            raise StateError("scoped launch usage falls inside a phase weight")
+    if offset == consumed:
+        return None
+    raise StateError("scoped launch usage exceeds its authorized phase plan")
+
+
+def enforce_scoped_launch_plan(
+    authority: dict[str, object],
+    total_used: int,
+    phase: str,
+    launches: list[object],
+    artifact_sha: str,
+    review_protocol_sha: str,
+    *,
+    reviewer_family: str | None,
+    require_reviewer_family: bool,
+) -> str | None:
+    """Fail closed unless the requested claim is the next exact scoped phase."""
+    phase_plan = authority.get("authorized_phase_plan")
+    if phase_plan is None:
+        return None
+    resolved = scoped_launch_plan_step(authority, total_used)
+    if resolved is None:
+        raise TransitionError("scoped launch plan is exhausted")
+    index, expected = resolved
+    expected_phase = expected.get("phase")
+    expected_family = expected.get("family")
+    if phase != expected_phase:
+        raise TransitionError(
+            f"scoped launch plan requires {expected_phase}, not {phase}"
+        )
+    actual_family = "codex" if phase in {"fanout", "targeted"} else reviewer_family
+    if require_reviewer_family and actual_family != expected_family:
+        raise TransitionError(
+            f"scoped launch plan requires reviewer family {expected_family}"
+        )
+    if index:
+        if not isinstance(phase_plan, list) or len(launches) < index:
+            raise TransitionError("scoped launch plan lacks its preceding claims")
+        prior_launches = launches[-index:]
+        for expected_prior, prior_launch in zip(phase_plan[:index], prior_launches):
+            if (
+                not isinstance(expected_prior, dict)
+                or not isinstance(prior_launch, dict)
+                or prior_launch.get("phase") != expected_prior.get("phase")
+                or prior_launch.get("model_launches") != expected_prior.get("weight")
+                or prior_launch.get("status") != "success"
+                or prior_launch.get("artifact_sha") != artifact_sha
+                or prior_launch.get("protocol_sha") != review_protocol_sha
+                or not exact_json_equal(
+                    prior_launch.get("global_fuse_authority"), authority
+                )
+                or prior_launch.get("replacement_for") is not None
+            ):
+                raise TransitionError(
+                    "scoped launch plan preceding claim is absent or mismatched"
+                )
+    return str(expected_family) if expected_family is not None else None
+
+
+def scope_review_checkpoint_required(doc: Path, used: int) -> bool:
+    authority = SCOPED_GLOBAL_CEILING_OVERRIDES.get(str(doc))
+    return bool(
+        authority
+        and authority.get("checkpoint_interval") == 4
+        and type(authority.get("new_ceiling")) is int
+        and used >= int(authority["new_ceiling"])
+    )
+
+
+def final_cycle_is_closed(doc: Path, used: int) -> bool:
+    """Hard-stop the exact user-scoped target after its one final review pair."""
+    if str(doc) != FINAL_CYCLE_CLOSED_DOC or used < FINAL_CYCLE_CLOSED_USAGE:
+        return False
+    if (
+        not FINAL_CYCLE_CLOSED_RECEIPT.is_file()
+        or sha256_file(FINAL_CYCLE_CLOSED_RECEIPT)
+        != FINAL_CYCLE_CLOSED_RECEIPT_SHA256
+    ):
+        raise StateError("final-cycle closure receipt is missing or changed")
+    return True
 
 
 def file_sha(doc: Path) -> str:
@@ -470,7 +2654,36 @@ def load_ledger(doc: Path, *, create: bool) -> dict[str, object]:
                 launch["status"] = "success" if completed else "failed"
             if launch.get("status") not in VALID_STATUSES:
                 raise StateError("campaign launch has an invalid status")
+            fuse_authority = launch.get("global_fuse_authority")
+            if fuse_authority is not None:
+                _, expected_authority = global_ceiling_policy(doc)
+                accepted_authorities = (
+                    expected_authority,
+                    *HISTORICAL_SCOPED_GLOBAL_CEILING_AUTHORITIES.get(str(doc), ()),
+                )
+                if not any(
+                    exact_json_equal(fuse_authority, accepted)
+                    for accepted in accepted_authorities
+                ):
+                    raise StateError("campaign launch has invalid global fuse authority")
+            reviewer_family = launch.get("reviewer_family")
+            if reviewer_family is not None and (
+                phase != "xfamily" or reviewer_family not in {"claude", "grok"}
+            ):
+                raise StateError("campaign launch has an invalid reviewer family")
+            scoped_plan = (
+                fuse_authority is not None
+                and fuse_authority.get("authorized_phase_plan") is not None
+            )
+            if scoped_plan and phase == "xfamily" and reviewer_family not in (
+                scoped_reviewer_families(fuse_authority, "xfamily")
+            ):
+                raise StateError(
+                    "scoped xfamily launch is missing its authorized reviewer family"
+                )
             owner = launch.get("owner")
+            if scoped_plan and owner is None:
+                raise StateError("scoped launch is missing its registered adapter owner")
             if owner is not None:
                 required_owner = {"pid", "start_ticks", "ppid", "pgid", "adapter_kind"}
                 if (
@@ -1439,10 +3652,33 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
         transition = next_transition(launches)
         total_used = model_launches(campaigns)
         campaign_ceiling = base_ceiling()
-        global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
+        global_ceiling, fuse_authority = global_ceiling_policy(doc)
         last = launches[-1] if launches else None
         current_artifact_sha = file_sha(doc)
         current_protocol_sha = protocol_sha()
+        enforce_scoped_artifact_sha(fuse_authority, current_artifact_sha)
+        if scope_review_checkpoint_required(doc, total_used):
+            return {
+                "kind": "budget-blocked",
+                "reason": "SCOPE_REVIEW_CHECKPOINT_REQUIRED",
+                "ledger_sha": ledger_sha,
+                "used": total_used,
+                "ceiling": total_used,
+                "campaign_used": model_launches([campaign]),
+                "campaign_ceiling": campaign_ceiling,
+                "global_fuse_authority": fuse_authority,
+            }
+        if final_cycle_is_closed(doc, total_used):
+            return {
+                "kind": "budget-blocked",
+                "reason": "USER_AUTHORIZED_FINAL_CYCLE_EXHAUSTED",
+                "ledger_sha": ledger_sha,
+                "used": total_used,
+                "ceiling": total_used,
+                "campaign_used": model_launches([campaign]),
+                "campaign_ceiling": campaign_ceiling,
+                "global_fuse_authority": fuse_authority,
+            }
         rollover_available = (
             isinstance(last, dict)
             and last.get("status") not in NONTERMINAL_STATUSES
@@ -1470,6 +3706,7 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
                 "ceiling": global_ceiling,
                 "campaign_used": model_launches([campaign]),
                 "campaign_ceiling": campaign_ceiling,
+                "global_fuse_authority": fuse_authority,
             }
         campaign_used = 0 if rollover_available else model_launches([campaign])
         replacement = (
@@ -1477,6 +3714,28 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
             if rollover_available
             else replacement_source(launches, str(transition["phase"]))
         )
+        required_reviewer_family = None
+        if fuse_authority is not None:
+            try:
+                required_reviewer_family = enforce_scoped_launch_plan(
+                    fuse_authority,
+                    total_used,
+                    str(transition["phase"]),
+                    launches,
+                    current_artifact_sha,
+                    current_protocol_sha,
+                    reviewer_family=None,
+                    require_reviewer_family=False,
+                )
+            except TransitionError as exc:
+                return {
+                    "kind": "transition-blocked",
+                    "reason": str(exc),
+                    "ledger_sha": ledger_sha,
+                    "used": total_used,
+                    "ceiling": global_ceiling,
+                    "global_fuse_authority": fuse_authority,
+                }
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,
@@ -1492,6 +3751,8 @@ def campaign_admission_status(doc: Path) -> dict[str, object]:
             "ledger_sha": ledger_sha,
             "used": total_used,
             "ceiling": global_ceiling,
+            "global_fuse_authority": fuse_authority,
+            "required_reviewer_family": required_reviewer_family,
         }
 
 
@@ -1538,11 +3799,14 @@ def claim(
     owner_pid: int | None = None,
     adapter_kind: str | None = None,
     expected_artifact_sha: str | None = None,
+    reviewer_family: str | None = None,
 ) -> None:
     doc = canonical_doc(doc_raw)
     round_no = positive_int(round_raw, "round")
     if (owner_pid is None) != (adapter_kind is None):
         raise UsageError("--owner-pid and --adapter-kind must be supplied together")
+    if reviewer_family is not None and phase != "xfamily":
+        raise UsageError("--reviewer-family is valid only for xfamily claims")
     owner: dict[str, object] | None = None
     if owner_pid is not None:
         if owner_pid != os.getppid():
@@ -1662,7 +3926,27 @@ def claim(
         campaign_ceiling = base_ceiling()
         campaign_used = model_launches([campaign])
         total_used = model_launches(campaigns)
-        global_ceiling = GLOBAL_MAX_MODEL_LAUNCHES
+        if scope_review_checkpoint_required(doc, total_used):
+            raise BudgetDenied("SCOPE_REVIEW_CHECKPOINT_REQUIRED")
+        if final_cycle_is_closed(doc, total_used):
+            raise BudgetDenied("USER_AUTHORIZED_FINAL_CYCLE_EXHAUSTED")
+        global_ceiling, fuse_authority = global_ceiling_policy(doc)
+        enforce_scoped_artifact_sha(fuse_authority, current_artifact_sha)
+        if fuse_authority is not None:
+            if fuse_authority.get("authorized_phase_plan") is not None and owner is None:
+                raise TransitionError(
+                    "scoped launch plan requires a registered official adapter owner"
+                )
+            enforce_scoped_launch_plan(
+                fuse_authority,
+                total_used,
+                phase,
+                launches,
+                current_artifact_sha,
+                current_protocol_sha,
+                reviewer_family=reviewer_family,
+                require_reviewer_family=True,
+            )
         admission = bounded_admission_decision(
             campaign_used,
             campaign_ceiling,
@@ -1696,6 +3980,10 @@ def claim(
             launch_payload["owner"] = owner
         if replacement is not None:
             launch_payload["replacement_for"] = replacement["claim_id"]
+        if fuse_authority is not None:
+            launch_payload["global_fuse_authority"] = fuse_authority
+        if reviewer_family is not None:
+            launch_payload["reviewer_family"] = reviewer_family
         launches.append(launch_payload)
         atomic_json(ledger_path(doc), ledger)
     print(
@@ -1703,7 +3991,14 @@ def claim(
         f"{total_used + charged_weight}/{global_ceiling}, "
         f"campaign model launches {campaign_used + charged_weight}/{campaign_ceiling}, "
         f"round {round_no} {phase}, attempt {attempt}; "
-        f"PROTOCOL_SHA={claim_protocol_sha}; CLAIM_ID={claim_id}"
+        + (
+            f"FUSE_AUTHORITY={fuse_authority['authority_id']} "
+            f"old={fuse_authority['previous_scoped_ceiling']} "
+            f"new={fuse_authority['new_ceiling']}; "
+            if fuse_authority is not None
+            else ""
+        )
+        + f"PROTOCOL_SHA={claim_protocol_sha}; CLAIM_ID={claim_id}"
     )
 
 
@@ -2017,6 +4312,7 @@ def parser() -> argparse.ArgumentParser:
     claim_parser.add_argument("--owner-pid", type=int)
     claim_parser.add_argument("--adapter-kind", choices=("fanout", "targeted", "xfamily"))
     claim_parser.add_argument("--expected-artifact-sha")
+    claim_parser.add_argument("--reviewer-family", choices=("claude", "grok"))
     finish_parser = commands.add_parser("finish")
     finish_parser.add_argument("doc")
     finish_parser.add_argument("claim_id")
@@ -2056,6 +4352,7 @@ def main() -> int:
                 args.owner_pid,
                 args.adapter_kind,
                 args.expected_artifact_sha,
+                args.reviewer_family,
             )
         elif args.command == "finish":
             finish(args.doc, args.claim_id, args.status)

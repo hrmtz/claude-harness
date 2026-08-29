@@ -345,6 +345,31 @@ class PreflightTest(unittest.TestCase):
         with self.assertRaisesRegex(preflight.UnsafeInput, "duplicate root_cause_id"):
             self.evaluate()
 
+    def test_duplicate_impact_within_one_finding_is_rejected(self) -> None:
+        finding = self.finding(
+            "M1",
+            "duplicate.impact",
+            impact=["technical", "technical"],
+        )
+        self.write_reviews({"MELCHIOR": [finding]})
+        with self.assertRaisesRegex(preflight.UnsafeInput, "duplicate impact"):
+            self.evaluate()
+
+    def test_reviewer_process_failure_classification_is_bounded(self) -> None:
+        self.assertEqual(preflight.classify_reviewer_process(0, 0), "ok")
+        self.assertEqual(
+            preflight.classify_reviewer_process(124, 0), "provider-timeout"
+        )
+        self.assertEqual(
+            preflight.classify_reviewer_process(137, 0), "provider-timeout"
+        )
+        self.assertEqual(
+            preflight.classify_reviewer_process(42, 0), "provider-exit"
+        )
+        self.assertEqual(
+            preflight.classify_reviewer_process(0, 23), "scrubber-failure"
+        )
+
     def test_mutation_detected_during_final_resample(self) -> None:
         with mock.patch.object(
             preflight,

@@ -415,7 +415,7 @@ schema startup rejection used by the claim-bound replacement path.
 Fan-out lock I/O failure exits `2`; live lock contention exits `5`.
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (fallback legacy `MAGI_XFAMILY_MODEL`, default
-`claude-fable-5`) · `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`) ·
+`claude-fable-5`) · `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.6`) ·
 `MAGI_XFAMILY_TIMEOUT_S` (default `900`) · `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` (default `16`, tightening
 only) · `MAGI_FANOUT_TIMEOUT_S` (default/max `900`, tightening only).
 `MAGI_CANONICAL_SKILLS_DIR` may override the canonical `harness-magi/skills` template root for a

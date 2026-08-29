@@ -43,9 +43,9 @@ if [ "\${STUB_FAIL:-}" = 1 ]; then
 fi
 mkdir -p "$TMP/home/.grok/sessions/workspace/$SID"
 cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
-{"type":"assistant","content":"reviewing","model_id":"grok-4.5","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
+{"type":"assistant","content":"reviewing","model_id":"grok-4.6","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
 {"type":"tool_result","content":"verified"}
-{"type":"assistant","content":"done","model_id":"grok-4.5","tool_calls":[]}
+{"type":"assistant","content":"done","model_id":"grok-4.6","tool_calls":[]}
 JSONL
 if [ -n "\${STUB_TRANSCRIPT_BYTES:-}" ]; then
   python3 - "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" \
@@ -53,7 +53,7 @@ if [ -n "\${STUB_TRANSCRIPT_BYTES:-}" ]; then
 import sys
 path, raw_target = sys.argv[1:3]
 target = int(raw_target)
-prefix = b'{"type":"assistant","content":"done","model_id":"grok-4.5","tool_calls":[],"padding":"'
+prefix = b'{"type":"assistant","content":"done","model_id":"grok-4.6","tool_calls":[],"padding":"'
 suffix = b'"}\n'
 if target < len(prefix) + len(suffix):
     raise SystemExit("invalid transcript fixture size")
@@ -107,7 +107,7 @@ python3 - "$STATE/round_2_xfamily.meta.json" <<'PY' >/dev/null 2>&1
 import json, sys
 m=json.load(open(sys.argv[1]))
 assert m["reviewer_family"] == "grok"
-assert m["model_id"] == "grok-4.5"
+assert m["model_id"] == "grok-4.6"
 assert m["session_id"] == "11111111-2222-4333-8444-555555555555"
 assert "/.grok/sessions/" in m["transcript_path"]
 PY
@@ -136,10 +136,10 @@ HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_2_xfamily" \
 
 python3 - "$STATE/round_2_xfamily.meta.json" <<'PY'
 import json, sys
-p=sys.argv[1]; m=json.load(open(p)); m["model_id"]="grok-4.5"; m["model_usage_keys"]=["grok-4.5"]
+p=sys.argv[1]; m=json.load(open(p)); m["model_id"]="grok-4.6"; m["model_usage_keys"]=["grok-4.6"]
 json.dump(m,open(p,"w"),indent=2)
 PY
-printf '{"type":"assistant","content":"late mutation","model_id":"grok-4.5","tool_calls":[]}\n' \
+printf '{"type":"assistant","content":"late mutation","model_id":"grok-4.6","tool_calls":[]}\n' \
     >> "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl"
 HOME="$TMP/home" "$GATE" "$DOC" "$STATE/round_2_xfamily" \
     --orchestrator-family codex --reviewer-family grok >/dev/null 2>&1
@@ -189,7 +189,7 @@ for transcript_bytes in 1048576 1048577; do
   fi
 done
 
-# Grok symmetric to claude g6e: requested grok-4.5 but the transcript served the truncated grok-4.
+# Grok symmetric to claude g6e: requested grok-4.6 but the transcript served the truncated grok-4.
 # The directional served_satisfies must deny this downgrade on the fallback path too.
 SID2="22222222-3333-4444-8555-666666666666"
 TDIR="$TMP/home/.grok/sessions/workspace/$SID2"; mkdir -p "$TDIR"
@@ -202,7 +202,7 @@ import hashlib, json, sys
 doc, prefix, sid, tpath = sys.argv[1:5]
 json.dump({"reviewer":"GROK","round":3,"verdict":"GO","schema_grounding_verdict":"PASS",
            "verify_commands_executed":["rg -n x"],"findings":[]}, open(prefix+".json","w"), indent=2)
-meta={"reviewer_family":"grok","session_id":sid,"model_id":"grok-4","requested_model":"grok-4.5",
+meta={"reviewer_family":"grok","session_id":sid,"model_id":"grok-4","requested_model":"grok-4.6",
       "model_usage_keys":["grok-4"],"num_turns":2,"permission_denials":[],
       "artifact_sha":hashlib.sha256(open(doc,"rb").read()).hexdigest(),"transcript_path":tpath,
       "transcript_sha":hashlib.sha256(open(tpath,"rb").read()).hexdigest(),
@@ -211,7 +211,7 @@ json.dump(meta, open(prefix+".meta.json","w"), indent=2)
 PY
 HOME="$TMP/home" "$GATE" "$DOC" "$STATE/trunc_3_xfamily" \
     --orchestrator-family codex --reviewer-family grok >/dev/null 2>&1
-[ $? -ne 0 ] && ok "Grok truncated served model (grok-4 for requested grok-4.5) rejected" \
+[ $? -ne 0 ] && ok "Grok truncated served model (grok-4 for requested grok-4.6) rejected" \
               || bad "Grok truncation downgrade passed the gate"
 
 echo "test_grok_provider: $pass passed, $fail failed"

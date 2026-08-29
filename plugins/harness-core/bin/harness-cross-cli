@@ -213,9 +213,11 @@ restore_identity() {
         return 0
     fi
     # An isolated child cannot see the tmux socket or target pane, so any
-    # concurrent rename came from outside this launch and must be preserved.
+    # concurrent window rename came from outside this launch and must be
+    # preserved. Pane titles are TUI-owned transient progress text and are not
+    # part of the isolated child's window identity.
     if [ "$isolate_tmux" -eq 1 ]; then
-        if [ "$current_name" != "$window_name" ] || [ "$current_title" != "$pane_title" ]; then
+        if [ "$current_name" != "$window_name" ]; then
             log_event "postflight_external_drift" "$current_name" false
         fi
         return 0

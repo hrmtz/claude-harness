@@ -215,10 +215,20 @@ allowance of 16 weighted model launches across all revision campaigns, without a
 Fan-out admission preserves one weighted launch for its immediately following mandatory
 cross-family review. Reserve denial is a definitive blocked state, never permission to ship; the
 cross-family claim still passes the normal transition and budget guards and is not double-charged.
-At global exhaustion, emit a definitive blocked result for the irreversible boundary. Do not keep
-rerolling until a model happens to say GO and do not pause for user acknowledgement. If the
-ready-to-drive conditions still hold, continue only the reversible warmup and use executable
-evidence to narrow the next design revision.
+At global exhaustion, the current campaign is finished and remains non-plateau. The parent
+orchestrator must not stop merely because the user is away. It must inspect the durable findings
+and autonomously perform one material recovery action: split the slice into independently gated
+sub-slices, narrow the review contract and acceptance conditions to the failing concern, replace
+an invalid primitive, or record a limitation that removes the blocked claim from scope. Then start
+round 1 of a new, explicitly named campaign with a fresh bounded allowance. Preserve the exhausted
+campaign, findings, and linkage; changing only wording, revision hash, state directory, or reviewer
+prompt is not a valid reset. Never reroll an unchanged claim until a model happens to say GO.
+
+The parent irreversible boundary stays blocked until every required recovered sub-slice and their
+integration gate pass. If no honest material decomposition or contract correction exists, emit a
+definitive blocked result for that boundary. Do not pause for user acknowledgement. If the
+ready-to-drive conditions still hold, continue reversible warmup and use executable evidence to
+narrow the recovery campaign.
 
 A cross-family claim must match the exact document and review-protocol identity of its successful
 same-family source. After changing the target, restart at round 1 fan-out in a revision-scoped state

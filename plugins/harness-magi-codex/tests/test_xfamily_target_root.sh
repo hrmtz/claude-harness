@@ -94,9 +94,9 @@ artifact_sha="\$(printf '%s\n' "\$prompt" | sed -n 's/^ARTIFACT SHA256: //p' | h
 round="\$(printf '%s\n' "\$prompt" | sed -n 's/^ROUND: //p' | head -n 1)"
 mkdir -p "$TMP/home/.grok/sessions/workspace/$SID"
 cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
-{"type":"assistant","content":"reviewing","model_id":"grok-4.5","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
+{"type":"assistant","content":"reviewing","model_id":"grok-4.6","tool_calls":[{"id":"x","name":"read_file","arguments":"{}"}]}
 {"type":"tool_result","content":"verified"}
-{"type":"assistant","content":"done","model_id":"grok-4.5","tool_calls":[]}
+{"type":"assistant","content":"done","model_id":"grok-4.6","tool_calls":[]}
 JSONL
 python3 - "\$artifact_id" "\$artifact_sha" "\$round" <<'PY'
 import json, sys

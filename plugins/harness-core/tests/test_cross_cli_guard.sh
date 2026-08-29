@@ -70,6 +70,9 @@ case "${1:-}" in
   external-rename)
     printf '%%7\t@3\tuser-renamed\tuser-title\t1\n' > "$TEST_TMUX_STATE"
     ;;
+  external-title)
+    printf '%%7\t@3\tcodex-parent\tspinner-progress\t1\n' > "$TEST_TMUX_STATE"
+    ;;
   signal)
     tmux rename-window -t %7 kimi-stolen
     trap 'exit 143' TERM
@@ -200,6 +203,19 @@ if run_guard --isolate-tmux -- child external-rename >/dev/null 2>&1 \
   ok "isolated launch preserves unrelated concurrent window renames"
 else
   bad "isolated launch reverted an unrelated window rename"
+fi
+
+printf '%%7\t@3\tcodex-parent\tcodex-parent\t1\n' > "$STATE"
+: > "$LOG"
+isolated_title_stderr="$TMP/isolated-title.stderr"
+if run_guard --isolate-tmux -- child external-title \
+      >/dev/null 2>"$isolated_title_stderr" \
+   && grep -Fq 'spinner-progress' "$STATE" \
+   && ! grep -Fq 'postflight_external_drift' "$isolated_title_stderr" \
+   && ! grep -Fq 'select-pane' "$LOG"; then
+  ok "isolated launch ignores transient pane-title drift"
+else
+  bad "isolated launch treated transient pane-title drift as identity drift"
 fi
 
 printf '%%7\t@3\tshared-parent\tshared-title\t2\n' > "$STATE"

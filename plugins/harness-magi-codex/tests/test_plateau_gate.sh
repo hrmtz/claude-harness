@@ -155,6 +155,61 @@ denied "G8 GO-WITH-REVISE with a CRITICAL finding" "$P"
 P="$TMP/g8b"; mkfind "$P" "GO-WITH-REVISE" 3 "PASS" "HIGH"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G8 GO-WITH-REVISE with a HIGH finding" "$P"
 
+# G8 regression: the exact failure shape from ABC runtime review. Round 1 synthesis carries a
+# CRITICAL; round 2 keeps that source disposition "carried" but duplicates the root as MED.
+# The lower current severity must not erase the unresolved prior blocking severity.
+P="$TMP/g8c"
+mkfind "$P" "GO-WITH-REVISE" 3 "PASS" "MED"
+python3 - "$TMP" "$P" "$DOC_ID" "$SHA" <<'PY'
+import hashlib, json, pathlib, sys
+state = pathlib.Path(sys.argv[1])
+current_path = pathlib.Path(sys.argv[2])
+artifact_id, artifact_sha = sys.argv[3:5]
+source = state / "round_1_gnat.json"
+prior = state / "round_1_bug-hunt_synthesis.json"
+base = {
+    "title": "strict JSON loader accepts non-JSON NaN and Infinity constants",
+    "location": "scripts/verify.py",
+    "rationale": "non-finite constants remain accepted",
+    "required_fix": "reject parse_constant",
+    "confidence": "high",
+    "dup_flag": "new",
+    "missed_angle": "non-finite JSON",
+    "subsystem": "consumer-readiness",
+    "root_cause_id": "ABC-JSON-STRICTNESS-NONFINITE",
+    "affected_invariant": "strict JSON",
+    "changes_design_invariant": False,
+    "relation_to_prior": "new-root",
+}
+source_finding = {"finding_id": "GNAT-R1-001", "severity": "CRITICAL", **base}
+source_payload = {
+    "reviewer": "GNAT", "round": 1, "artifact_id": artifact_id,
+    "artifact_sha": artifact_sha, "verdict": "REVISE",
+    "schema_grounding_verdict": "PASS", "verify_commands_executed": ["rg -n parse_constant scripts"],
+    "source_artifacts": [], "dispositions": [], "findings": [source_finding],
+}
+source.write_text(json.dumps(source_payload))
+synthesis_id = "SYN-round-1-gnat-json-GNAT-R1-001-31c082348c"
+prior_finding = {"finding_id": synthesis_id, "severity": "CRITICAL", **base}
+prior_payload = {
+    "reviewer": "SYNTHESIS", "round": 1, "artifact_id": artifact_id,
+    "artifact_sha": artifact_sha, "verdict": "REVISE",
+    "schema_grounding_verdict": "PASS", "verify_commands_executed": ["rg -n parse_constant scripts"],
+    "source_artifacts": [{"path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}],
+    "dispositions": [{"source_ref": "round_1_gnat.json#GNAT-R1-001", "disposition": "carried", "synthesis_finding_id": synthesis_id}],
+    "findings": [prior_finding],
+}
+prior.write_text(json.dumps(prior_payload))
+current = json.loads(pathlib.Path(str(current_path) + ".json").read_text())
+current["source_artifacts"] = [{"path": "design.md", "sha256": artifact_sha}]
+current["dispositions"] = [{"source_ref": "round_1_gnat.json#GNAT-R1-001", "disposition": "carried", "synthesis_finding_id": synthesis_id}]
+current["findings"][0]["root_cause_id"] = "ABC-JSON-STRICTNESS-NONFINITE"
+current["findings"][0]["relation_to_prior"] = "same-root"
+pathlib.Path(str(current_path) + ".json").write_text(json.dumps(current))
+PY
+mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
+denied "G8 carried prior CRITICAL cannot be downgraded to MED" "$P"
+
 # G9: a reviewer that self-reports ungrounded cannot plateau
 P="$TMP/g9"; mkfind "$P" "GO" 0 "FAIL"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
 denied "G9 schema_grounding_verdict=FAIL" "$P"
