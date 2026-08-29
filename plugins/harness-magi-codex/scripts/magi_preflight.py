@@ -308,6 +308,17 @@ def fail_closed(detail: str) -> dict[str, Any]:
     }
 
 
+def classify_reviewer_process(provider_code: int, scrubber_code: int) -> str:
+    """Return a bounded, content-free reviewer process classification."""
+    if scrubber_code != 0:
+        return "scrubber-failure"
+    if provider_code in {124, 137}:
+        return "provider-timeout"
+    if provider_code != 0:
+        return "provider-exit"
+    return "ok"
+
+
 def evaluate(brief_path: Path, run_manifest_path: Path) -> dict[str, Any]:
     brief = stable_read(brief_path, limit=MAX_BRIEF_BYTES)
     if not brief.raw:

@@ -239,31 +239,28 @@ SCRUB_PIDS=()
 if [ "$rc" -ne 0 ]; then
     FAILURE_STAGE="$STAGE/preflight-failure.json"
     PYTHONDONTWRITEBYTECODE=1 python3 - \
-        "$FAILURE_STAGE" "${PROVIDER_RCS[@]}" "${SCRUB_RCS[@]}" <<'PY'
+        "$SELF_DIR" "$FAILURE_STAGE" "${PROVIDER_RCS[@]}" "${SCRUB_RCS[@]}" <<'PY'
 import json
 import pathlib
 import sys
 
-destination = pathlib.Path(sys.argv[1])
-provider_codes = [int(value) for value in sys.argv[2:5]]
-scrubber_codes = [int(value) for value in sys.argv[5:8]]
+sys.path.insert(0, sys.argv[1])
+import magi_preflight as preflight
+
+destination = pathlib.Path(sys.argv[2])
+provider_codes = [int(value) for value in sys.argv[3:6]]
+scrubber_codes = [int(value) for value in sys.argv[6:9]]
 personas = ("MELCHIOR", "BALTHASAR", "CASPAR")
 reviewers = []
 for persona, provider_code, scrubber_code in zip(
     personas, provider_codes, scrubber_codes
 ):
-    if scrubber_code != 0:
-        classification = "scrubber-failure"
-    elif provider_code in {124, 137}:
-        classification = "provider-timeout"
-    elif provider_code != 0:
-        classification = "provider-exit"
-    else:
-        classification = "ok"
     reviewers.append(
         {
             "reviewer": persona,
-            "classification": classification,
+            "classification": preflight.classify_reviewer_process(
+                provider_code, scrubber_code
+            ),
             "provider_exit_code": provider_code,
             "scrubber_exit_code": scrubber_code,
         }
@@ -288,8 +285,12 @@ PY
 fi
 
 # Validate staged bytes before any canonical output name appears.
+VALIDATION_FAILURE_STAGE="$STAGE/preflight-validation-failure.json"
+validation_rc=0
 PYTHONDONTWRITEBYTECODE=1 python3 - \
-    "$SELF_DIR" "$BRIEF" "${SAFE_OUTPUTS[@]}" <<'PY'
+    "$SELF_DIR" "$BRIEF" "$VALIDATION_FAILURE_STAGE" "${SAFE_OUTPUTS[@]}" <<'PY' \
+    || validation_rc=$?
+import json
 import pathlib
 import sys
 
@@ -299,20 +300,71 @@ import magi_preflight as preflight
 brief = preflight.stable_read(pathlib.Path(sys.argv[2]), limit=preflight.MAX_BRIEF_BYTES)
 lines = brief.raw.splitlines(keepends=True)
 schema = preflight.load_schema("preflight-review.schema.json")
-seen = []
-for raw in sys.argv[3:]:
-    source = preflight.stable_read(pathlib.Path(raw), limit=preflight.MAX_REVIEW_BYTES)
-    payload = preflight.parse_object(source)
-    preflight.validate_review(
-        payload, source=source, brief=brief, brief_lines=lines, review_schema=schema
-    )
-    expected = ("MELCHIOR", "BALTHASAR", "CASPAR")[len(seen)]
-    if payload["reviewer"] != expected:
-        raise preflight.UnsafeInput(
-            f"runner output persona mismatch: expected {expected}, got {payload['reviewer']}"
+diagnostic_path = pathlib.Path(sys.argv[3])
+personas = ("MELCHIOR", "BALTHASAR", "CASPAR")
+reviewers = []
+failed = False
+for expected, raw in zip(personas, sys.argv[4:]):
+    classification = "ok"
+    try:
+        source = preflight.stable_read(
+            pathlib.Path(raw), limit=preflight.MAX_REVIEW_BYTES
         )
-    seen.append(expected)
+    except preflight.UnsafeInput:
+        classification = "invalid-reviewer-output"
+    else:
+        try:
+            payload = preflight.parse_object(source)
+        except preflight.UnsafeInput:
+            classification = "invalid-reviewer-json"
+        else:
+            try:
+                preflight.validate_review(
+                    payload,
+                    source=source,
+                    brief=brief,
+                    brief_lines=lines,
+                    review_schema=schema,
+                )
+            except preflight.UnsafeInput:
+                classification = "invalid-reviewer-content"
+            else:
+                if payload["reviewer"] != expected:
+                    classification = "reviewer-mismatch"
+    failed = failed or classification != "ok"
+    reviewers.append(
+        {
+            "reviewer": expected,
+            "classification": classification,
+            "provider_exit_code": 0,
+            "scrubber_exit_code": 0,
+        }
+    )
+if failed:
+    diagnostic_path.write_text(
+        json.dumps(
+            {
+                "schema": "magi-preflight-failure/v1",
+                "status": "failed",
+                "reviewers": reviewers,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    raise SystemExit(1)
 PY
+if [ "$validation_rc" -ne 0 ]; then
+    if [ -f "$VALIDATION_FAILURE_STAGE" ]; then
+        mv -- "$VALIDATION_FAILURE_STAGE" "$FAILURE_DIAGNOSTIC"
+        echo "preflight: reviewer validation failed; diagnostic: $FAILURE_DIAGNOSTIC" >&2
+    else
+        echo "preflight: reviewer validation failed before safe classification" >&2
+    fi
+    exit 1
+fi
 
 RUN_ID="$(python3 - <<'PY'
 import secrets
