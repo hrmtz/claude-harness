@@ -1,6 +1,6 @@
 {
   "name": "harness-core",
-  "version": "0.1.0+codex.20260724212152",
+  "version": "0.1.0+codex.20260822155005",
   "description": "Credential-leak prevention and workflow safety hooks for Codex.",
   "author": {
     "name": "hrmtz",
@@ -15,7 +15,9 @@
     "longDescription": "Defense-in-depth hooks for credential reads, leaked values, dangerous shell commands, branch policy, and session context.",
     "developerName": "hrmtz",
     "category": "Security",
-    "capabilities": ["Hooks"],
+    "capabilities": [
+      "Hooks"
+    ],
     "defaultPrompt": "Audit the active harness safety hooks."
   }
 }

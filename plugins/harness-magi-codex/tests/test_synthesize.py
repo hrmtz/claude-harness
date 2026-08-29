@@ -309,8 +309,8 @@ def main() -> None:
         assert "output basename must be round_1_magi_synthesis.json" in contradictory.stderr
         assert not (state / "round_1_codex.json").exists()
 
-        # Cross-family synthesis: reviewers currently emit "<provider>-xfamily";
-        # retain the legacy "<provider>-cross-family" spelling too.
+        # Cross-family synthesis accepts the adapter's current "xfamily-<provider>"
+        # identity plus both legacy provider-first spellings.
         artifact_sha = hashlib.sha256(doc.read_bytes()).hexdigest()
         xfamily_source = finding("CLAUDE-XFAMILY", artifact_id, artifact_sha, "MED")
         xfamily_source["round"] = 2
@@ -377,6 +377,32 @@ def main() -> None:
             capture_output=True,
             text=True,
         )
+
+        meta_path = state / "round_2_xfamily.meta.json"
+        meta_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        xfamily_source["reviewer"] = "XFAMILY-CLAUDE"
+        (state / "round_2_xfamily.json").write_text(
+            json.dumps(xfamily_source), encoding="utf-8"
+        )
+        meta_payload["output_sha"] = hashlib.sha256(
+            (state / "round_2_xfamily.json").read_bytes()
+        ).hexdigest()
+        meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
+        xfamily_output.unlink()
+        subprocess.run(
+            [
+                str(SCRIPT),
+                str(doc),
+                "2",
+                str(state),
+                str(xfamily_output),
+                "--persona-set",
+                "xfamily",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         payload = json.loads(xfamily_output.read_text(encoding="utf-8"))
         assert payload["reviewer"] == "SYNTHESIS"
         assert [item["path"] for item in payload["source_artifacts"]] == [
@@ -387,8 +413,6 @@ def main() -> None:
         (state / "round_2_xfamily.json").write_text(
             json.dumps(xfamily_source), encoding="utf-8"
         )
-        meta_path = state / "round_2_xfamily.meta.json"
-        meta_payload = json.loads(meta_path.read_text(encoding="utf-8"))
         meta_payload["output_sha"] = hashlib.sha256(
             (state / "round_2_xfamily.json").read_bytes()
         ).hexdigest()
@@ -411,8 +435,12 @@ def main() -> None:
 
         # The durable metadata pins the provider family. A valid findings/meta pair must not
         # relabel a Claude review as Grok (or vice versa), including the provider's normal
-        # "-cross-family" or "-xfamily" reviewer label.
-        for wrong_reviewer in ("GROK-XFAMILY", "GROK-CROSS-FAMILY"):
+        # provider-first or adapter-current reviewer label.
+        for wrong_reviewer in (
+            "GROK-XFAMILY",
+            "GROK-CROSS-FAMILY",
+            "XFAMILY-GROK",
+        ):
             xfamily_source["reviewer"] = wrong_reviewer
             (state / "round_2_xfamily.json").write_text(
                 json.dumps(xfamily_source), encoding="utf-8"

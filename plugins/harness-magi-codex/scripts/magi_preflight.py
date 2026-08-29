@@ -253,6 +253,11 @@ def validate_review(
         finding_ids.add(finding_id)
         root_ids.add(root_id)
         recommended_actions.add(finding["recommended_decision"])
+        impacts = finding["impact"]
+        if len(impacts) != len(set(impacts)):
+            raise UnsafeInput(
+                f"duplicate impact in {source.path}#{finding_id}"
+            )
         for evidence in finding["evidence"]:
             actual = line_slice_sha(
                 brief_lines, evidence["start_line"], evidence["end_line"]
@@ -301,6 +306,17 @@ def fail_closed(detail: str) -> dict[str, Any]:
         "questions": [],
         "detail": detail[:2000],
     }
+
+
+def classify_reviewer_process(provider_code: int, scrubber_code: int) -> str:
+    """Return a bounded, content-free reviewer process classification."""
+    if scrubber_code != 0:
+        return "scrubber-failure"
+    if provider_code in {124, 137}:
+        return "provider-timeout"
+    if provider_code != 0:
+        return "provider-exit"
+    return "ok"
 
 
 def evaluate(brief_path: Path, run_manifest_path: Path) -> dict[str, Any]:

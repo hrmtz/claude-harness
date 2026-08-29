@@ -203,7 +203,7 @@ esac
 
 case "$REVIEWER" in
     claude) MODEL="${MAGI_XFAMILY_CLAUDE_MODEL:-${MAGI_XFAMILY_MODEL:-claude-fable-5}}" ;;
-    grok) MODEL="${MAGI_XFAMILY_GROK_MODEL:-grok-4.5}" ;;
+    grok) MODEL="${MAGI_XFAMILY_GROK_MODEL:-grok-4.6}" ;;
 esac
 [ -x "$CROSS_CLI_GUARD" ] || {
     echo "magi-xfamily: harness-cross-cli is required for provider identity isolation" >&2
@@ -296,7 +296,8 @@ command -v "$REVIEWER" >/dev/null 2>&1 || _fail_closed "$REVIEWER CLI not found"
 # failed/abandoned provider attempt remains charged, including timeout or process crash.
 claim_line="$(
     python3 "$GUARD" claim "$DOC_PATH" "$ROUND" xfamily "$STATE_DIR" \
-        --owner-pid "$$" --adapter-kind xfamily
+        --owner-pid "$$" --adapter-kind xfamily \
+        --expected-artifact-sha "$ARTIFACT_SHA" --reviewer-family "$REVIEWER"
 )" || exit $?
 echo "$claim_line"
 CLAIM_ID="${claim_line##*CLAIM_ID=}"

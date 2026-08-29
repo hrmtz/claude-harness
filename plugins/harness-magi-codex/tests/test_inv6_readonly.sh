@@ -7,7 +7,7 @@ SCHEMA="$HERE/../schemas/finding.schema.json"
 REVIEWER="${MAGI_TEST_REVIEWER:-claude}"
 case "$REVIEWER" in
   claude) MODEL="${MAGI_TEST_MODEL:-claude-haiku-4-5-20251001}" ;;
-  grok) MODEL="${MAGI_TEST_MODEL:-grok-4.5}" ;;
+  grok) MODEL="${MAGI_TEST_MODEL:-grok-4.6}" ;;
   *) echo "invalid MAGI_TEST_REVIEWER=$REVIEWER" >&2; exit 64 ;;
 esac
 

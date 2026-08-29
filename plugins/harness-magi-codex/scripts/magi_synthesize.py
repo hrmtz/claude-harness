@@ -72,15 +72,6 @@ def require_committed_xfamily(doc: Path, state_dir: Path, round_number: int) -> 
     reviewer = meta.get("reviewer_family")
     if reviewer not in {"claude", "grok"}:
         raise ValueError("cross-family metadata reviewer is unsupported")
-    verify_xfamily_artifacts(
-        argparse.Namespace(
-            doc=doc,
-            round=round_number,
-            findings=findings_path,
-            meta=meta_path,
-            reviewer=reviewer,
-        )
-    )
     findings_sha = hashlib.sha256(findings_path.read_bytes()).hexdigest()
     artifact_sha = sha256_file(doc)
     if meta.get("output_sha") != findings_sha or meta.get("artifact_sha") != artifact_sha:
@@ -103,6 +94,16 @@ def require_committed_xfamily(doc: Path, state_dir: Path, round_number: int) -> 
         raise ValueError(
             "cross-family canonical pair lacks one matching successful ledger claim"
         )
+    verify_xfamily_artifacts(
+        argparse.Namespace(
+            doc=doc,
+            round=round_number,
+            findings=findings_path,
+            meta=meta_path,
+            reviewer=reviewer,
+            expected_protocol_sha=matches[0]["protocol_sha"],
+        )
+    )
     return reviewer
 
 
@@ -197,6 +198,7 @@ def load_sources(
                 xfamily_reviewer,
                 f"{xfamily_reviewer}-cross-family",
                 f"{xfamily_reviewer}-xfamily",
+                f"xfamily-{xfamily_reviewer}",
             }
             if (
                 xfamily_reviewer not in {"claude", "grok"}

@@ -612,7 +612,7 @@ class ConvergenceGateTest(unittest.TestCase):
                 json.dumps(
                     {
                         "type": "assistant",
-                        "model_id": "grok-4.5-build",
+                        "model_id": "grok-4.6-build",
                         "tool_calls": [{"name": "read_file"}],
                     }
                 )
@@ -626,9 +626,9 @@ class ConvergenceGateTest(unittest.TestCase):
                         "protocol_sha": guard.protocol_sha(),
                         "output_sha": file_sha(findings),
                         "reviewer_family": "grok",
-                        "model_id": "grok-4.5-build",
-                        "model_usage_keys": ["grok-4.5-build"],
-                        "requested_model": "grok-4.5",
+                        "model_id": "grok-4.6-build",
+                        "model_usage_keys": ["grok-4.6-build"],
+                        "requested_model": "grok-4.6",
                         "session_id": session_id,
                         "transcript_path": str(transcript),
                         "transcript_sha": file_sha(transcript),

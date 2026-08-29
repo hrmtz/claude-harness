@@ -161,8 +161,14 @@ Exit `4` does not waive unresolved findings and does not authorize implementatio
 mutation for the exhausted campaign, choose an in-scope correction/scope reduction/primitive
 replacement autonomously, then invoke round 1 again. If the document or review-protocol SHA
 changed, the guard automatically rolls over without user acknowledgement. Every revision campaign
-shares one fixed global allowance of 16 weighted model launches. At global exhaustion, emit a definitive blocked
-result; never pause for an acknowledgement and never reset history through a fresh state directory.
+starts with a global allowance of 16 weighted model launches. Reaching it is an orchestrator
+drift-audit checkpoint, not a provider-budget wait. Audit the exact revision against its prior
+accepted scope. If it contains only bounded finding remediation, preserves outcome and authority
+boundaries, and needs one indivisible complete review cycle, the orchestrator may add a reviewed,
+exact-document/exact-artifact scoped authority with a fixed phase plan and fixed new ceiling. If
+the audit finds scope drift or architecture inflation, reject or narrow that drift before
+continuing. Never use an acknowledgement, silently reset history through a fresh state directory,
+or grant an open-ended override.
 
 Cross-family admission is bound to the exact document and protocol identity of the immediately
 preceding successful same-family phase. A changed document cannot consume cross-family retries from
@@ -240,7 +246,7 @@ dual-magi-review <doc-path> [--rounds N] [--persona-set magi|bug-hunt]
 write a marker, so an opted-out review **cannot claim plateau**.
 
 Env: `MAGI_XFAMILY_CLAUDE_MODEL` (legacy fallback `MAGI_XFAMILY_MODEL`, default
-`claude-fable-5`), `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.5`), and
+`claude-fable-5`), `MAGI_XFAMILY_GROK_MODEL` (default `grok-4.6`), and
 `MAGI_XFAMILY_TIMEOUT_S` (default `900`).
 `MAGI_MAX_ARTIFACT_BYTES` may tighten the shared review-artifact ceiling from
 10 MiB into `1..10485760`; oversized input is rejected before accounting or launch.
@@ -260,7 +266,9 @@ failure, live-document drift, parse/schema/convergence/identity rejection, and p
 corruption. It does not relax the campaign fuse.
 
 Env: `MAGI_MAX_AUTONOMOUS_MODEL_LAUNCHES` may tighten the default ceiling of 12 but cannot extend it.
-There is no acknowledgement or authorization path that extends the fuse.
+Runtime acknowledgement cannot extend the fuse. Only a reviewed protocol change containing a
+mechanically validated, exact-document/exact-artifact scoped drift-audit authority may extend the
+global checkpoint, and only to its fixed ceiling.
 `MAGI_FANOUT_TIMEOUT_S` may tighten the fan-out deadline from its default/maximum of 900 seconds.
 
 ## Fail-closed

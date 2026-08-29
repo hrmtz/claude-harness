@@ -71,7 +71,15 @@ def verify(args: argparse.Namespace) -> None:
         raise ValueError("findings round does not match recovery target")
 
     artifact_sha = sha256_file(doc)
-    expected_protocol = protocol_sha()
+    expected_protocol = getattr(args, "expected_protocol_sha", None)
+    if expected_protocol is None:
+        expected_protocol = protocol_sha()
+    elif (
+        not isinstance(expected_protocol, str)
+        or len(expected_protocol) != 64
+        or any(char not in "0123456789abcdef" for char in expected_protocol)
+    ):
+        raise ValueError("expected protocol SHA is malformed")
     checks = {
         "reviewer_family": args.reviewer,
         "round": args.round,

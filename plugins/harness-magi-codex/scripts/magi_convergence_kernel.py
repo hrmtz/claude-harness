@@ -205,6 +205,14 @@ def _common(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _max_logical_cycles(state: dict[str, Any]) -> int:
+    """Use a caller-verified scoped override while preserving the global default."""
+    value = state.get("max_logical_cycles", MAX_LOGICAL_CYCLES)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise KernelInputError("max_logical_cycles must be a positive integer")
+    return value
+
+
 def evaluate_ultramagi_implementation(state: dict[str, Any]) -> dict[str, Any]:
     """Preserve the issue-107 implementation convergence transition table."""
     delta = state["delta"]
@@ -214,6 +222,7 @@ def evaluate_ultramagi_implementation(state: dict[str, Any]) -> dict[str, Any]:
     previous_roots = delta["previous_roots"]
     current_phases = state["current_phases"]
     cycles = state["cycles"]
+    max_cycles = _max_logical_cycles(state)
     common = _common(state)
 
     if state["deadline_expired"]:
@@ -244,7 +253,7 @@ def evaluate_ultramagi_implementation(state: dict[str, Any]) -> dict[str, Any]:
         )
     if state["transition_blocked"]:
         return output("BLOCKED", "RETRY_BUDGET_EXHAUSTED", next_mode=None, **common)
-    if cycles >= MAX_LOGICAL_CYCLES and "xfamily" not in current_phases:
+    if cycles >= max_cycles and "xfamily" not in current_phases:
         return output(
             "BLOCKED", "MAX_LOGICAL_CYCLES_REACHED", next_mode=None, **common
         )
@@ -299,7 +308,7 @@ def evaluate_ultramagi_implementation(state: dict[str, Any]) -> dict[str, Any]:
         )
     if delta["mass_stalled"]:
         return output("BLOCKED", "BLOCKER_MASS_STALLED", next_mode=None, **common)
-    if cycles >= MAX_LOGICAL_CYCLES:
+    if cycles >= max_cycles:
         return output(
             "BLOCKED", "MAX_LOGICAL_CYCLES_WITH_BLOCKERS", next_mode=None, **common
         )
@@ -319,6 +328,7 @@ def evaluate_dual_magi_design(state: dict[str, Any]) -> dict[str, Any]:
     previous_roots = delta["previous_roots"]
     current_phases = state["current_phases"]
     common = _common(state)
+    max_cycles = _max_logical_cycles(state)
 
     if current_roots & previous_roots:
         return output(
@@ -342,7 +352,7 @@ def evaluate_dual_magi_design(state: dict[str, Any]) -> dict[str, Any]:
         return output(
             "BLOCKED", "DESIGN_BLOCKER_MASS_STALLED", next_mode=None, **common
         )
-    if state["cycles"] >= MAX_LOGICAL_CYCLES:
+    if state["cycles"] >= max_cycles:
         return output(
             "BLOCKED", "DESIGN_MAX_LOGICAL_CYCLES_REACHED", next_mode=None, **common
         )

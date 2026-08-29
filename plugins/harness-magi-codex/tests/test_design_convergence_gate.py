@@ -125,6 +125,7 @@ class DesignConvergenceGateTest(unittest.TestCase):
         subsystem: str = "orchestration",
         severity: str = "HIGH",
         status: str = "success",
+        personas: tuple[str, ...] | None = None,
     ) -> Path:
         self.launch_sequence += 1
         state = self.root / f"state-{self.launch_sequence}"
@@ -146,7 +147,7 @@ class DesignConvergenceGateTest(unittest.TestCase):
         if status != "success":
             return state
         if phase == "fanout":
-            for persona in design.PERSONAS:
+            for persona in personas or design.PERSONAS:
                 payload = self.review_payload(
                     reviewer=persona.upper(),
                     round_no=round_no,
@@ -168,6 +169,142 @@ class DesignConvergenceGateTest(unittest.TestCase):
                 severity=severity,
             )
         return state
+
+    def test_alternative_bug_hunt_fanout_set_is_evaluated(self) -> None:
+        current = self.current_sha()
+        self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root=None,
+            personas=("hornet", "gnat", "wasp"),
+        )
+        self.write_ledger()
+        before = {
+            path.relative_to(self.root): digest(path)
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+        result = design.evaluate(self.doc)
+        after = {
+            path.relative_to(self.root): digest(path)
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+        self.assertEqual(result["decision"], "FINAL_REVIEW_REQUIRED")
+        self.assertEqual(
+            result["reason_code"], "DESIGN_FINAL_DIVERSE_RECHECK_REQUIRED"
+        )
+        self.assertEqual(result["usage"], 3)
+        self.assertEqual(before, after)
+
+    def test_partial_alternative_fanout_set_fails_closed(self) -> None:
+        current = self.current_sha()
+        state = self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root=None,
+        )
+        payload = self.review_payload(
+            reviewer="HORNET",
+            round_no=1,
+            artifact_sha=current,
+            root=None,
+            subsystem="orchestration",
+        )
+        (state / "round_1_hornet.json").write_text(json.dumps(payload) + "\n")
+        self.write_ledger()
+
+        with self.assertRaisesRegex(design.UnsafeInput, "output set is incomplete"):
+            design.evaluate(self.doc)
+
+    def test_alternative_reviewer_basename_mismatch_fails_closed(self) -> None:
+        current = self.current_sha()
+        state = self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root=None,
+            personas=("hornet", "gnat", "wasp"),
+        )
+        hornet = state / "round_1_hornet.json"
+        payload = json.loads(hornet.read_text())
+        payload["reviewer"] = "MELCHIOR"
+        hornet.write_text(json.dumps(payload) + "\n")
+        self.write_ledger()
+
+        with self.assertRaisesRegex(design.UnsafeInput, "reviewer identity"):
+            design.evaluate(self.doc)
+
+    def test_two_complete_authorized_fanout_sets_fail_closed(self) -> None:
+        current = self.current_sha()
+        state = self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root=None,
+        )
+        for persona in ("hornet", "gnat", "wasp"):
+            payload = self.review_payload(
+                reviewer=persona.upper(),
+                round_no=1,
+                artifact_sha=current,
+                root=None,
+                subsystem="orchestration",
+            )
+            (state / f"round_1_{persona}.json").write_text(
+                json.dumps(payload) + "\n"
+            )
+        self.write_ledger()
+
+        code, result, _stderr = self.run_main()
+
+        self.assertEqual(code, 2)
+        assert result is not None
+        self.assertEqual(result["decision"], "BLOCKED")
+        self.assertIn("fanout output set is ambiguous", result["detail"])
+
+    def test_alternative_fanout_set_appearing_during_evaluation_fails_closed(
+        self,
+    ) -> None:
+        current = self.current_sha()
+        state = self.add_launch(
+            round_no=1,
+            phase="fanout",
+            artifact_sha=current,
+            root=None,
+        )
+        self.write_ledger()
+        real_stable_bytes = design.stable_bytes
+        injected = False
+
+        def inject_alternative(
+            path: Path, *, limit: int = design.MAX_JSON_BYTES
+        ) -> bytes:
+            nonlocal injected
+            if not injected and path == state / "round_1_melchior.json":
+                injected = True
+                for persona in ("hornet", "gnat", "wasp"):
+                    payload = self.review_payload(
+                        reviewer=persona.upper(),
+                        round_no=1,
+                        artifact_sha=current,
+                        root=None,
+                        subsystem="orchestration",
+                    )
+                    (state / f"round_1_{persona}.json").write_text(
+                        json.dumps(payload) + "\n"
+                    )
+            return real_stable_bytes(path, limit=limit)
+
+        with mock.patch.object(design, "stable_bytes", side_effect=inject_alternative):
+            with self.assertRaisesRegex(design.UnsafeInput, "input appeared"):
+                design.evaluate(self.doc)
+
+        self.assertTrue(injected)
 
     def write_xfamily(
         self,
@@ -403,6 +540,88 @@ class DesignConvergenceGateTest(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         assert cli_result is not None
         self.assertEqual(cli_result["decision"], "PLATEAU_CANDIDATE")
+
+    def test_explicit_claude_ledger_family_is_verified(self) -> None:
+        current = self.current_sha()
+        self.add_pair(
+            fanout_round=1,
+            artifact_sha=current,
+            root=None,
+            subsystem="none",
+        )
+        self.launches[-1]["reviewer_family"] = "claude"
+        self.assert_decision(
+            "PLATEAU_CANDIDATE", "DESIGN_READY_FOR_EXISTING_PLATEAU_GATE"
+        )
+
+    def test_xfamily_ledger_and_meta_family_mismatch_fails_closed(self) -> None:
+        current = self.current_sha()
+        self.add_pair(
+            fanout_round=1,
+            artifact_sha=current,
+            root=None,
+            subsystem="none",
+        )
+        launch = self.launches[-1]
+        launch["reviewer_family"] = "claude"
+        state = Path(str(launch["state_dir"]))
+        meta_path = state / "round_2_xfamily.meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["reviewer_family"] = "grok"
+        meta_path.write_text(json.dumps(meta) + "\n")
+        self.write_ledger()
+
+        code, result, _stderr = self.run_main()
+
+        self.assertEqual(code, 2)
+        assert result is not None
+        self.assertEqual(result["decision"], "BLOCKED")
+        self.assertIn("ledger reviewer family", result["detail"])
+
+    def test_scoped_xfamily_ledger_family_is_mandatory_and_exact(self) -> None:
+        current = self.current_sha()
+        self.add_pair(
+            fanout_round=1,
+            artifact_sha=current,
+            root=None,
+            subsystem="none",
+        )
+        authority = {
+            "authority_id": "fixture-scoped-plan",
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+        }
+        launch = self.launches[-1]
+        launch["global_fuse_authority"] = authority
+        launch["owner"] = {
+            "pid": 1,
+            "start_ticks": 1,
+            "ppid": 0,
+            "pgid": 1,
+            "adapter_kind": "xfamily",
+        }
+        ledger_path = self.write_ledger()
+
+        for family in (None, "grok"):
+            with self.subTest(ledger_family=family):
+                ledger = json.loads(ledger_path.read_text())
+                scoped_launch = ledger["campaigns"][-1]["launches"][-1]
+                if family is None:
+                    scoped_launch.pop("reviewer_family", None)
+                else:
+                    scoped_launch["reviewer_family"] = family
+                ledger_path.write_text(json.dumps(ledger, indent=2) + "\n")
+                with mock.patch.object(
+                    guard,
+                    "global_ceiling_policy",
+                    return_value=(19, authority),
+                ):
+                    with self.assertRaisesRegex(
+                        guard.StateError, "authorized reviewer family"
+                    ):
+                        guard.load_ledger(self.doc.resolve(), create=False)
 
     def test_reserved_unaffordable_fanout_blocks(self) -> None:
         self.campaigns = []
