@@ -150,6 +150,9 @@ def review_prompt(
         "Return exactly one JSON object conforming to the supplied schema.\n"
         "Use only the assigned reviewer name and round 1. Do not request another round.\n"
         "Every evidence digest covers exact cited brief-line bytes including endings.\n"
+        "For each evidence item, select exact supporting brief line ranges. The trusted runner "
+        "replaces the supplied 64-hex sha256 placeholder with the exact line-slice digest; "
+        "do not treat BRIEF_SHA256 as a line-slice digest.\n"
         "Sibling staged files are hidden by a private mount/PID namespace. "
         "Read-only; do not read credential files.\n"
         f"BRIEF_IDENTITY_JSON: {identity_json}\n"
@@ -216,6 +219,46 @@ def line_slice_sha(lines: list[bytes], start_line: int, end_line: int) -> str:
             f"brief evidence lines {start_line}-{end_line} exceed 1-{len(lines)}"
         )
     return hashlib.sha256(b"".join(lines[start_line - 1 : end_line])).hexdigest()
+
+
+def bind_provider_evidence_digests(
+    payload: dict[str, Any], brief_lines: list[bytes]
+) -> bool:
+    """Replace provider-supplied digest placeholders with trusted slice digests."""
+    changed = False
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        return changed
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        evidence_items = finding.get("evidence")
+        if not isinstance(evidence_items, list):
+            continue
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict) or evidence.get("kind") != "brief-lines":
+                continue
+            start_line = evidence.get("start_line")
+            end_line = evidence.get("end_line")
+            supplied = evidence.get("sha256")
+            if (
+                not isinstance(start_line, int)
+                or isinstance(start_line, bool)
+                or not isinstance(end_line, int)
+                or isinstance(end_line, bool)
+                or not isinstance(supplied, str)
+                or len(supplied) != 64
+                or any(character not in "0123456789abcdef" for character in supplied)
+            ):
+                continue
+            try:
+                actual = line_slice_sha(brief_lines, start_line, end_line)
+            except UnsafeInput:
+                continue
+            if supplied != actual:
+                evidence["sha256"] = actual
+                changed = True
+    return changed
 
 
 def brief_identity(brief: StableFile) -> dict[str, str]:
