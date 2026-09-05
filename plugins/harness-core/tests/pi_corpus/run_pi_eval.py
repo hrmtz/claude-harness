@@ -159,12 +159,30 @@ def bracket(payload, invariant):
     return C.CANARY_OPEN + payload + C.CANARY_CLOSE
 
 
+def spans(fragment: str) -> list[tuple[int, int]]:
+    """Every bracketed occurrence of the field, not just the first.
+
+    A builder that renders the same value twice (a body line and a summary line,
+    say) gets both measured. Looking only at the first occurrence leaves the
+    second one silently untested, which is the shape of blind spot this corpus
+    exists to close.
+    """
+    out: list[tuple[int, int]] = []
+    i = 0
+    while True:
+        a = fragment.find(C.CANARY_OPEN, i)
+        if a < 0:
+            return out
+        b = fragment.find(C.CANARY_CLOSE, a + len(C.CANARY_OPEN))
+        if b < 0:
+            return out
+        out.append((a + len(C.CANARY_OPEN), b))
+        i = b + len(C.CANARY_CLOSE)
+
+
 def span(fragment: str) -> tuple[int, int] | None:
-    a = fragment.find(C.CANARY_OPEN)
-    b = fragment.find(C.CANARY_CLOSE, a + 1) if a >= 0 else -1
-    if a < 0 or b < 0:
-        return None
-    return a + len(C.CANARY_OPEN), b
+    sp = spans(fragment)
+    return sp[0] if sp else None
 
 
 # ── invariant checks ───────────────────────────────────────────────────────
@@ -194,18 +212,25 @@ def check_i1(fragment, sink, delims):
     between = fragment[o + len(op):c]
     if between.count(cl) > 0:
         return FAIL, "an extra closing delimiter appears before the pair closes"
+    # An unbalanced count means the payload minted a delimiter somewhere even if
+    # the pair around the field happens to look intact -- two opens against one
+    # close still leaves a frame the model has to guess the end of.
+    if len(opens) != len(closes):
+        return FAIL, (f"delimiters unbalanced: {len(opens)} open vs "
+                      f"{len(closes)} close")
     return PASS, ""
 
 
 def check_i1b(fragment, sink, tokens):
     """Neutralisation: structural tokens must not survive verbatim in the span."""
-    sp = span(fragment)
-    if sp is None:
+    sp = spans(fragment)
+    if not sp:
         return ERROR, "canary markers missing — not measurable"
-    inner = fragment[sp[0]:sp[1]]
-    hit = [t for t in tokens if t in inner]
-    if hit:
-        return FAIL, f"structural token survived verbatim: {hit}"
+    for n, (a, b) in enumerate(sp, 1):
+        hit = [t for t in tokens if t in fragment[a:b]]
+        if hit:
+            where = f" (occurrence {n} of {len(sp)})" if len(sp) > 1 else ""
+            return FAIL, f"structural token survived verbatim{where}: {hit}"
     return PASS, ""
 
 
@@ -217,31 +242,56 @@ def check_i2(fragment, sink, baseline_fragment):
     """
     if sink.kind != "single_line":
         return SKIPPED, "not a single_line sink"
-    sp = span(fragment)
-    if sp is None:
+    sp = spans(fragment)
+    if not sp:
         return ERROR, "canary markers missing — not measurable"
-    inner = fragment[sp[0]:sp[1]]
-    base_sp = span(baseline_fragment)
-    base_inner = baseline_fragment[base_sp[0]:base_sp[1]] if base_sp else ""
+    base_sp = spans(baseline_fragment)
+    inner = "".join(fragment[a:b] for a, b in sp)
+    base_inner = "".join(baseline_fragment[a:b] for a, b in base_sp)
     got = sum(inner.count(b) for b in LINE_BREAKS)
     ref = sum(base_inner.count(b) for b in LINE_BREAKS)
-    if got > ref:
-        kinds = [repr(b) for b in LINE_BREAKS if inner.count(b) > base_inner.count(b)]
-        return FAIL, f"{got - ref} line break(s) grew inside a single-line field: {kinds}"
+    if ref:
+        # The sink puts line breaks inside the field's own span even for benign
+        # input, so "did the payload add one" cannot be answered by counting.
+        # Say so rather than comparing totals -- equal counts in different places
+        # is exactly the case a total would wave through.
+        return UNMEASURED, (f"the benign render already contains {ref} line break(s) "
+                            "inside the field span; a count cannot separate the "
+                            "payload's breaks from the sink's own")
+    if got:
+        kinds = [repr(b) for b in LINE_BREAKS if b in inner]
+        return FAIL, f"{got} line break(s) grew inside a single-line field: {kinds}"
     return PASS, ""
 
 
 def check_i3(fragment, sink, notation):
-    missing = [n for n in notation if n not in fragment]
+    """Notation survives -- INSIDE THE FIELD, not merely somewhere on the page.
+
+    Matching against the whole fragment is the bug this replaces: a template
+    that mentions a unit itself would report PASS for a sink that destroyed the
+    field. The span is located with the canaries, same as I1/I2.
+    """
+    sp = spans(fragment)
+    if not sp:
+        return ERROR, "canary markers missing -- not measurable"
+    inner = "".join(fragment[a:b] for a, b in sp)
+    missing = [n for n in notation if n not in inner]
     if missing:
-        return FAIL, f"notation mangled or dropped: {missing}"
+        return FAIL, f"notation mangled or dropped from the field: {missing}"
     return PASS, ""
 
 
 def check_i4(sink):
+    """Freshness AND passthrough.
+
+    Freshness alone is not the whole invariant: a sink that silently ignores the
+    nonce it is handed still rolls a fresh one each render and would sail past a
+    freshness-only check -- while every I1 case that pins the nonce is quietly
+    attacking a delimiter the fence never used. Both halves are checked here.
+    """
     if sink.nonce is None:
         return SKIPPED, "sink exposes no nonce extractor"
-    # NOT pinned: I4 asks whether the production path rolls a fresh nonce.
+    # NOT pinned: freshness asks whether the production path rolls a new one.
     try:
         a = sink.nonce(sink.render("benign"))
         b = sink.nonce(sink.render("benign"))
@@ -251,6 +301,15 @@ def check_i4(sink):
         return UNMEASURED, "nonce extractor returned None"
     if a == b:
         return FAIL, f"nonce reused across renders ({a!r})"
+    if sink.accepts_nonce:
+        try:
+            got = sink.nonce(sink.render("benign", nonce=PINNED_NONCE))
+        except Exception as exc:
+            return ERROR, f"pinned render raised {type(exc).__name__}: {exc}"
+        if got != PINNED_NONCE:
+            return FAIL, (f"sink claims accepts_nonce but ignored it "
+                          f"(passed {PINNED_NONCE!r}, fence used {got!r}); every "
+                          "pinned I1 case was attacking the wrong delimiter")
     return PASS, ""
 
 
@@ -315,7 +374,11 @@ def sabotage_check(adapter, corpus) -> tuple[bool, list[str]]:
     """Prove the battery still detects. Matched per (case, invariant), never by count."""
     sabs = list(getattr(adapter, "SABOTAGE", ()) or ())
     if not sabs:
-        return True, ["no SABOTAGE declared — battery self-check SKIPPED (not proven)"]
+        # Not "skipped" -- unproven. Without a negative control a green run says
+        # only that the battery ran, and that is the failure mode this whole
+        # corpus exists to prevent.
+        return False, ["no SABOTAGE declared -- the battery cannot show it still "
+                       "detects anything. Declare at least one."]
     notes: list[str] = []
     ok = True
     for sab in sabs:
@@ -359,8 +422,21 @@ def main() -> int:
         return 2
 
     results = run(adapter, corpus, set(args.sinks) if args.sinks else None)
-    if not results:
-        print("CONFIG ERROR  zero_cases_executed: no case matched any sink", file=sys.stderr)
+    # Synthetic rows -- the per-sink I4 probe and the benign-render error -- are
+    # not corpus cases. Counting them would let a run where every real case blew
+    # up still look populated.
+    corpus_rows = [r for r in results if not r["case"].startswith("(")]
+    if not corpus_rows:
+        print("CONFIG ERROR  zero_cases_executed: no corpus case matched any sink",
+              file=sys.stderr)
+        return 2
+    verdicts = [r for r in corpus_rows if r["outcome"] in (PASS, FAIL)]
+    if not verdicts:
+        print("CONFIG ERROR  zero_cases_executed: every corpus case ended in "
+              "ERROR/SKIPPED/UNMEASURED -- nothing was measured", file=sys.stderr)
+        for r in corpus_rows[:10]:
+            print(f"  {r['outcome']:<11} {r['sink']}/{r['case']}: {r['detail']}",
+                  file=sys.stderr)
         return 2
 
     bl_path = pathlib.Path(args.baseline) if args.baseline else \
@@ -370,8 +446,13 @@ def main() -> int:
         baseline = {tuple(x) for x in json.loads(bl_path.read_text())["failures"]}
 
     failures = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == FAIL}
+    passed = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == PASS}
     new = sorted(failures - baseline)
-    fixed = sorted(baseline - failures)
+    # Only a baseline entry now observed PASSING counts as fixed. One that ERRORed
+    # simply vanished from `failures`, and calling that a fix reports progress for
+    # a case nobody measured.
+    fixed = sorted(baseline & passed)
+    unmeasured_baseline = sorted(baseline - failures - passed)
 
     if args.write_baseline:
         bl_path.write_text(json.dumps(
@@ -412,6 +493,10 @@ def main() -> int:
         if fixed:
             print("\n### fixed since baseline (report only — does not offset a new failure)")
             for c, s, i in fixed:
+                print(f"  {s}/{c}/{i}")
+        if unmeasured_baseline:
+            print("\n### baseline entries NOT re-measured this run (not fixed)")
+            for c, s, i in unmeasured_baseline:
                 print(f"  {s}/{c}/{i}")
         print("\n### battery self-check (sabotage)")
         for n in sab_notes:

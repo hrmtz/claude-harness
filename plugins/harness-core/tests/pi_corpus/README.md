@@ -18,6 +18,7 @@ delimiters held and single-line fields stayed on one line. Nothing more.
 | `build_corpus.py` | generates `corpus.jsonl`. `--check` verifies it is in sync (CI) |
 | `corpus.jsonl` | 35 cases. Generated — never hand-edit |
 | `run_pi_eval.py` | the runner. Loads a project adapter, executes, gates |
+| `test_runner_gates.py` | negative controls for the runner itself |
 
 `corpus.jsonl` deliberately carries raw control characters, lone surrogates and
 bidi overrides. Hand-editing those in a `.jsonl` is a trap — a stray literal
@@ -115,9 +116,26 @@ exact `(case, invariant)` pairs that must go red against it. Matching is
 per-pair, never by count, so an unrelated crash cannot be mistaken for a
 successful detection — an exception is recorded as ERROR and satisfies nothing.
 
+## Checking the checker
+
+`test_runner_gates.py` holds the runner to its own standard. Each case is a way
+the runner could report green while measuring nothing, built as a small adapter
+and asserted to produce a non-zero exit:
+
+- every render raises, so no corpus case is actually judged
+- no `SABOTAGE` declared, so nothing shows the battery still detects
+- a sink that accepts a nonce and then discards it — every pinned I1 case would
+  be attacking a delimiter the fence never used
+- notation destroyed in the field while the surrounding template mentions it
+- a second occurrence of the same field, neutralised in one copy and not the other
+
+All five were live defects found by cross-family review on 2026-09-05 and are
+frozen here so an edit cannot quietly reintroduce them.
+
 ## Running
 
 ```bash
+python3 test_runner_gates.py                       # does the runner still see?
 python3 build_corpus.py --check                    # corpus in sync?
 python3 run_pi_eval.py --adapter path/to/adapter.py
 python3 run_pi_eval.py --adapter ... --json        # machine-readable

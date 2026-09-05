@@ -164,7 +164,12 @@ CONFIG_ERRORS = (
 #: The markers bracket the WHOLE field, so I2 can count line breaks across the
 #: entire span — checking only "after the canary" misses extra lines grown by the
 #: front half of the payload (``X\n## h<canary>``).
-CANARY_INVARIANTS = ("I1", "I1b", "I2")
+#: I3 is bracketed too: checking notation against the whole fragment lets a
+#: template that happens to mention a unit report PASS for a sink that destroyed
+#: the field. Its payload is always a non-empty notation string, so the reason I5
+#: stays raw (canaries would make "" non-empty, and None cannot be concatenated)
+#: does not apply here.
+CANARY_INVARIANTS = ("I1", "I1b", "I2", "I3")
 
 #: Tokens that must not survive verbatim inside a fence (I1b). Projects may
 #: extend this; the runner reports UNMEASURED if a sink declares no way to tell.
