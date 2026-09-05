@@ -179,14 +179,41 @@ def spans(fragment: str, want: int | None = None):
         return [], (f"canary markers unbalanced: {len(opens)} open vs "
                     f"{len(closes)} close — the renderer altered them, "
                     "so nothing here is measurable")
-    out: list[tuple[int, int]] = []
-    for a, b in zip(opens, closes):
-        if b < a:
-            return [], "canary markers out of order — not measurable"
-        out.append((a + len(C.CANARY_OPEN), b))
+    # Pairing by index (zip) accepts OPEN OPEN CLOSE CLOSE as two tidy spans, so
+    # the markers are walked in document order and required to ALTERNATE. Equal
+    # counts say nothing about arrangement.
+    out, err = _alternating_pairs(fragment, C.CANARY_OPEN, C.CANARY_CLOSE,
+                                  opens, closes, "canary marker")
+    if err:
+        return [], err
     if want is not None and len(out) != want:
         return [], (f"field occurs {len(out)} time(s), benign render produced "
                     f"{want} — occurrences appeared or vanished, not measurable")
+    return out, None
+
+
+def _alternating_pairs(fragment, op, cl, opens, closes, label):
+    """Walk markers in document order; they must strictly alternate open/close.
+
+    Returns ``(inner_spans, error_reason)`` where each span is the text BETWEEN a
+    matched pair.
+    """
+    marks = sorted([(i, "o") for i in opens] + [(i, "c") for i in closes])
+    out: list[tuple[int, int]] = []
+    pending: int | None = None
+    for i, kind in marks:
+        if kind == "o":
+            if pending is not None:
+                return [], (f"{label}s out of order: a second opener at {i} "
+                            f"before the one at {pending} closed")
+            pending = i
+        else:
+            if pending is None:
+                return [], f"{label}s out of order: a closer at {i} with nothing open"
+            out.append((pending + len(op), i))
+            pending = None
+    if pending is not None:
+        return [], f"{label}s out of order: an opener at {pending} never closes"
     return out, None
 
 
@@ -217,6 +244,9 @@ def check_i1(fragment, sink, delims, want=None):
     closes = _find_all(fragment, cl)
     if not opens or not closes:
         return FAIL, "no delimiter pair in output"
+    _, order_err = _alternating_pairs(fragment, op, cl, opens, closes, "delimiter")
+    if order_err:
+        return FAIL, order_err
     for n, (start, end) in enumerate(sp, 1):
         where = f" (occurrence {n} of {len(sp)})" if len(sp) > 1 else ""
         o = max([i for i in opens if i < start], default=None)
@@ -232,7 +262,8 @@ def check_i1(fragment, sink, delims, want=None):
             return FAIL, f"an extra closing delimiter appears before the pair closes{where}"
     # An unbalanced count means the payload minted a delimiter somewhere even if
     # the pair around the field happens to look intact -- two opens against one
-    # close still leaves a frame the model has to guess the end of.
+    # close still leaves a frame the model has to guess the end of. (Arrangement
+    # is checked separately above; equal counts alone prove nothing.)
     if len(opens) != len(closes):
         return FAIL, (f"delimiters unbalanced: {len(opens)} open vs "
                       f"{len(closes)} close")
@@ -477,24 +508,35 @@ def main() -> int:
 
     bl_path = pathlib.Path(args.baseline) if args.baseline else \
         pathlib.Path(args.adapter).resolve().parent / "pi_baseline.json"
-    baseline = set()
+    # The baseline records the OUTCOME as well as the identity. Storing only
+    # (case, sink, invariant) let an accepted ERROR silently become a FAIL -- and
+    # a FAIL silently become an ERROR -- while the gate stayed quiet, which is a
+    # second amnesty mechanism smuggled in through the first.
+    baseline: dict[tuple[str, str, str], str] = {}
     if bl_path.exists():
-        baseline = {tuple(x) for x in json.loads(bl_path.read_text())["failures"]}
+        for x in json.loads(bl_path.read_text())["failures"]:
+            if len(x) == 4:
+                baseline[(x[0], x[1], x[2])] = x[3]
+            else:
+                print(f"CONFIG ERROR  baseline entry {x!r} has no recorded outcome; "
+                      "regenerate it with --write-baseline", file=sys.stderr)
+                return 2
 
     # ERROR and UNMEASURED join FAIL in the gate. They are not verdicts, and a
     # run where some cases blew up while the rest passed must not exit 0 -- that
     # is the same silent pass in a smaller costume. Amnesty is the baseline, and
     # only the baseline, so a known-unmeasurable case is recorded there by name.
-    problems = {(r["case"], r["sink"], r["invariant"]) for r in results
+    problems = {(r["case"], r["sink"], r["invariant"]): r["outcome"] for r in results
                 if r["outcome"] in (FAIL, ERROR, UNMEASURED)}
-    failures = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == FAIL}
     passed = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == PASS}
-    new = sorted(problems - baseline)
+    # A changed outcome is a new problem, not a forgiven one: an accepted "cannot
+    # be measured" turning into a real breach must be seen.
+    new = sorted(k for k, v in problems.items() if baseline.get(k) != v)
     # Only a baseline entry now observed PASSING counts as fixed. One that ERRORed
     # simply vanished from `failures`, and calling that a fix reports progress for
     # a case nobody measured.
-    fixed = sorted(baseline & passed)
-    unmeasured_baseline = sorted(baseline - problems - passed)
+    fixed = sorted(set(baseline) & passed)
+    unmeasured_baseline = sorted(set(baseline) - set(problems) - passed)
 
     if args.write_baseline:
         bl_path.write_text(json.dumps(
@@ -532,7 +574,9 @@ def main() -> int:
             for c, s, i in new:
                 r = next(r for r in results
                          if (r["case"], r["sink"], r["invariant"]) == (c, s, i))
-                print(f"  [{r['outcome']}] {s}/{c}/{i}: {r['detail']}")
+                was = baseline.get((c, s, i))
+                shift = f" (baseline had {was})" if was else ""
+                print(f"  [{r['outcome']}]{shift} {s}/{c}/{i}: {r['detail']}")
         if fixed:
             print("\n### fixed since baseline (report only — does not offset a new failure)")
             for c, s, i in fixed:
