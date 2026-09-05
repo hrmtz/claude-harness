@@ -89,9 +89,14 @@ what you chose to look at.
 Exit codes: `0` clean, `1` new failures, `2` config error, `3` the battery could
 not prove it still detects.
 
-`--write-baseline` freezes the current failures as accepted, tracked gaps. A
-failure not in the baseline fails the gate; a fixed one is reported but never
-offsets a new one. The baseline is the *only* amnesty mechanism —
+**`ERROR` and `UNMEASURED` fail the gate alongside `FAIL`.** A run where some
+cases blew up while the rest passed is the same silent pass in a smaller costume,
+so a case nobody measured is never quietly green.
+
+`--write-baseline` freezes the current failures *and unmeasurable cases* as
+accepted, tracked gaps. Anything new fails the gate; a fixed one is reported but
+never offsets a new one, and a baseline entry that merely stopped being measured
+is listed as not re-measured rather than fixed. The baseline is the *only* amnesty mechanism —
 `Sink(covered=False)` marks a known-undefended field in the manifest but forgives
 nothing, because two amnesty mechanisms let one silently void the other.
 
@@ -123,14 +128,21 @@ the runner could report green while measuring nothing, built as a small adapter
 and asserted to produce a non-zero exit:
 
 - every render raises, so no corpus case is actually judged
+- only *some* cases unmeasurable while the rest pass — the partial version of the
+  same hole, which a whole-run guard alone walks straight past
 - no `SABOTAGE` declared, so nothing shows the battery still detects
 - a sink that accepts a nonce and then discards it — every pinned I1 case would
   be attacking a delimiter the fence never used
 - notation destroyed in the field while the surrounding template mentions it
-- a second occurrence of the same field, neutralised in one copy and not the other
+- notation kept in the first copy of the field and destroyed in the second
+- the first copy fenced and the second copy left bare
+- a second occurrence neutralised in one copy and not the other
+- a canary marker eaten on one occurrence, which must be ERROR and never PASS
 
-All five were live defects found by cross-family review on 2026-09-05 and are
-frozen here so an edit cannot quietly reintroduce them.
+All nine were live defects found by cross-family review on 2026-09-05 and are
+frozen here so an edit cannot quietly reintroduce them. Four of them survived the
+first round of fixes: the review's second pass showed that guarding the whole run
+and joining the spans still let a *partially* broken render through.
 
 ## Running
 

@@ -159,59 +159,77 @@ def bracket(payload, invariant):
     return C.CANARY_OPEN + payload + C.CANARY_CLOSE
 
 
-def spans(fragment: str) -> list[tuple[int, int]]:
-    """Every bracketed occurrence of the field, not just the first.
+def spans(fragment: str, want: int | None = None):
+    """Locate every bracketed occurrence. Returns ``(spans, error_reason)``.
 
-    A builder that renders the same value twice (a body line and a summary line,
-    say) gets both measured. Looking only at the first occurrence leaves the
-    second one silently untested, which is the shape of blind spot this corpus
-    exists to close.
+    Two ways this used to lie:
+      - stopping at the first pair, leaving a field rendered twice measured once;
+      - returning a SHORT list when a closing marker went missing, so a mangled
+        second occurrence looked like it simply was not there.
+
+    An unbalanced marker count is an observability ERROR, and so is finding fewer
+    occurrences than the benign render produced -- "the renderer ate my marker"
+    and "the field is fine" must not share an outcome.
     """
+    opens = _find_all(fragment, C.CANARY_OPEN)
+    closes = _find_all(fragment, C.CANARY_CLOSE)
+    if not opens and not closes:
+        return [], "canary markers missing (truncated or rewritten) — not measurable"
+    if len(opens) != len(closes):
+        return [], (f"canary markers unbalanced: {len(opens)} open vs "
+                    f"{len(closes)} close — the renderer altered them, "
+                    "so nothing here is measurable")
     out: list[tuple[int, int]] = []
-    i = 0
-    while True:
-        a = fragment.find(C.CANARY_OPEN, i)
-        if a < 0:
-            return out
-        b = fragment.find(C.CANARY_CLOSE, a + len(C.CANARY_OPEN))
-        if b < 0:
-            return out
+    for a, b in zip(opens, closes):
+        if b < a:
+            return [], "canary markers out of order — not measurable"
         out.append((a + len(C.CANARY_OPEN), b))
-        i = b + len(C.CANARY_CLOSE)
+    if want is not None and len(out) != want:
+        return [], (f"field occurs {len(out)} time(s), benign render produced "
+                    f"{want} — occurrences appeared or vanished, not measurable")
+    return out, None
 
 
-def span(fragment: str) -> tuple[int, int] | None:
-    sp = spans(fragment)
-    return sp[0] if sp else None
+def _find_all(hay: str, needle: str) -> list[int]:
+    out, i = [], 0
+    while True:
+        j = hay.find(needle, i)
+        if j < 0:
+            return out
+        out.append(j)
+        i = j + len(needle)
 
 
 # ── invariant checks ───────────────────────────────────────────────────────
-def check_i1(fragment, sink, delims):
-    """Containment: the field's span must sit strictly inside one delimiter pair."""
+def check_i1(fragment, sink, delims, want=None):
+    """Containment: EVERY occurrence of the field sits inside a delimiter pair.
+
+    Checking only the first is how a builder that fences one copy and leaves a
+    second copy bare reports PASS.
+    """
     if delims is None:
         return UNMEASURED, "sink exposes no delims hook"
     op, cl = delims
-    sp = span(fragment)
-    if sp is None:
-        return ERROR, "canary markers missing (truncated or rewritten) — not measurable"
-    start, end = sp
-    opens = [i for i in range(len(fragment)) if fragment.startswith(op, i)]
-    closes = [i for i in range(len(fragment)) if fragment.startswith(cl, i)]
+    sp, err = spans(fragment, want)
+    if err:
+        return ERROR, err
+    opens = _find_all(fragment, op)
+    closes = _find_all(fragment, cl)
     if not opens or not closes:
         return FAIL, "no delimiter pair in output"
-    # the pair that should contain the field
-    o = max([i for i in opens if i < start], default=None)
-    if o is None:
-        return FAIL, "field starts before any opening delimiter"
-    c = min([i for i in closes if i >= end], default=None)
-    if c is None:
-        return FAIL, "field is not followed by a closing delimiter"
-    inner = fragment[start:end]
-    if op in inner or cl in inner:
-        return FAIL, "raw delimiter survived inside the field span"
-    between = fragment[o + len(op):c]
-    if between.count(cl) > 0:
-        return FAIL, "an extra closing delimiter appears before the pair closes"
+    for n, (start, end) in enumerate(sp, 1):
+        where = f" (occurrence {n} of {len(sp)})" if len(sp) > 1 else ""
+        o = max([i for i in opens if i < start], default=None)
+        if o is None:
+            return FAIL, f"field starts before any opening delimiter{where}"
+        c = min([i for i in closes if i >= end], default=None)
+        if c is None:
+            return FAIL, f"field is not followed by a closing delimiter{where}"
+        inner = fragment[start:end]
+        if op in inner or cl in inner:
+            return FAIL, f"raw delimiter survived inside the field span{where}"
+        if fragment[o + len(op):c].count(cl) > 0:
+            return FAIL, f"an extra closing delimiter appears before the pair closes{where}"
     # An unbalanced count means the payload minted a delimiter somewhere even if
     # the pair around the field happens to look intact -- two opens against one
     # close still leaves a frame the model has to guess the end of.
@@ -221,11 +239,11 @@ def check_i1(fragment, sink, delims):
     return PASS, ""
 
 
-def check_i1b(fragment, sink, tokens):
+def check_i1b(fragment, sink, tokens, want=None):
     """Neutralisation: structural tokens must not survive verbatim in the span."""
-    sp = spans(fragment)
-    if not sp:
-        return ERROR, "canary markers missing — not measurable"
+    sp, err = spans(fragment, want)
+    if err:
+        return ERROR, err
     for n, (a, b) in enumerate(sp, 1):
         hit = [t for t in tokens if t in fragment[a:b]]
         if hit:
@@ -242,10 +260,12 @@ def check_i2(fragment, sink, baseline_fragment):
     """
     if sink.kind != "single_line":
         return SKIPPED, "not a single_line sink"
-    sp = spans(fragment)
-    if not sp:
-        return ERROR, "canary markers missing — not measurable"
-    base_sp = spans(baseline_fragment)
+    base_sp, base_err = spans(baseline_fragment)
+    if base_err:
+        return ERROR, f"benign render not measurable: {base_err}"
+    sp, err = spans(fragment, len(base_sp))
+    if err:
+        return ERROR, err
     inner = "".join(fragment[a:b] for a, b in sp)
     base_inner = "".join(baseline_fragment[a:b] for a, b in base_sp)
     got = sum(inner.count(b) for b in LINE_BREAKS)
@@ -264,20 +284,23 @@ def check_i2(fragment, sink, baseline_fragment):
     return PASS, ""
 
 
-def check_i3(fragment, sink, notation):
+def check_i3(fragment, sink, notation, want=None):
     """Notation survives -- INSIDE THE FIELD, not merely somewhere on the page.
 
     Matching against the whole fragment is the bug this replaces: a template
     that mentions a unit itself would report PASS for a sink that destroyed the
     field. The span is located with the canaries, same as I1/I2.
     """
-    sp = spans(fragment)
-    if not sp:
-        return ERROR, "canary markers missing -- not measurable"
-    inner = "".join(fragment[a:b] for a, b in sp)
-    missing = [n for n in notation if n not in inner]
-    if missing:
-        return FAIL, f"notation mangled or dropped from the field: {missing}"
+    sp, err = spans(fragment, want)
+    if err:
+        return ERROR, err
+    # Per occurrence, not concatenated. Joining the spans lets a first copy that
+    # kept the notation cover for a second copy that destroyed it.
+    for n, (a, b) in enumerate(sp, 1):
+        missing = [x for x in notation if x not in fragment[a:b]]
+        if missing:
+            where = f" (occurrence {n} of {len(sp)})" if len(sp) > 1 else ""
+            return FAIL, f"notation mangled or dropped from the field{where}: {missing}"
     return PASS, ""
 
 
@@ -330,6 +353,12 @@ def run(adapter, corpus, only_sinks=None) -> list[dict]:
                                 outcome=ERROR, detail=f"{type(exc).__name__}: {exc}"))
             continue
 
+        # How many times the sink renders the field for benign input. Any case
+        # that produces a different number has had an occurrence appear or vanish,
+        # which is not measurable rather than fine.
+        benign_spans, _ = spans(benign)
+        want = len(benign_spans) or None
+
         # I4 is a property of the sink, not of any single case
         out, detail = check_i4(sink)
         results.append(dict(case="(sink)", sink=sink.name, invariant="I4",
@@ -347,26 +376,30 @@ def run(adapter, corpus, only_sinks=None) -> list[dict]:
             try:
                 frag = render(sink, bracket(payload, inv))
             except Exception as exc:
+                # An I5 case IS about crashing, so an exception there is a real
+                # verdict. It is still tagged, because the contract says an
+                # exception must not satisfy a sabotage expectation -- a build
+                # broken badly enough to throw would otherwise "detect".
                 outcome = FAIL if inv == "I5" else ERROR
                 results.append(dict(case=case["id"], sink=sink.name, invariant=inv,
-                                    outcome=outcome,
+                                    outcome=outcome, by_exception=True,
                                     detail=f"{type(exc).__name__}: {exc}"))
                 continue
 
             if inv == "I1":
-                out, detail = check_i1(frag, sink, delims)
+                out, detail = check_i1(frag, sink, delims, want)
             elif inv == "I1b":
-                out, detail = check_i1b(frag, sink, tokens)
+                out, detail = check_i1b(frag, sink, tokens, want)
             elif inv == "I2":
                 out, detail = check_i2(frag, sink, benign)
             elif inv == "I3":
-                out, detail = check_i3(frag, sink, notation)
+                out, detail = check_i3(frag, sink, notation, want)
             elif inv == "I5":
                 out, detail = PASS, ""
             else:
                 out, detail = UNMEASURED, f"no predicate for {inv}"
             results.append(dict(case=case["id"], sink=sink.name, invariant=inv,
-                                outcome=out, detail=detail))
+                                outcome=out, by_exception=False, detail=detail))
     return results
 
 
@@ -387,7 +420,10 @@ def sabotage_check(adapter, corpus) -> tuple[bool, list[str]]:
                               "NOTATION": getattr(adapter, "NOTATION", None),
                               "STRUCTURAL_TOKENS": getattr(adapter, "STRUCTURAL_TOKENS", None)})
         res = run(shim, corpus)
-        got = {(r["case"], r["invariant"]) for r in res if r["outcome"] == FAIL}
+        # Exceptions excluded: a build broken badly enough to throw would
+        # otherwise look like a successful detection.
+        got = {(r["case"], r["invariant"]) for r in res
+               if r["outcome"] == FAIL and not r.get("by_exception")}
         for cid, inv in sab.expected:
             if (cid, inv) in got:
                 notes.append(f"  detected {cid}/{inv} on sabotaged {sab.sink}")
@@ -445,20 +481,27 @@ def main() -> int:
     if bl_path.exists():
         baseline = {tuple(x) for x in json.loads(bl_path.read_text())["failures"]}
 
+    # ERROR and UNMEASURED join FAIL in the gate. They are not verdicts, and a
+    # run where some cases blew up while the rest passed must not exit 0 -- that
+    # is the same silent pass in a smaller costume. Amnesty is the baseline, and
+    # only the baseline, so a known-unmeasurable case is recorded there by name.
+    problems = {(r["case"], r["sink"], r["invariant"]) for r in results
+                if r["outcome"] in (FAIL, ERROR, UNMEASURED)}
     failures = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == FAIL}
     passed = {(r["case"], r["sink"], r["invariant"]) for r in results if r["outcome"] == PASS}
-    new = sorted(failures - baseline)
+    new = sorted(problems - baseline)
     # Only a baseline entry now observed PASSING counts as fixed. One that ERRORed
     # simply vanished from `failures`, and calling that a fix reports progress for
     # a case nobody measured.
     fixed = sorted(baseline & passed)
-    unmeasured_baseline = sorted(baseline - failures - passed)
+    unmeasured_baseline = sorted(baseline - problems - passed)
 
     if args.write_baseline:
         bl_path.write_text(json.dumps(
-            {"failures": sorted(list(failures)),
-             "note": "Accepted, tracked gaps. New failures fail the gate; fixed ones "
-                     "never offset a new one. Shrink this file, never grow it silently."},
+            {"failures": sorted(list(problems)),
+             "note": "Accepted, tracked gaps -- failures AND cases that cannot be "
+                     "measured. Anything new fails the gate; fixed ones never offset "
+                     "a new one. Shrink this file, never grow it silently."},
             indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"wrote {bl_path} ({len(failures)} accepted failures)")
         return 0
@@ -485,11 +528,11 @@ def main() -> int:
                 if r["outcome"] in (ERROR, UNMEASURED):
                     print(f"  {r['outcome']:<11} {r['sink']}/{r['case']}/{r['invariant']}: {r['detail']}")
         if new:
-            print("\n### NEW failures (gate)")
+            print("\n### NEW failures / unmeasured (gate)")
             for c, s, i in new:
-                d = next(r["detail"] for r in results
+                r = next(r for r in results
                          if (r["case"], r["sink"], r["invariant"]) == (c, s, i))
-                print(f"  {s}/{c}/{i}: {d}")
+                print(f"  [{r['outcome']}] {s}/{c}/{i}: {r['detail']}")
         if fixed:
             print("\n### fixed since baseline (report only — does not offset a new failure)")
             for c, s, i in fixed:

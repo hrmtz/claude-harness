@@ -181,6 +181,96 @@ SABOTAGE = [Sabotage("s", lambda: Sink("s", _render, "fenced", delims=_delims),
 '''
 
 
+DELIMS = """
+def _delims(f):
+    import re
+    m = re.search(r"<<<E_([0-9a-f]+)>>>", f)
+    return (f"<<<E_{m.group(1)}>>>", f"<<<END_E_{m.group(1)}>>>") if m else None
+
+def _nonce(f):
+    import re
+    m = re.search(r"<<<E_([0-9a-f]+)>>>", f)
+    return m.group(1) if m else None
+"""
+
+
+@case("some cases unmeasurable while the rest pass -> still not exit 0",
+      "unmeasured")
+def _partial_error():
+    return DELIMS + '''
+def _render(payload, *, nonce=None):
+    n = nonce or "aaaaaaaaaaaa"
+    body = payload if isinstance(payload, str) else ""
+    if "\u2265" in body:                 # eat the canaries on the I3 case only
+        body = body.replace("ZQCANARYA7", "").replace("ZQCANARYZ7", "")
+    body = " ".join(body.replace("<<<", "[x").split())
+    return f"<<<E_{n}>>>\\nsafe\\n<<<END_E_{n}>>>\\n    Source: {body}\\n"
+
+SINKS = [Sink("s", _render, "single_line", delims=_delims, nonce=_nonce,
+              accepts_nonce=True)]
+SABOTAGE = [Sabotage("s", lambda: Sink("s", _render, "single_line", delims=_delims),
+                     expected=[("i2-heading", "I2")])]
+'''
+
+
+@case("first copy fenced, second copy bare -> I1 fails", "occurrence 2 of 2")
+def _second_copy_unfenced():
+    return DELIMS + '''
+def _render(payload, *, nonce=None):
+    n = nonce or "aaaaaaaaaaaa"
+    body = payload if isinstance(payload, str) else ""
+    safe = " ".join(body.replace("<<<", "[x").split())
+    return (f"<<<E_{n}>>>\\n{safe}\\n<<<END_E_{n}>>>\\n"
+            f"    also: {safe}\\n")          # second copy outside any fence
+
+SINKS = [Sink("s", _render, "fenced", delims=_delims, nonce=_nonce,
+              accepts_nonce=True)]
+SABOTAGE = [Sabotage("s", lambda: Sink("s", _render, "fenced", delims=_delims),
+                     expected=[("i1-close-verbatim", "I1")])]
+'''
+
+
+@case("notation kept in the first copy, destroyed in the second -> I3 fails",
+      "occurrence 2 of 2")
+def _notation_second_copy():
+    return DELIMS + '''
+def _render(payload, *, nonce=None):
+    n = nonce or "aaaaaaaaaaaa"
+    body = payload if isinstance(payload, str) else ""
+    keep = " ".join(body.replace("<<<", "[x").split())
+    lost = keep
+    for _a, _b in (("\u2265", ">="), ("H\u2082O", "WATER"), ("\u00b5g", "ug"),
+                   ("10\u2076", "10^6"), ("CO\u2082", "CO2")):
+        lost = lost.replace(_a, _b)
+    return (f"<<<E_{n}>>>\\n{keep}\\n<<<END_E_{n}>>>\\n"
+            f"<<<E_{n}>>>\\n{lost}\\n<<<END_E_{n}>>>\\n")
+
+SINKS = [Sink("s", _render, "fenced", delims=_delims, nonce=_nonce,
+              accepts_nonce=True)]
+SABOTAGE = [Sabotage("s", lambda: Sink("s", _render, "fenced", delims=_delims),
+                     expected=[("i3-notation", "I3")])]
+'''
+
+
+@case("a canary marker eaten on one occurrence -> ERROR, never PASS",
+      "canary markers unbalanced")
+def _marker_eaten():
+    return DELIMS + '''
+def _render(payload, *, nonce=None):
+    n = nonce or "aaaaaaaaaaaa"
+    body = payload if isinstance(payload, str) else ""
+    one = " ".join(body.replace("<<<", "[x").split())
+    two = one.replace("ZQCANARYZ7", "")          # closing marker eaten
+    return (f"<<<E_{n}>>>\\n{one}\\n<<<END_E_{n}>>>\\n"
+            f"<<<E_{n}>>>\\n{two}\\n<<<END_E_{n}>>>\\n")
+
+SINKS = [Sink("s", _render, "fenced", delims=_delims, nonce=_nonce,
+              accepts_nonce=True)]
+SABOTAGE = [Sabotage("s", lambda: Sink("s", _render, "fenced", delims=_delims),
+                     expected=[("i1-inst", "I1b")])]
+'''
+
+
 def main() -> int:
     failures = 0
     for name, expect, src in CASES:
