@@ -287,7 +287,51 @@ def main() -> int:
                       f"got exit={code}")
                 print("      " + "\n      ".join(out.strip().splitlines()[-14:]))
 
-    total = 1 + len(ROW_CASES) + len(GATE_CASES)
+        # Baseline roundtrip. --write-baseline and the reader are two halves of
+        # one format, and they drifted apart once already: the writer kept
+        # emitting three-element rows after the reader started requiring four,
+        # so a freshly written baseline made the very next run a config error.
+        # i3-notation ends in ERROR here: the canary is eaten, so the field
+        # cannot be located.
+        ERR_ON_I3 = CLEAN_SINGLE_LINE.replace(_SL_BODY,
+            '    body = payload if isinstance(payload, str) else ""\n'
+            '    if "\\u2265" in body:\n'
+            '        body = body.replace("ZQCANARYA7", "")\n'
+            '    body = _clean(body)')
+        # ...and FAIL here: the canary survives, the notation does not. Same row,
+        # different KIND of problem.
+        FAIL_ON_I3 = CLEAN_SINGLE_LINE.replace(_SL_BODY,
+            '    body = _clean(payload if isinstance(payload, str) else "")\n'
+            '    body = body.replace("\\u2265", "").replace("\\u00b5g", "ug")')
+        _, ap = load(ERR_ON_I3, td)
+        bl = td / "roundtrip.json"
+        w = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap),
+                            "--baseline", str(bl), "--write-baseline"],
+                           capture_output=True, text=True)
+        again = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap),
+                                "--baseline", str(bl)], capture_output=True, text=True)
+        ok = w.returncode == 0 and bl.exists() and again.returncode == 0
+        print(f"{'ok  ' if ok else 'FAIL'}  baseline roundtrip: write then re-run is clean")
+        if not ok:
+            failures += 1
+            print(f"      write exit={w.returncode} reread exit={again.returncode}")
+            print("      " + "\n      ".join(
+                (w.stderr + again.stdout + again.stderr).strip().splitlines()[-14:]))
+
+        # ...and a changed OUTCOME on a baselined row must still fail the gate,
+        # or recording the outcome bought nothing. Both runs report a problem on
+        # i3-notation; only the kind differs, which an identity-only baseline
+        # waves through.
+        _, ap2 = load(FAIL_ON_I3, td)
+        shifted = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap2),
+                                  "--baseline", str(bl)], capture_output=True, text=True)
+        ok = shifted.returncode != 0
+        print(f"{'ok  ' if ok else 'FAIL'}  baseline: a row whose outcome changed is new")
+        if not ok:
+            failures += 1
+            print("      the gate stayed quiet when a baselined row changed outcome")
+
+    total = 3 + len(ROW_CASES) + len(GATE_CASES)
     print(f"\n{total - failures}/{total} runner gates hold")
     return 1 if failures else 0
 

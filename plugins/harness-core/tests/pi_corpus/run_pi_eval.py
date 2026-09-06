@@ -513,7 +513,9 @@ def main() -> int:
     # a FAIL silently become an ERROR -- while the gate stayed quiet, which is a
     # second amnesty mechanism smuggled in through the first.
     baseline: dict[tuple[str, str, str], str] = {}
-    if bl_path.exists():
+    # Skipped under --write-baseline: an old file is about to be replaced, and
+    # rejecting it here would make the regeneration command unreachable.
+    if bl_path.exists() and not args.write_baseline:
         for x in json.loads(bl_path.read_text())["failures"]:
             if len(x) == 4:
                 baseline[(x[0], x[1], x[2])] = x[3]
@@ -540,12 +542,12 @@ def main() -> int:
 
     if args.write_baseline:
         bl_path.write_text(json.dumps(
-            {"failures": sorted(list(problems)),
+            {"failures": sorted([list(k) + [v] for k, v in problems.items()]),
              "note": "Accepted, tracked gaps -- failures AND cases that cannot be "
                      "measured. Anything new fails the gate; fixed ones never offset "
                      "a new one. Shrink this file, never grow it silently."},
             indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(f"wrote {bl_path} ({len(failures)} accepted failures)")
+        print(f"wrote {bl_path} ({len(problems)} accepted entries)")
         return 0
 
     sab_ok, sab_notes = sabotage_check(adapter, corpus)
