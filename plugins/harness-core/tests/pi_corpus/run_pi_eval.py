@@ -76,6 +76,37 @@ def load_corpus() -> list[dict]:
 
 
 # ── config validation (each of these otherwise degrades to a silent pass) ──
+def delims_errors(sink) -> list[str]:
+    """Reject delimiters that make containment unmeasurable or unsafe to scan.
+
+    A hook is free to return None ("this sink has no fence"), but if it returns a
+    pair, the pair has to be usable: empty strings match everywhere and nowhere,
+    identical open and close cannot mark a direction, and a non-string cannot be
+    searched for at all.
+    """
+    if sink.delims is None:
+        return []
+    try:
+        d = sink.delims(sink.render("benign", nonce=PINNED_NONCE)
+                        if sink.accepts_nonce else sink.render("benign"))
+    except Exception as exc:
+        return [f"delims_hook_raised: {sink.name!r} -> "
+                f"{type(exc).__name__}: {exc}"]
+    if d is None:
+        return []
+    if (not isinstance(d, (tuple, list)) or len(d) != 2
+            or not all(isinstance(x, str) for x in d)):
+        return [f"delims_not_a_string_pair: {sink.name!r} returned {d!r}"]
+    op, cl = d
+    if not op or not cl:
+        return [f"delims_empty: {sink.name!r} returned an empty delimiter "
+                f"({op!r}, {cl!r}); it would match everywhere and nowhere"]
+    if op == cl:
+        return [f"delims_identical: {sink.name!r} uses {op!r} for both ends, "
+                "so containment has no direction to check"]
+    return []
+
+
 def config_errors(sinks, sabotages, corpus) -> list[str]:
     errs: list[str] = []
     if not sinks:
@@ -91,6 +122,7 @@ def config_errors(sinks, sabotages, corpus) -> list[str]:
         if s.accepts_nonce and s.nonce is None:
             errs.append(f"accepts_nonce_without_hook: {s.name!r} claims nonce support "
                         "but supplies no extractor, so I4 could never be verified")
+        errs.extend(delims_errors(s))
     ids = {c["id"] for c in corpus}
     invs = set(C.INVARIANTS)
     for sab in sabotages:
@@ -218,6 +250,12 @@ def _alternating_pairs(fragment, op, cl, opens, closes, label):
 
 
 def _find_all(hay: str, needle: str) -> list[int]:
+    # An empty needle makes str.find return the cursor unchanged, so the loop
+    # below never advances. Callers get a validated delimiter (see
+    # `delims_errors`), but a scanner that can hang on bad configuration is not
+    # a scanner anyone should have to think about.
+    if not needle:
+        return []
     out, i = [], 0
     while True:
         j = hay.find(needle, i)

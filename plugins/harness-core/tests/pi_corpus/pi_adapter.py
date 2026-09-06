@@ -156,6 +156,10 @@ CONFIG_ERRORS = (
     "sabotage_without_expected",
     "sabotage_unknown_target",
     "unresolvable_placeholder",   # e.g. {OPEN} on a sink with no delims hook
+    "delims_empty",               # a delimiter that matches everywhere and nowhere
+    "delims_identical",           # one token for both ends: containment has no direction
+    "delims_not_a_string_pair",   # cannot be searched for
+    "delims_hook_raised",
     "empty_adapter",
     "zero_cases_executed",
 )

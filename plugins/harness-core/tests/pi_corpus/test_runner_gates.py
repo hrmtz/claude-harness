@@ -207,6 +207,18 @@ ROW_CASES: list[tuple[str, str, str, str, str, str, str]] = [
      CLEAN_FENCED, "check_i1b"),
 ]
 
+def _with_delims(_unused: str, new: str) -> str:
+    """CLEAN_SINGLE_LINE plus an override of the shared _delims helper."""
+    return CLEAN_SINGLE_LINE + f"""
+def _delims(f):
+    import re
+    m = re.search(r"<<<E_([0-9a-f]+)>>>", f)
+    return {new}
+SINKS = [Sink("s", _render, "single_line", delims=_delims, nonce=_nonce,
+              accepts_nonce=True)]
+"""
+
+
 # (label, source, substring that must appear in a non-zero-exit run)
 GATE_CASES: list[tuple[str, str, str]] = [
     ("every render raises", '''
@@ -219,6 +231,17 @@ SABOTAGE = [Sabotage("boom", lambda: Sink("boom", _boom, "single_line"),
 
     ("no SABOTAGE declared",
      CLEAN_SINGLE_LINE.split("def _unfolded")[0], "SABOTAGE"),
+
+    # A delimiter hook returning an empty string used to hang the scanner:
+    # str.find on an empty needle never advances the cursor. It is a config
+    # error now, and this case would time out rather than fail if it regressed.
+    ("delims hook returns an empty delimiter",
+     _with_delims("", '("", f"<<<END_E_{m.group(1)}>>>") if m else None'),
+     "delims_empty"),
+
+    ("delims hook returns one token for both ends",
+     _with_delims("", '(f"<<<E_{m.group(1)}>>>", f"<<<E_{m.group(1)}>>>") if m else None'),
+     "delims_identical"),
 
     # The partial version: most cases pass, a few cannot be measured. A guard
     # that only fires when NOTHING was judged walks straight past this.

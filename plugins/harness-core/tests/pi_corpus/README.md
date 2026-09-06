@@ -101,8 +101,12 @@ is listed as not re-measured rather than fixed. The baseline is the *only* amnes
 nothing, because two amnesty mechanisms let one silently void the other.
 
 Config mistakes are rejected rather than absorbed, since each otherwise degrades
-into a silent pass: an empty adapter, zero executed cases, a duplicate sink name,
-`accepts_nonce=True` with no extractor, a `Sabotage` with nothing to match.
+into a silent pass — or worse: an empty adapter, zero executed cases, a duplicate
+sink name, `accepts_nonce=True` with no extractor, a `Sabotage` with nothing to
+match, and a `delims` hook returning an empty, identical, or non-string pair. A
+`delims` hook may return `None` ("this sink has no fence"), but a pair it does
+return has to be usable: an empty delimiter matches everywhere and nowhere, and
+one token for both ends leaves containment with no direction to check.
 
 ## Negative controls
 
