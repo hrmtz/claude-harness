@@ -85,11 +85,21 @@ def has_row(rows, case_id, invariant, outcome) -> bool:
                and r["outcome"] == outcome for r in rows)
 
 
+#: Any single run here finishes in seconds. The cap exists because two of the
+#: cases below are guards against a scan that could spin forever on a bad
+#: delimiter -- without it, a regression would hang CI instead of failing it.
+RUN_TIMEOUT = 120
+
+
 def exit_code(source: str, td: pathlib.Path) -> tuple[int, str]:
     _, p = load(source, td)
-    r = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(p),
-                        "--baseline", str(td / "none.json")],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(p),
+                            "--baseline", str(td / "none.json")],
+                           capture_output=True, text=True, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return -1, (f"the runner did not finish within {RUN_TIMEOUT}s — "
+                    "it is most likely spinning on a malformed delimiter")
     return r.returncode, r.stdout + r.stderr
 
 
@@ -330,9 +340,10 @@ def main() -> int:
         bl = td / "roundtrip.json"
         w = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap),
                             "--baseline", str(bl), "--write-baseline"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=RUN_TIMEOUT)
         again = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap),
-                                "--baseline", str(bl)], capture_output=True, text=True)
+                                "--baseline", str(bl)], capture_output=True,
+                               text=True, timeout=RUN_TIMEOUT)
         ok = w.returncode == 0 and bl.exists() and again.returncode == 0
         print(f"{'ok  ' if ok else 'FAIL'}  baseline roundtrip: write then re-run is clean")
         if not ok:
@@ -347,7 +358,8 @@ def main() -> int:
         # waves through.
         _, ap2 = load(FAIL_ON_I3, td)
         shifted = subprocess.run([sys.executable, str(RUNNER), "--adapter", str(ap2),
-                                  "--baseline", str(bl)], capture_output=True, text=True)
+                                  "--baseline", str(bl)], capture_output=True,
+                                 text=True, timeout=RUN_TIMEOUT)
         ok = shifted.returncode != 0
         print(f"{'ok  ' if ok else 'FAIL'}  baseline: a row whose outcome changed is new")
         if not ok:
