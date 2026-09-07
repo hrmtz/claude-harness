@@ -302,9 +302,8 @@ def systemctl_status(tokens, index):
         "-H", "--host", "-M", "--machine", "-t", "--type", "--state",
         "-p", "--property", "--root", "--image", "--image-policy", "-n",
         "--lines", "-o", "--output", "--kill-who", "--kill-whom", "-s",
-        "--signal", "--job-mode", "--preset-mode", "--legend", "--timestamp",
-        "--boot-loader-menu", "--boot-loader-entry", "--when", "--what",
-        "--drop-in",
+        "--signal", "--job-mode", "--preset-mode",
+        "--boot-loader-menu", "--boot-loader-entry",
     }
     cursor = index + 1
     end = segment_end(tokens, index)
@@ -412,6 +411,70 @@ def command_substitutions(source):
         cursor += 1
 
 
+def systemctl_wrapper_body(tokens, index):
+    # Parse wrapper options before inspecting its actual command. Arguments to
+    # echo/printf remain data even when those commands have a wrapper.
+    base = os.path.basename(tokens[index])
+    options = {
+        "watch": {"-n", "--interval"},
+        "unbuffer": set(),
+        "strace": {"-e", "-o", "-p", "-u", "-E", "-P", "-I", "-a", "-s",
+                   "-O", "--trace", "--output", "--attach", "--user",
+                   "--env", "--trace-path", "--signal", "--string-limit"},
+        "ltrace": {"-e", "-l", "-o", "-p", "-u", "-s", "-A", "-F", "-x", "-a"},
+        "nice": {"-n", "--adjustment"},
+        "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+        "perf": {"-e", "-o", "-p", "-t", "-C", "-r", "-I", "--event",
+                 "--output", "--pid", "--tid", "--cpu", "--repeat",
+                 "--interval-print", "--timeout", "--delay"},
+        "script": {"-I", "-O", "-B", "-T", "--log-in", "--log-out",
+                   "--log-io", "--log-timing", "-m", "--logging-format",
+                   "-o", "--output-limit"},
+    }
+    if base not in options:
+        return None
+    end = segment_end(tokens, index)
+    cursor = index + 1
+    if base == "perf":
+        if cursor >= end or tokens[cursor] != "stat":
+            return None
+        cursor += 1
+    while cursor < end:
+        token = tokens[cursor]
+        if base == "script":
+            if token in {"-c", "--command"}:
+                # Conservatively cover an unquoted command body as well.
+                return " ".join(tokens[cursor + 1:end])
+            if token.startswith("--command="):
+                return token.split("=", 1)[1]
+            if token.startswith("-c") and len(token) > 2:
+                return token[2:]
+        if token == "--":
+            cursor += 1
+            break
+        if token in options[base]:
+            cursor += 2
+        elif token.startswith("-"):
+            cursor += 1
+        else:
+            break
+    if base == "script" or cursor >= end:
+        return None  # Script's remaining operands name output files.
+    body = tokens[cursor:end]
+    return " ".join(body) if base == "watch" else shlex.join(body)
+
+
+def systemctl_command_position(tokens, index):
+    if not command_position(tokens, index):
+        return False
+    prefix = tokens[segment_start(tokens, index):index]
+    while prefix and (prefix[0] in reserved_prefixes or assign.match(prefix[0])):
+        prefix = prefix[1:]
+    # The shared containment classifier accepts arbitrary trailing arguments
+    # after these wrappers. A inspects the parsed command body instead.
+    return not prefix or os.path.basename(prefix[0]) not in {"nice", "stdbuf"}
+
+
 def inspect_systemctl(source, depth=0):
     if depth > max_depth:
         raise ValueError("shell nesting exceeds classifier depth")
@@ -421,8 +484,11 @@ def inspect_systemctl(source, depth=0):
             return True
     tokens = tokenize(executable)
     for index, token in enumerate(tokens):
-        if not command_position(tokens, index):
+        if not systemctl_command_position(tokens, index):
             continue
+        body = systemctl_wrapper_body(tokens, index)
+        if body and inspect_systemctl(body, depth + 1):
+            return True
         base = os.path.basename(token)
         if base == "systemctl" and systemctl_status(tokens, index):
             return True

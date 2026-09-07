@@ -52,6 +52,53 @@ class SystemctlStatusGuard(unittest.TestCase):
                 self.assertIn("journalctl -u <unit>", reason)
                 self.assertTrue(reason.endswith("次これで行こう。"))
 
+    def test_wrappers_preserve_execution_and_prose(self):
+        wrappers = [
+            "watch -n1", "watch --interval 1", "unbuffer", "unbuffer -p",
+            "strace -f", "strace -e trace=process", "ltrace -f",
+            "perf stat", "perf stat -e cycles", "nice", "nice -n 5",
+            "stdbuf -oL", "stdbuf --output L",
+        ]
+        for index, wrapper in enumerate(wrappers):
+            with self.subTest(case=index):
+                self.assertEqual(
+                    self.decision(wrapper + " systemctl status foo")["permissionDecision"],
+                    "deny",
+                )
+                self.assertIsNone(self.decision(wrapper + " echo systemctl status"))
+                self.assertIsNone(self.decision(wrapper + " systemctl cat status"))
+        for command in [
+            "script -c systemctl status foo",
+            "script -c 'systemctl status foo'",
+            "script --command='systemctl status foo'",
+            "watch -n1 'systemctl status foo'",
+            "sudo watch -n1 systemctl status foo",
+        ]:
+            self.assertEqual(self.decision(command)["permissionDecision"], "deny")
+        for command in [
+            "script -c 'echo systemctl status'",
+            "script -c 'printf systemctl status'",
+            "echo 'watch -n1 systemctl status foo'",
+            "echo 'strace -f systemctl status foo'",
+            "printf '%s' 'script -c systemctl status foo'",
+        ]:
+            self.assertIsNone(self.decision(command))
+
+    def test_optional_values_do_not_consume_the_verb(self):
+        for option in ["--legend", "--timestamp", "--when", "--what", "--drop-in"]:
+            for flag in [option, option + "=test"]:
+                self.assertEqual(
+                    self.decision("systemctl " + flag + " status foo")["permissionDecision"],
+                    "deny",
+                )
+                self.assertIsNone(self.decision("systemctl " + flag + " cat status"))
+        for option in ["-p", "-H", "-o", "-n"]:
+            self.assertEqual(
+                self.decision("systemctl " + option + " test status foo")["permissionDecision"],
+                "deny",
+            )
+            self.assertIsNone(self.decision("systemctl " + option + " status is-active foo"))
+
     def test_safe_commands_and_prose_are_allowed(self):
         commands = [
             "systemctl is-active foo", "systemctl --user is-active foo",
