@@ -92,8 +92,8 @@ DEOBF=$(echo "$SCRUBBED" | sed -E '
 # This is intentionally literal containment, not regex interpretation:
 # `myscrip[t].py` does not occur literally in `myscript.py`, so the documented
 # bracket escape remains available. Dynamic patterns are not guessed.
-pkill_full_pattern_self_matches() {
-    [[ "$DEOBF" == *pkill* || "$DEOBF" == *pgrep* ]] || return 0
+classify_execution_output_risks() {
+    [[ "$DEOBF" == *pkill* || "$DEOBF" == *pgrep* || "$DEOBF" == *systemctl* ]] || return 0
     python3 - "$SCRUBBED" 2>/dev/null <<'PY'
 import os
 import re
@@ -291,6 +291,162 @@ def ssh_remote_body(tokens, executable_index):
     return " ".join(tokens[cursor:end])
 
 
+# systemctl status prints process argv in the CGroup tree (#303). Reuse the
+# execution-position and wrapper parsing above; never match inert prose.
+# This remains a literal shell classifier, not an evaluator of dynamic programs.
+# Runtime-built commands, heredoc expansion, and shell-fed heredoc programs are
+# not resolved; the value scrubber and argv-free service configuration remain
+# independent defenses. Inert documentation heredocs must remain usable.
+def systemctl_status(tokens, index):
+    value_options = {
+        "-H", "--host", "-M", "--machine", "-t", "--type", "--state",
+        "-p", "--property", "--root", "--image", "--image-policy", "-n",
+        "--lines", "-o", "--output", "--kill-who", "--kill-whom", "-s",
+        "--signal", "--job-mode", "--preset-mode", "--legend", "--timestamp",
+        "--boot-loader-menu", "--boot-loader-entry", "--when", "--what",
+        "--drop-in",
+    }
+    cursor = index + 1
+    end = segment_end(tokens, index)
+    while cursor < end:
+        token = tokens[cursor]
+        if token in value_options:
+            cursor += 2
+        elif token == "--":
+            return cursor + 1 < end and tokens[cursor + 1] == "status"
+        elif token.startswith("-"):
+            cursor += 1
+        elif token in {">", ">>", "<", "2>"}:
+            cursor += 2
+        else:
+            return token == "status"
+    return False
+
+
+def without_heredoc_data(source):
+    # Here-document bodies are stdin data, not top-level commands. Keep the
+    # command line itself, including commands after a heredoc redirection.
+    lines = source.splitlines(keepends=True)
+    result = []
+    pending = []
+    for line in lines:
+        if pending:
+            delimiter, strip_tabs = pending[0]
+            candidate = line.rstrip("\r\n")
+            if strip_tabs:
+                candidate = candidate.lstrip("\t")
+            if candidate == delimiter:
+                pending.pop(0)
+            continue
+        result.append(line)
+        # Tokenize the line first so a quoted mention of << remains inert.
+        try:
+            words = tokenize(line)
+        except ValueError:
+            continue
+        for i, word in enumerate(words[:-1]):
+            if word != "<<":
+                continue
+            delimiter = words[i + 1]
+            strip_tabs = delimiter.startswith("-")
+            if strip_tabs:
+                delimiter = delimiter[1:]
+            if delimiter:
+                pending.append((delimiter, strip_tabs))
+    return "".join(result)
+
+
+def command_substitutions(source):
+    # Quoted $() still executes inside double quotes, but single-quoted prose
+    # and escaped dollar/backtick characters stay inert.
+    quote = None
+    cursor = 0
+    while cursor < len(source):
+        char = source[cursor]
+        if char == "\\" and quote != "'":
+            cursor += 2
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+        if quote != "'" and source.startswith("$(", cursor):
+            start = cursor + 2
+            end = start
+            balance = 1
+            inner_quote = None
+            while end < len(source):
+                current = source[end]
+                if current == "\\" and inner_quote != "'":
+                    end += 2
+                    continue
+                if current in {"'", '"'}:
+                    if inner_quote == current:
+                        inner_quote = None
+                    elif inner_quote is None:
+                        inner_quote = current
+                elif inner_quote is None:
+                    if current == "(":
+                        balance += 1
+                    elif current == ")":
+                        balance -= 1
+                        if balance == 0:
+                            break
+                end += 1
+            if balance == 0:
+                yield source[start:end]
+                cursor = end
+        elif quote != "'" and char == "`":
+            end = cursor + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end += 2
+                    continue
+                if source[end] == "`":
+                    break
+                end += 1
+            if end < len(source):
+                yield source[cursor + 1:end]
+                cursor = end
+        cursor += 1
+
+
+def inspect_systemctl(source, depth=0):
+    if depth > max_depth:
+        raise ValueError("shell nesting exceeds classifier depth")
+    executable = without_heredoc_data(source)
+    for body in command_substitutions(executable):
+        if inspect_systemctl(body, depth + 1):
+            return True
+    tokens = tokenize(executable)
+    for index, token in enumerate(tokens):
+        if not command_position(tokens, index):
+            continue
+        base = os.path.basename(token)
+        if base == "systemctl" and systemctl_status(tokens, index):
+            return True
+        end = segment_end(tokens, index)
+        if base in shells:
+            for cursor in range(index + 1, end - 1):
+                option = tokens[cursor]
+                if option == "--command" or (
+                    option.startswith("-") and not option.startswith("--")
+                    and "c" in option[1:]
+                ):
+                    if inspect_systemctl(tokens[cursor + 1], depth + 1):
+                        return True
+                    break
+        elif base == "eval":
+            if inspect_systemctl(" ".join(tokens[index + 1:end]), depth + 1):
+                return True
+        elif base == "ssh":
+            remote = ssh_remote_body(tokens, index)
+            if remote and inspect_systemctl(remote, depth + 1):
+                return True
+    return False
+
+
 def inspect(source, depth=0, inherited=()):
     if depth > max_depth:
         raise ValueError("shell nesting exceeds classifier depth")
@@ -360,6 +516,9 @@ def inspect(source, depth=0, inherited=()):
 
 
 try:
+    literal_command = command.replace("'", "").replace('"', "").replace("\\", "")
+    if "systemctl" in literal_command and inspect_systemctl(command):
+        sys.exit(12)
     matched = inspect(command)
 except (ValueError, IndexError):
     sys.exit(11)
@@ -367,12 +526,14 @@ sys.exit(10 if matched else 0)
 PY
 }
 
-pkill_full_pattern_self_matches
-PKILL_SELF_MATCH=$?
-if [ "$PKILL_SELF_MATCH" -eq 10 ]; then
+classify_execution_output_risks
+OUTPUT_RISK=$?
+if [ "$OUTPUT_RISK" -eq 12 ]; then
+    emit_deny "- 稼働確認は systemctl is-active <unit> / systemctl --user is-active <unit> を使おう。\n- ログ確認は journalctl -u <unit> を使おう。\n次これで行こう。"
+elif [ "$OUTPUT_RISK" -eq 10 ]; then
     emit_deny "- pkill/pgrep -f の literal pattern が同じ実行 command に再出現する。myscrip[t].py の bracket 形か PID file を使おう。\n次これで行こう。"
-elif [ "$PKILL_SELF_MATCH" -ne 0 ]; then
-    printf '%s\n' "bash command guard pkill/pgrep classification failed; refusing tool execution" >&2
+elif [ "$OUTPUT_RISK" -ne 0 ]; then
+    printf '%s\n' "bash command guard execution-output classification failed; refusing tool execution" >&2
     exit 2
 fi
 
