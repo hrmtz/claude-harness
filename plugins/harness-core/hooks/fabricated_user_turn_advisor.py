@@ -137,7 +137,13 @@ def _outside_fence_lines(lines: list[str], start: int) -> list[str]:
 
 
 def _has_fabricated_user_turn(lines: list[str]) -> bool:
-    """Detect a user-turn lookalike at the assistant message tail."""
+    """Detect a user-turn lookalike at the assistant message tail.
+
+    Keep the calibrated short-turn path; longer marker-line utterances need
+    an explicit question mark or request ending (くれ/ください). Length alone
+    drops real questions, but accepting all long text also flags declarative
+    technical prose. All existing prose exclusions still apply.
+    """
     first_tail_line = max(0, len(lines) - TAIL_LINES)
 
     for index, line in enumerate(lines):
@@ -149,11 +155,12 @@ def _has_fabricated_user_turn(lines: list[str]) -> bool:
         if _inside_fence(lines, index):
             continue
         utterance = (match.group("utterance") or "").strip()
-        # Corpus-grounded precision constraints: normal line-leading prose uses
-        # a longer subject phrase, attribution prefix, or prose punctuation.
+        # Corpus-grounded precision constraints: long declarative subject
+        # phrases remain excluded; only explicit question/request endings lift
+        # the length cap. Bare particles/verb suffixes are too ambiguous here.
         # Technical vocabulary in the *following fabricated speech* is allowed:
         # fake authorization such as "mergeして" is exactly what must be caught.
-        if len(utterance) > 30:
+        if len(utterance) > 30 and not utterance.endswith(("?", "？", "くれ", "ください")):
             continue
         if NORMAL_PROSE_PREFIX.search(utterance):
             continue
