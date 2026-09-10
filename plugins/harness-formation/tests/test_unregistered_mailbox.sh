@@ -28,16 +28,16 @@ formation() { bash "$HERE/../bin/formation" "$@"; }
 send() { bash "$HERE/../bin/mailbox-send" "$@"; }
 
 formation msg ordinary-agent 'hello without registration' >"$FIXTURE/msg"
-rg -q 'signal=sent-directly' "$FIXTURE/msg"
+grep -Fq 'signal=sent-directly' "$FIXTURE/msg"
 send ordinary-agent 'second entrypoint' >"$FIXTURE/send"
 [[ "$(tmux show-options -pqv -t "$pane" @formation_mail_pending)" == 2 ]]
 [[ "$(tmux capture-pane -p -t "$pane")" == "$before" ]]
 [[ ! -s "$FORMATION_HOME/formation/registry.jsonl" ]]
 jq -se 'length == 2 and all(.to == "ordinary-agent")' "$FORMATION_MAILBOX" >/dev/null
 FORMATION_SELF=ordinary-agent formation inbox >"$FIXTURE/inbox"
-rg -q 'hello without registration' "$FIXTURE/inbox"
-rg -q 'second entrypoint' "$FIXTURE/inbox"
-FORMATION_SELF=ordinary-agent formation inbox | rg -q '^\(empty\)$'
+grep -Fq 'hello without registration' "$FIXTURE/inbox"
+grep -Fq 'second entrypoint' "$FIXTURE/inbox"
+FORMATION_SELF=ordinary-agent formation inbox | grep -Fxq '(empty)'
 
 # Read from the real recipient process without supplying FORMATION_SELF: the
 # ancestry-verified pane's startup identity must resolve the same mailbox.
@@ -54,10 +54,10 @@ tmux respawn-pane -k -t "$pane" \
   "bash '$FIXTURE/pull.sh'"
 touch "$FIXTURE/ready"
 for _ in {1..80}; do
-  if [[ -f "$FIXTURE/pane-inbox" ]] && rg -q 'second entrypoint' "$FIXTURE/pane-inbox"; then break; fi
+  if [[ -f "$FIXTURE/pane-inbox" ]] && grep -Fq 'second entrypoint' "$FIXTURE/pane-inbox"; then break; fi
   sleep 0.05
 done
-rg -q 'hello without registration' "$FIXTURE/pane-inbox"
+grep -Fq 'hello without registration' "$FIXTURE/pane-inbox"
 before="$(tmux capture-pane -p -t "$pane")"
 
 # Shared resolver callers must carry the discovered pane through to signaling.
@@ -78,7 +78,7 @@ other="$(tmux new-window -d -P -F '#{pane_id}' -t fixture 'sleep 120')"
 tmux set-option -p -t "$other" @formation_identity_locked ordinary-agent
 count="$(wc -l <"$FORMATION_MAILBOX")"
 if formation msg ordinary-agent ambiguous >"$FIXTURE/duplicate" 2>&1; then exit 1; fi
-rg -q 'ambiguous live identity' "$FIXTURE/duplicate"
+grep -Fq 'ambiguous live identity' "$FIXTURE/duplicate"
 [[ "$(wc -l <"$FORMATION_MAILBOX")" == "$count" ]]
 tmux set-option -p -u -t "$other" @formation_identity_locked
 tmux rename-window -t "$other" codex-display-only
@@ -98,7 +98,7 @@ if send dead-agent ignored >"$FIXTURE/dead" 2>&1; then exit 1; fi
 jq -cn --arg pane "$other" '{id:"ordinary-agent",pane_id:$pane}' \
   >"$FORMATION_HOME/formation/registry.jsonl"
 formation msg ordinary-agent 'registered route wins' >"$FIXTURE/registered"
-rg -Fq "pane=$other" "$FIXTURE/registered"
+grep -Fq "pane=$other" "$FIXTURE/registered"
 source "$HERE/../lib/mailbox_delivery.sh"
 tmux() { echo unexpected-tmux >>"$FIXTURE/unexpected"; return 1; }
 mailbox_resolve_recipient ordinary-agent "$FORMATION_HOME/formation/registry.jsonl" 1 0
