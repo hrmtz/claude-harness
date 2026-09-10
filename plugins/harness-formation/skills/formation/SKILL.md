@@ -327,8 +327,9 @@ is closed by the Monitor rail below.
 
 A fully idle Claude parent gets no new turn from a mailbox badge. The
 event-driven wake uses the Claude `Monitor` tool plus
-`formation inbox --follow`, which streams exactly one metadata line per new
-addressed mailbox row (seq/from/ts/subject only — never the body), touches
+`formation inbox --follow`, which streams one bounded metadata line per batch of new
+addressed mailbox rows (single-row metadata or batch count/maximum sequence —
+never the body), touches
 neither cursor nor badge, and rides the same inotify+timeout discipline as the
 relay. Each emitted line becomes a task notification that starts a turn even
 while the session is idle — zero keystrokes into any pane, and the event is
@@ -351,6 +352,13 @@ so arming late cannot silently skip mail. On wake, pull with
 `TaskStop` when the last worker is reaped. Codex leads have no Monitor tool;
 they remain covered by badge + hooks only, so prefer a Claude lead for
 long-running supervision.
+
+Keep one Monitor per lead, not one per worker. After a notification, drain the
+inbox once and act on the batch. Do not interleave unchanged `formation status`,
+`formation inbox` or `capture-pane` polling while the Monitor is armed. A user
+status request, a stalled job, or a required verification is still a reason to
+inspect current state. ASK/DONE messages remain in the inbox until the normal
+pull consumes them; batching does not acknowledge an ASK.
 
 ### 4. Worker-side (what the worker pane should do)
 

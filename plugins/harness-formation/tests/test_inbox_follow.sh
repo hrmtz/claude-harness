@@ -149,6 +149,35 @@ if [[ "$POLL_OK" == "0" ]]; then
 else
   bad "polling fallback missed seq 13 [$(cat "$OUT2")]"
 fi
+
+# A burst becomes one doorbell; the observer neither drops nor consumes the
+# ASK/DONE payloads. Append as one write to avoid fixture scheduling races.
+python3 - <<'PY'
+import json, os
+rows = [{"seq": n, "from": "worker-burst", "to": "tester",
+         "body": "[ASK] ASK-42" if n == 14 else "[DONE] finished" if n == 15
+                 else "BURST-BODY-MUST-NOT-LEAK"} for n in range(14, 114)]
+with open(os.environ["FORMATION_MAILBOX"], "a") as log:
+    log.write("".join(json.dumps(row) + "\n" for row in rows))
+PY
+for i in $(seq 1 100); do
+  grep -q 'batch=100 through_seq=113' "$OUT2" 2>/dev/null && break
+  sleep 0.1
+done
+sleep 1.2
+if [[ "$(grep -c 'batch=100 through_seq=113' "$OUT2")" == 1 ]] &&
+   ! grep -q 'BURST-BODY-MUST-NOT-LEAK\|ASK-42\|\[DONE\]' "$OUT2"; then
+  ok "100-message burst emits one bounded notification without body leakage or replay"
+else
+  bad "burst was lost, duplicated, or leaked [$(cat "$OUT2")]"
+fi
+if [[ "$CURSOR_BEFORE" == "$(cksum "$CURSOR")" ]] &&
+   jq -se 'any(.[]; .body == "[ASK] ASK-42") and any(.[]; .body == "[DONE] finished")' \
+     "$FORMATION_MAILBOX" >/dev/null; then
+  ok "burst leaves ASK/DONE and inbox cursor intact"
+else
+  bad "burst changed durable inbox state"
+fi
 kill "$FOLLOW_PID" 2>/dev/null
 wait "$FOLLOW_PID" 2>/dev/null
 FOLLOW_PID=""
