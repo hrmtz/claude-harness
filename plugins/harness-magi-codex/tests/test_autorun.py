@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -76,6 +77,7 @@ class AutorunTest(unittest.TestCase):
                 self.arm()
                 path = self.registry_path()
                 path.unlink()
+
                 if kind == "oversized":
                     path.write_bytes(b"x" * (autorun_module.MAX_REGISTRY_BYTES + 1))
                 else:
@@ -89,6 +91,18 @@ class AutorunTest(unittest.TestCase):
                     output["reason"],
                 )
                 path.unlink()
+
+    def test_malformed_armed_protocol_cannot_fall_back_to_current_runtime(self) -> None:
+        self.arm()
+        original = self.registry()
+        for value in (None, "", "a" * 63, "G" * 64, 42, []):
+            with self.subTest(value=value):
+                payload = original.copy()
+                payload["armed_protocol_sha"] = value
+                self.registry_path().write_text(json.dumps(payload))
+                output = json.loads(self.hook().stdout)
+                self.assertEqual(output["decision"], "block")
+                self.assertIn("protocol identity is malformed", output["reason"])
 
     def arm(self) -> None:
         result = self.command("arm", str(self.doc), "--session", self.session)
@@ -185,6 +199,50 @@ class AutorunTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.registry()["status"], "blocked")
         self.assertEqual(self.hook().stdout, "")
+
+    def test_completion_uses_armed_protocol_across_runtime_upgrade(self) -> None:
+        upgraded = self.root / "upgraded-plugin"
+        shutil.copytree(HERE.parent, upgraded, ignore=shutil.ignore_patterns("__pycache__", "tests"))
+        packet = upgraded / "scripts" / "magi_review_packet.py"
+        packet.write_text(packet.read_text() + "\n# Synthetic next runtime generation.\n")
+        upgraded_sha = subprocess.check_output(
+            ["python3", str(upgraded / "scripts" / "magi_protocol.py"), "sha"], text=True
+        ).strip()
+        original_sha = protocol_sha()
+        self.assertNotEqual(upgraded_sha, original_sha)
+        for action, marker_protocol, legacy, accepted in (
+            ("hook", original_sha, False, True),
+            ("complete", original_sha, False, True),
+            ("hook", upgraded_sha, False, False),
+            ("hook", original_sha, True, False),
+        ):
+            with self.subTest(action=action, marker_protocol=marker_protocol, legacy=legacy):
+                self.arm()
+                if legacy:
+                    payload = self.registry()
+                    payload["schema_version"] = 1
+                    payload.pop("armed_protocol_sha", None)
+                    self.registry_path().write_text(json.dumps(payload))
+                doc_sha = hashlib.sha256(self.doc.read_bytes()).hexdigest()
+                marker = self.doc.parent / ".dual-magi" / (
+                    f"PLATEAU.{autorun_module.document_id(self.doc)}.{doc_sha[:16]}"
+                )
+                marker.write_text(json.dumps({
+                    "artifact_sha": doc_sha, "protocol_sha": marker_protocol,
+                    "reviewer_family": "claude", "asserts_passed": [f"G{n}" for n in range(1, 10)],
+                }))
+                before = marker.read_bytes()
+                args = ["--hook"] if action == "hook" else [
+                    "complete", str(self.doc), "--session", self.session, "--reason", "verified fixture",
+                ]
+                result = subprocess.run(
+                    ["python3", str(upgraded / "scripts" / "magi_autorun.py"), *args],
+                    input=json.dumps({"session_id": self.session}), text=True,
+                    capture_output=True, env=self.env, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.registry()["status"], "complete" if accepted else "blocked", result.stdout)
+                self.assertEqual(marker.read_bytes(), before)
 
     def test_complete_command_cannot_bypass_plateau_gate(self) -> None:
         self.arm()
@@ -321,11 +379,15 @@ class AutorunTest(unittest.TestCase):
         self.arm()
         path = self.registry_path()
         payload = json.loads(path.read_text())
+        payload["schema_version"] = 1
+        payload.pop("armed_protocol_sha")
         payload.pop("completed_artifact_sha")
         path.write_text(json.dumps(payload))
         output = json.loads(self.hook().stdout)
         self.assertEqual(output["decision"], "block")
         self.assertIn("completed_artifact_sha", self.registry())
+        self.assertEqual(self.registry()["schema_version"], 1)
+        self.assertNotIn("armed_protocol_sha", self.registry())
 
     def test_three_remaining_fanout_candidate_blocks_for_reserve(self) -> None:
         active = [
