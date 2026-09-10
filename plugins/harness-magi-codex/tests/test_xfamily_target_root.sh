@@ -10,6 +10,14 @@
 #
 # Every reviewer here is a stub on PATH; no model launch is ever spent.
 set -uo pipefail
+XFAMILY_ONLY=0
+if [ "$#" -gt 0 ]; then
+    if [ "$#" -ne 1 ] || [ "$1" != "--xfamily-only" ]; then
+        echo "usage: $0 [--xfamily-only]" >&2
+        exit 64
+    fi
+    XFAMILY_ONLY=1
+fi
 export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 unset TMUX TMUX_PANE
 
@@ -99,7 +107,7 @@ cat > "$TMP/home/.grok/sessions/workspace/$SID/chat_history.jsonl" <<'JSONL'
 {"type":"assistant","content":"done","model_id":"grok-4.6","tool_calls":[]}
 JSONL
 python3 - "\$artifact_id" "\$artifact_sha" "\$round" <<'PY'
-import json, sys
+import json, os, sys
 artifact_id, artifact_sha, round_ = sys.argv[1:4]
 finding = {"reviewer": "GROK-XFAMILY", "round": int(round_), "artifact_id": artifact_id,
            "artifact_sha": artifact_sha, "verdict": "GO",
@@ -107,7 +115,7 @@ finding = {"reviewer": "GROK-XFAMILY", "round": int(round_), "artifact_id": arti
            "verify_commands_executed": ["read_file docs/design.md"],
            "source_artifacts": [], "dispositions": [], "findings": []}
 print(json.dumps({"structuredOutput": finding, "text": json.dumps(finding),
-                  "stopReason": "EndTurn", "sessionId": "$SID"}))
+                  "stopReason": os.environ.get("STUB_GROK_STOP_REASON", "EndTurn"), "sessionId": "$SID"}))
 PY
 STUB
 chmod +x "$TMP/bin/grok"
@@ -185,12 +193,36 @@ seed_round_1 "$TMP/repoB/docs/design3.md" "$TMP/repoB/state3" || exit 1
 run_adapter_from_repoA "$TMP/cwd.log" grok ../repoB/docs/design3.md \
     ../repoB/state3/round_1_codex.json ../repoB/state3/round_2_grok >/dev/null 2>&1
 rc=$?
-[ $rc -eq 0 ] && ok "relative cross-repo Grok round completes" || bad "Grok adapter rc=$rc"
+[ $rc -eq 0 ] && ok "relative cross-repo Grok EndTurn round completes" || bad "Grok adapter rc=$rc"
 if [ "$(sort -u "$TMP/cwd.log")" = "$TMP/repoB" ]; then
   ok "Grok reviewer is handed --cwd of the repo B worktree, not the caller's cwd"
 else
   bad "Grok --cwd is not the repo B root: $(sort -u "$TMP/cwd.log" | tr '\n' ' ')"
 fi
+
+# Grok CLI versions use both EndTurn and end_turn. Unknown endings must never publish a pair.
+for stop_reason in end_turn UnexpectedEnd; do
+  state="$TMP/repoB/state_$stop_reason"
+  doc="$TMP/repoB/docs/design_$stop_reason.md"
+  mkdir -p "$state"
+  printf 'a design for Grok stop-reason compatibility\n' > "$doc"
+  seed_round_1 "$doc" "$state" || exit 1
+  prefix="$state/round_2_grok"
+  run_adapter_from_repoA "$TMP/cwd.log" grok "../repoB/docs/design_$stop_reason.md" \
+      "../repoB/state_$stop_reason/round_1_codex.json" "../repoB/state_$stop_reason/round_2_grok" \
+      STUB_GROK_STOP_REASON="$stop_reason" >"$TMP/stop_reason.out" 2>"$TMP/stop_reason.err"
+  rc=$?
+  if [ "$stop_reason" = end_turn ]; then
+    [ $rc -eq 0 ] && [ -s "$prefix.json" ] && [ -s "$prefix.meta.json" ] \
+        && [ ! -e "$prefix.FAILED.json" ] && ok "Grok end_turn publishes validated findings and provenance" \
+        || bad "Grok end_turn did not complete (rc=$rc)"
+  else
+    [ $rc -eq 2 ] && [ -s "$prefix.FAILED.json" ] && [ ! -e "$prefix.json" ] \
+        && [ ! -e "$prefix.meta.json" ] && grep -q "grok stopReason='UnexpectedEnd'" "$TMP/stop_reason.err" \
+        && ok "unknown Grok stopReason fails closed without findings or provenance" \
+        || bad "unknown Grok stopReason was not rejected (rc=$rc)"
+  fi
+done
 
 # --- 4. Non-git document falls back to its own directory --------------------------------------
 mkdir -p "$TMP/nogit/state"
@@ -203,6 +235,11 @@ if [ $rc -eq 0 ] && [ "$(sort -u "$TMP/cwd.log")" = "$TMP/nogit" ]; then
   ok "non-git target falls back to the document directory as the Claude cwd"
 else
   bad "non-git Claude fallback broken (rc=$rc cwd=$(sort -u "$TMP/cwd.log" | tr '\n' ' '))"
+fi
+
+if [ "$XFAMILY_ONLY" -eq 1 ]; then
+  echo "test_xfamily_target_root (xfamily-only): $pass passed, $fail failed"
+  exit $((fail > 0))
 fi
 
 # --- 5. Codex pre-flight ---------------------------------------------------------------------

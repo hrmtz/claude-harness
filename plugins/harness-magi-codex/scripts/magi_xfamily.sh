@@ -569,7 +569,7 @@ else:
     text = env.get("text", "") or ""
     sid = env.get("sessionId")
     denials = []
-    if env.get("stopReason") not in (None, "EndTurn"):
+    if env.get("stopReason") not in (None, "EndTurn", "end_turn"):
         raise SystemExit(f"grok stopReason={env.get('stopReason')!r}")
     transcript_matches = glob.glob(os.path.expanduser(
         f"~/.grok/sessions/*/{glob.escape(str(sid))}/chat_history.jsonl"

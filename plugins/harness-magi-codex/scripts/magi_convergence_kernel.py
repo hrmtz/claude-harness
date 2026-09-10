@@ -348,7 +348,7 @@ def evaluate_dual_magi_design(state: dict[str, Any]) -> dict[str, Any]:
             next_mode=None,
             **common,
         )
-    if delta["mass_stalled"]:
+    if current_roots and delta["mass_stalled"]:
         return output(
             "BLOCKED", "DESIGN_BLOCKER_MASS_STALLED", next_mode=None, **common
         )
