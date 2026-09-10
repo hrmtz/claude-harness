@@ -110,6 +110,8 @@ jobs:
           tmux ls
       - name: Test post-hoc Formation registration (real tmux)
         run: bash plugins/harness-formation/tests/test_register_real_tmux.sh
+      - name: Test mailbox without registration (real tmux)
+        run: bash plugins/harness-formation/tests/test_unregistered_mailbox.sh
       - name: Test hook dispatch chassis (real panes)
         env:
           HARNESS_TEST_REQUIRE_TMUX: "1"

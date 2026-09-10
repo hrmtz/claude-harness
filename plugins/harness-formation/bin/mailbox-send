@@ -19,7 +19,7 @@
 #   mailbox-send <to> <body> [--from NAME] [--session ID] \
 #                [--no-nudge] [--inject] [--force]
 #
-#   <to>    registered worker id or recipient pane: "pane-25" | "%25" | "25"
+#   <to>    worker id, live locked identity, or pane: "pane-25" | "%25" | "25"
 #   <body>  message text (single arg; quote it)
 #
 # Options:
@@ -27,7 +27,7 @@
 #                  Default: FORMATION_SELF, then the pane's locked Formation
 #                  identity, then MAILBOX_FROM/window fallback.
 #   --session ID   session uuid for the entry (default: $MAILBOX_SESSION|"unknown")
-#   --no-nudge     append only; skip signal and inject (bulk ticks only)
+#   --no-nudge     append only; registered id or numeric pane required (no tmux lookup)
 #   --inject       also attempt prompt inject (exclusive workers / explicit wake).
 #                  Default is OFF — draft non-destruction > immediacy (#166).
 #   --force        bypass the credential-shaped-body guard (use with care)
@@ -69,11 +69,11 @@ TO="${posargs[0]}"; BODY="${posargs[1]}"
 FROM="$(mailbox_resolve_sender "$FROM" unknown)"
 SESSION="${SESSION:-${MAILBOX_SESSION:-unknown}}"
 
-# Mailbox addressing is worker-id based; pane ids are delivery metadata. Resolve
-# from the registry without touching tmux so --no-nudge remains append-only.
+# Prefer registered ids; normal sends can discover a live locked identity.
+# --no-nudge remains tmux-free when the sender is explicit.
 REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
-if ! mailbox_resolve_recipient "$TO" "$REGISTRY" 1; then
-  echo "mailbox-send: unknown recipient '$TO' (use a numeric pane id or registered worker id)" >&2
+if ! mailbox_resolve_recipient "$TO" "$REGISTRY" 1 "$NUDGE"; then
+  echo "mailbox-send: unknown recipient '$TO' (use a live locked identity, numeric pane id, or registered worker id; --no-nudge requires pane/id)" >&2
   exit 2
 fi
 TO_LABEL="$MAILBOX_RECIPIENT_LABEL"

@@ -64,15 +64,17 @@ mailbox_resolve_sender() {
   printf '%s\n' "$fallback"
 }
 
-# Resolve a recipient without touching tmux.
+# Resolve registered recipients first, then an unregistered live locked identity.
+# Disable live lookup for append-only/offline callers.
 #
-# Args: <target> <registry.jsonl> [allow-direct-pane=0]
+# Args: <target> <registry.jsonl> [allow-direct-pane=0] [allow-live-identity=1]
 # Sets:
 #   MAILBOX_RECIPIENT_LABEL
 #   MAILBOX_RECIPIENT_PANE
 #   MAILBOX_RECIPIENT_EXCLUSIVE (0|1)
 mailbox_resolve_recipient() {
   local target="$1" registry="$2" allow_direct="${3:-0}"
+  local allow_live="${4:-1}" candidate identity dead matches=0 live_pane=""
   local raw="${target#pane-}" pane="" row="" canonical=""
   local allow_direct_json=false
   [[ "$allow_direct" == "1" ]] && allow_direct_json=true
@@ -104,6 +106,26 @@ mailbox_resolve_recipient() {
       if [[ "$(printf '%s' "$row" | jq -r '.exclusive_input // false')" == "true" ]]; then
         MAILBOX_RECIPIENT_EXCLUSIVE=1
       fi
+    fi
+  fi
+
+  if [[ -z "$MAILBOX_RECIPIENT_LABEL" && -z "$row" && "$allow_live" == "1" &&
+        "$target" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    # Window names are mutable display text, not routing identities. Require
+    # exactly one live pane with the locked identity assigned by the CLI hook.
+    while IFS='|' read -r candidate identity dead; do
+      [[ "$candidate" =~ ^%[0-9]+$ && "$identity" == "$target" && "$dead" == "0" ]] || continue
+      matches=$((matches + 1))
+      live_pane="$candidate"
+    done < <(tmux list-panes -a -F '#{pane_id}|#{@formation_identity_locked}|#{pane_dead}' 2>/dev/null || true)
+    if [[ "$matches" -gt 1 ]]; then
+      echo "mailbox: ambiguous live identity '$target' ($matches panes)" >&2
+      return 1
+    fi
+    if [[ "$matches" -eq 1 ]]; then
+      MAILBOX_RECIPIENT_LABEL="$target"
+      MAILBOX_RECIPIENT_PANE="$live_pane"
+      # Discovery grants no exclusive-input authority and writes no registry.
     fi
   fi
 

@@ -1384,7 +1384,7 @@ cmd_review_request() {
   local reviewer="$1"; shift
   local subject="$*"
   local requester manager requester_pane manager_pane
-  local row result request_id marker body notify_result notified seq signal_rc=0
+  local reviewer_pane result request_id marker body notify_result notified seq signal_rc=0
   requester="$(self_id)"
   manager="${FORMATION_PARENT:-$requester}"
   requester_pane="$(mailbox_resolve_caller_pane || true)"
@@ -1401,7 +1401,7 @@ cmd_review_request() {
     return 2
   fi
   reviewer="$MAILBOX_RECIPIENT_LABEL"
-  row="$(registry_get "$reviewer" || true)"
+  reviewer_pane="$MAILBOX_RECIPIENT_PANE"
   result="$(review_create "$reviewer" "$requester" "$manager" \
     "$requester_pane" "$manager_pane" "$subject")"
   request_id="$(printf '%s\n' "$result" | jq -r '.request_id')"
@@ -1411,7 +1411,7 @@ cmd_review_request() {
     "$requester" "$reviewer" "$marker" "$body")"
   read -r notified seq <<<"$notify_result"
   mailbox_signal_or_defer "$reviewer" \
-    "$(printf '%s\n' "$row" | jq -r '.pane_id // empty')" \
+    "$reviewer_pane" \
     "$seq" "$requester" "$FORMATION_DIR" >&2 || signal_rc=$?
 
   if [[ "$manager" != "$requester" && "$manager" != "$reviewer" ]]; then

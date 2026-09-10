@@ -104,8 +104,18 @@ urgent instruction, inspect `formation status` or the explicit
 
 ### Registering an existing pane
 
+Ordinary CLI panes with a startup-assigned `@formation_identity_locked` can
+receive `formation msg <codename> "message"` or `mailbox-send <codename> "message"`
+immediately, without registration. Senders first consult the registry, then
+look for exactly one live pane with that locked identity. Duplicate identities
+are refused; window names are not routing identities. Recipients use
+`formation inbox`. Discovery does not grant exclusive-input authority or create
+a managed worker. `mailbox-send --no-nudge` stays offline-capable and requires
+a registered id or numeric pane instead of live discovery.
+
 Use `formation register` inside a tmux pane that Formation did not spawn, or
-inside a surviving pane after an approved registry reset:
+inside a surviving pane after an approved registry reset, when managed-worker
+metadata or parent routing is needed:
 
 ```bash
 formation register --cli claude --task coordination lead
