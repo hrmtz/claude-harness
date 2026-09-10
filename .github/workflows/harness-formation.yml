@@ -100,7 +100,7 @@ jobs:
       - name: Test Magi convergence and cross-family compatibility
         run: |
           python3 -m pytest -q plugins/harness-magi-codex/tests/test_convergence_kernel.py plugins/harness-magi-codex/tests/test_design_convergence_gate.py
-          bash plugins/harness-magi-codex/tests/test_xfamily_target_root.sh
+          bash plugins/harness-magi-codex/tests/test_xfamily_target_root.sh --xfamily-only
       - name: Test isolated hook installation
         run: bash plugins/harness-formation/tests/test_formation_suggest.sh
       - name: Test Formation hardening

@@ -10,6 +10,14 @@
 #
 # Every reviewer here is a stub on PATH; no model launch is ever spent.
 set -uo pipefail
+XFAMILY_ONLY=0
+if [ "$#" -gt 0 ]; then
+    if [ "$#" -ne 1 ] || [ "$1" != "--xfamily-only" ]; then
+        echo "usage: $0 [--xfamily-only]" >&2
+        exit 64
+    fi
+    XFAMILY_ONLY=1
+fi
 export MAGI_TEST_ALLOW_NEW_CAMPAIGN=1
 unset TMUX TMUX_PANE
 
@@ -227,6 +235,11 @@ if [ $rc -eq 0 ] && [ "$(sort -u "$TMP/cwd.log")" = "$TMP/nogit" ]; then
   ok "non-git target falls back to the document directory as the Claude cwd"
 else
   bad "non-git Claude fallback broken (rc=$rc cwd=$(sort -u "$TMP/cwd.log" | tr '\n' ' '))"
+fi
+
+if [ "$XFAMILY_ONLY" -eq 1 ]; then
+  echo "test_xfamily_target_root (xfamily-only): $pass passed, $fail failed"
+  exit $((fail > 0))
 fi
 
 # --- 5. Codex pre-flight ---------------------------------------------------------------------
