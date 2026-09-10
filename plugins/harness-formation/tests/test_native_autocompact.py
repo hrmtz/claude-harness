@@ -105,7 +105,10 @@ class NativeAutocompactTests(unittest.TestCase):
                                              capture_output=True, text=True, timeout=15)
                 if "--autocompact" not in help_result.stdout:
                     self.skipTest("Installed Claude lacks --autocompact")
-                argv = [executable, "--bare", "-p", "--autocompact", "100k",
+                # Formation configures the environment. Deliberately oppose
+                # it with the flag to prove native environment precedence.
+                env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "100000"
+                argv = [executable, "--bare", "-p", "--autocompact", "200k",
                      "--model", "claude-sonnet-4-6", "--tools", "Bash",
                      "--permission-mode", "bypassPermissions", "--output-format", "stream-json",
                      "--verbose", "--system-prompt", "Print the fixture, then finish.",
@@ -116,7 +119,8 @@ class NativeAutocompactTests(unittest.TestCase):
                 )
                 compact_requests = requests[:]
                 requests.clear()
-                argv[argv.index("100k")] = "200k"
+                env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "200000"
+                argv[argv.index("200k")] = "100k"
                 control = subprocess.run(
                     argv, env=env, cwd=root, capture_output=True, text=True, timeout=45,
                 )
