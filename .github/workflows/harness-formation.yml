@@ -9,6 +9,8 @@ on:
       - "scripts/tests/test_configure_token_lifecycle.py"
       - "plugins/harness-magi-codex/scripts/magi_review_packet.py"
       - "plugins/harness-magi-codex/tests/test_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_autorun.py"
+      - "plugins/harness-magi-codex/tests/test_autorun.py"
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
       - "plugins/harness-core/hooks/bash_command_guard.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
@@ -40,6 +42,8 @@ on:
       - "scripts/tests/test_configure_token_lifecycle.py"
       - "plugins/harness-magi-codex/scripts/magi_review_packet.py"
       - "plugins/harness-magi-codex/tests/test_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_autorun.py"
+      - "plugins/harness-magi-codex/tests/test_autorun.py"
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
       - "plugins/harness-core/hooks/bash_command_guard.sh"
       - "plugins/harness-core/hooks/tmux_self_name_core.sh"
@@ -77,7 +81,7 @@ jobs:
         run: python3 -m pip install pytest jsonschema
       - name: Test bounded context, native compaction, and exact review coverage
         run: |
-          python3 -m pytest -q plugins/harness-core/tests/test_context_lifecycle.py scripts/tests/test_configure_token_lifecycle.py plugins/harness-formation/tests/test_native_autocompact.py plugins/harness-magi-codex/tests/test_convergence_gate.py
+          python3 -m pytest -q plugins/harness-core/tests/test_context_lifecycle.py scripts/tests/test_configure_token_lifecycle.py plugins/harness-formation/tests/test_native_autocompact.py plugins/harness-magi-codex/tests/test_convergence_gate.py plugins/harness-magi-codex/tests/test_autorun.py
           bash plugins/harness-formation/tests/test_inbox_follow.sh
           bash plugins/harness-formation/tests/test_requests.sh
           bash scripts/check_cross_cli_hooks.sh

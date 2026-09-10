@@ -105,7 +105,7 @@ def arm(doc_raw: str, session_override: str | None = None) -> None:
             if existing.get("status") == "active" and existing.get("doc_path") != str(doc):
                 raise ValueError("this Codex session already owns another active Magi campaign")
         payload: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "owner_session": session_id,
             "doc_id": document_id(doc),
             "doc_path": str(doc),
@@ -116,6 +116,7 @@ def arm(doc_raw: str, session_override: str | None = None) -> None:
             "last_fingerprint": "",
             "no_progress_stops": 0,
             "completed_artifact_sha": "",
+            "armed_protocol_sha": protocol_sha(),
         }
         persist(payload)
     finally:
@@ -141,10 +142,17 @@ def load_registry(session_id: str) -> dict[str, object] | None:
         "completed_artifact_sha",
     }
     legacy_required = required - {"completed_artifact_sha"}
-    if set(payload) == legacy_required and payload.get("schema_version") == 1:
-        payload["completed_artifact_sha"] = ""
-    elif set(payload) != required or payload.get("schema_version") != 1:
+    if payload.get("schema_version") == 1 and set(payload) in (legacy_required, required):
+        payload.setdefault("completed_artifact_sha", "")
+        # Keep legacy state readable by the runtime that armed it. Its protocol is unknown.
+    elif set(payload) != required | {"armed_protocol_sha"} or payload.get("schema_version") != 2:
         raise ValueError("autorun registry is malformed")
+    armed_protocol = payload.get("armed_protocol_sha")
+    if payload["schema_version"] == 2 and (
+        not isinstance(armed_protocol, str) or len(armed_protocol) != 64
+        or any(c not in "0123456789abcdef" for c in armed_protocol)
+    ):
+        raise ValueError("autorun registry protocol identity is malformed")
     return payload
 
 
@@ -158,7 +166,7 @@ def set_terminal(doc_raw: str, status: str, reason: str, session_override: str |
         if payload is None or payload.get("doc_path") != str(doc):
             raise ValueError("no matching autorun campaign is armed")
         if status == "complete":
-            marker_status, detail, artifact_sha = plateau_status(doc)
+            marker_status, detail, artifact_sha = plateau_status(doc, payload.get("armed_protocol_sha"))
             if marker_status != "VALID":
                 raise ValueError(
                     f"complete requires a valid exact-revision plateau marker ({detail})"
@@ -176,7 +184,7 @@ def set_terminal(doc_raw: str, status: str, reason: str, session_override: str |
         print(f"MAGI AUTORUN {status.upper()}: {doc}: {reason}")
 
 
-def plateau_status(doc: Path) -> tuple[str, str, str]:
+def plateau_status(doc: Path, armed_protocol_sha: str | None = None) -> tuple[str, str, str]:
     initial_sha = file_sha(doc)
     prefix = initial_sha[:16]
     marker = doc.parent / ".dual-magi" / f"PLATEAU.{document_id(doc)}.{prefix}"
@@ -205,7 +213,8 @@ def plateau_status(doc: Path) -> tuple[str, str, str]:
         return "INVALID", "marker payload is not an object", ""
     if payload.get("artifact_sha") != initial_sha or file_sha(doc) != initial_sha:
         return "INVALID", "marker artifact identity does not match", ""
-    if payload.get("protocol_sha") != current_protocol:
+    # The dispatcher may run a newer installed generation than the one that armed the review.
+    if payload.get("protocol_sha") != (armed_protocol_sha or current_protocol):
         return "INVALID", "marker protocol identity does not match", ""
     if payload.get("reviewer_family") not in {"claude", "grok"}:
         return "INVALID", "marker reviewer family is unsupported", ""
@@ -270,7 +279,7 @@ def hook() -> int:
             return 0
         if payload.get("status") != "active":
             return 0
-        marker_status, marker_detail, artifact_sha = plateau_status(doc)
+        marker_status, marker_detail, artifact_sha = plateau_status(doc, payload.get("armed_protocol_sha"))
         if marker_status == "INVALID":
             payload["status"] = "blocked"
             payload["reason"] = f"plateau boundary invalid: {marker_detail}"
@@ -409,7 +418,7 @@ def main() -> int:
             set_terminal(args.doc, args.command, args.reason, args.session)
         else:
             parser.error("a command or --hook is required")
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, ProtocolError) as exc:
         print(f"magi-autorun: {exc}", file=sys.stderr)
         return 64
     return 0
