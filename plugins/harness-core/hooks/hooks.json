@@ -28,6 +28,15 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_lifecycle.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/context_lifecycle.py",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -168,6 +177,15 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_lifecycle.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/context_lifecycle.py",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -240,6 +258,26 @@
             "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec bash \"${CLAUDE_PLUGIN_ROOT}/hooks/codex_hippocampus_session_start.sh\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/codex_hippocampus_session_start.sh",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_lifecycle.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/context_lifecycle.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_lifecycle.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/context_lifecycle.py",
+            "timeout": 5
           }
         ]
       }

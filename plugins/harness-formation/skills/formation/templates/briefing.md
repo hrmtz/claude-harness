@@ -97,13 +97,17 @@ discipline. Override only with a written reason below.
   parent decides whether to promote them. Do not promote yourself.
 
 ### Token discipline (claude-harness#218)
-- Session context grows ~1k tokens per API response, so unit cost rises
-  linearly the longer a pane lives. Close at a milestone once you reach
-  **~50 responses**, or earlier if cache_read per response exceeds **100k**
-  tokens: write your resume packet, `formation done`, and let the parent
-  respawn you from it. Measured basis: claude-harness#218 (2026-07-28
-  comment) — a 1,012-response session cost 455M cache-read tokens; cutting
-  every ~40 responses would have cost 72M.
+- Claude workers use a native **100k auto-compact window** by default;
+  explicit `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides remain effective.
+  Native compaction preserves the running CLI; it is not a fresh session.
+- At each task boundary, save the short handoff JSON at the path supplied by
+  the context lifecycle hook. It reminds you after **50 API responses** per
+  compact generation. Include goal, unfinished work, next step, changed files,
+  validation, active job/log references, unresolved ASK IDs and review receipts.
+  After compact/resume, read it and verify referenced live state. Do not call
+  `formation done` for a checkpoint: use DONE only for actual task completion.
+- For a genuinely new conversation, put the handoff path in the next briefing.
+  Never inject `/clear` or kill/reap a worker to trim its context.
 - Prose output in Japanese runs under `/genshijin 通常`. Claude workers:
   invoke the skill as your first action. Kimi/Codex workers: apply the
   equivalent compressed-Japanese rules from your AGENTS.md §10 (応答圧縮).
