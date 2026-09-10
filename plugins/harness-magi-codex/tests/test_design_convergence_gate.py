@@ -489,6 +489,42 @@ class DesignConvergenceGateTest(unittest.TestCase):
         )
         self.assert_decision("BLOCKED", "DESIGN_BLOCKER_MASS_STALLED")
 
+    def test_three_clean_revisions_request_current_diverse_review_without_writes(self) -> None:
+        for revision in range(1, 4):
+            if revision > 1:
+                self.revise(revision)
+                self.campaigns.append(self.new_campaign())
+            self.add_launch(round_no=1, phase="fanout", artifact_sha=self.current_sha())
+        self.write_ledger()
+        before = {
+            path.relative_to(self.root): digest(path)
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+        result = design.evaluate(self.doc)
+
+        self.assertEqual(result["decision"], "FINAL_REVIEW_REQUIRED")
+        self.assertEqual(result["reason_code"], "DESIGN_FINAL_DIVERSE_RECHECK_REQUIRED")
+        self.assertEqual(result["next_mode"], "design-final-full")
+        self.assertEqual(result["blocker_mass"], 0)
+        self.assertEqual(result["usage"], 9)
+        self.assertFalse(result["authorizes_shipping"])
+        self.assertEqual(before, {
+            path.relative_to(self.root): digest(path)
+            for path in self.root.rglob("*")
+            if path.is_file()
+        })
+        self.assertFalse(any(self.control.glob("PLATEAU.*")))
+
+        self.add_launch(round_no=2, phase="xfamily", artifact_sha=self.current_sha())
+        final = self.assert_decision(
+            "PLATEAU_CANDIDATE", "DESIGN_READY_FOR_EXISTING_PLATEAU_GATE"
+        )
+        self.assertIsNone(final["next_mode"])
+        self.assertEqual(final["usage"], 10)
+        self.assertFalse(any(self.control.glob("PLATEAU.*")))
+
     def test_max_cycles_blocks_even_when_roots_change(self) -> None:
         first = self.current_sha()
         self.add_pair(

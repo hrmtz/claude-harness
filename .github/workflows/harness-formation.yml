@@ -9,6 +9,12 @@ on:
       - "scripts/tests/test_configure_token_lifecycle.py"
       - "plugins/harness-magi-codex/scripts/magi_review_packet.py"
       - "plugins/harness-magi-codex/tests/test_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_convergence_kernel.py"
+      - "plugins/harness-magi-codex/tests/test_convergence_kernel.py"
+      - "plugins/harness-magi-codex/scripts/magi_design_convergence_gate.py"
+      - "plugins/harness-magi-codex/tests/test_design_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_xfamily.sh"
+      - "plugins/harness-magi-codex/tests/test_xfamily_target_root.sh"
       - "plugins/harness-magi-codex/scripts/magi_autorun.py"
       - "plugins/harness-magi-codex/tests/test_autorun.py"
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
@@ -42,6 +48,12 @@ on:
       - "scripts/tests/test_configure_token_lifecycle.py"
       - "plugins/harness-magi-codex/scripts/magi_review_packet.py"
       - "plugins/harness-magi-codex/tests/test_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_convergence_kernel.py"
+      - "plugins/harness-magi-codex/tests/test_convergence_kernel.py"
+      - "plugins/harness-magi-codex/scripts/magi_design_convergence_gate.py"
+      - "plugins/harness-magi-codex/tests/test_design_convergence_gate.py"
+      - "plugins/harness-magi-codex/scripts/magi_xfamily.sh"
+      - "plugins/harness-magi-codex/tests/test_xfamily_target_root.sh"
       - "plugins/harness-magi-codex/scripts/magi_autorun.py"
       - "plugins/harness-magi-codex/tests/test_autorun.py"
       - "plugins/harness-core/hooks/codex_tmux_self_name.sh"
@@ -85,6 +97,10 @@ jobs:
           bash plugins/harness-formation/tests/test_inbox_follow.sh
           bash plugins/harness-formation/tests/test_requests.sh
           bash scripts/check_cross_cli_hooks.sh
+      - name: Test Magi convergence and cross-family compatibility
+        run: |
+          python3 -m pytest -q plugins/harness-magi-codex/tests/test_convergence_kernel.py plugins/harness-magi-codex/tests/test_design_convergence_gate.py
+          bash plugins/harness-magi-codex/tests/test_xfamily_target_root.sh
       - name: Test isolated hook installation
         run: bash plugins/harness-formation/tests/test_formation_suggest.sh
       - name: Test Formation hardening

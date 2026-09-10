@@ -349,6 +349,35 @@ class UltramagiGoldenReplayTest(unittest.TestCase):
 
 
 class DualMagiDesignPolicyTest(unittest.TestCase):
+    def test_three_clean_revisions_still_require_affordable_diverse_review(self) -> None:
+        for affordable in (True, False):
+            with self.subTest(xfamily_affordable=affordable):
+                projected = state(
+                    [[], [], []], phases={"fanout"}, used=10,
+                    xfamily_affordable=affordable,
+                )
+                result = kernel.evaluate_profile("dual-magi-design", projected)
+                self.assertEqual(result["blocker_mass"], 0)
+                self.assertEqual(
+                    result["decision"], "FINAL_REVIEW_REQUIRED" if affordable else "BLOCKED"
+                )
+                self.assertEqual(
+                    result["reason_code"],
+                    "DESIGN_FINAL_DIVERSE_RECHECK_REQUIRED" if affordable
+                    else "DESIGN_FINAL_DIVERSE_RECHECK_UNAFFORDABLE",
+                )
+                self.assertEqual(result["next_mode"], "design-final-full" if affordable else None)
+                self.assertFalse(result["authorizes_shipping"])
+
+    def test_clean_revisions_do_not_bypass_logical_cycle_limit(self) -> None:
+        result = kernel.evaluate_profile(
+            "dual-magi-design", state([[], [], []], phases={"fanout"}, cycles=2)
+        )
+        self.assertEqual(result["decision"], "BLOCKED")
+        self.assertEqual(result["reason_code"], "DESIGN_MAX_LOGICAL_CYCLES_REACHED")
+        self.assertIsNone(result["next_mode"])
+        self.assertFalse(result["authorizes_shipping"])
+
     def test_bounded_design_policy_table(self) -> None:
         cases = [
             (
@@ -376,6 +405,18 @@ class DualMagiDesignPolicyTest(unittest.TestCase):
                         [finding("c", "storage")],
                     ],
                     phases={"xfamily"},
+                ),
+                ("BLOCKED", "DESIGN_BLOCKER_MASS_STALLED"),
+            ),
+            (
+                "stalled_blockers_before_missing_diverse_review",
+                state(
+                    [
+                        [finding("a", "parser")],
+                        [finding("b", "scheduler")],
+                        [finding("c", "storage")],
+                    ],
+                    phases={"fanout"},
                 ),
                 ("BLOCKED", "DESIGN_BLOCKER_MASS_STALLED"),
             ),
