@@ -85,7 +85,8 @@ def archive_previous(
     ]
 
 
-def exact_diff(repo: Path, base: str, target: str) -> tuple[list[str], bytes, int]:
+def exact_diff(repo: Path, base: str, target: str, *,
+               max_bytes: int = 200000) -> tuple[list[str], bytes, int]:
     changed_paths = sorted(
         line
         for line in str(
@@ -118,8 +119,12 @@ def exact_diff(repo: Path, base: str, target: str) -> tuple[list[str], bytes, in
         text=False,
     )
     assert isinstance(diff, bytes)
-    if len(diff) > 900000:
-        raise ValueError("exact-SHA review packet diff exceeds 900000 bytes")
+    if len(diff) > max_bytes:
+        raise ValueError(
+            f"exact-SHA review packet diff exceeds {max_bytes} bytes; split independently "
+            "mergeable work before review, or use --full-integration for the required "
+            "whole-change review (900000-byte ceiling). No diff was truncated."
+        )
     numstat = str(
         git(
             repo,
@@ -184,7 +189,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         str(previous["target_git_sha"]) if incremental_candidate else args.base
     )
     git(repo, "merge-base", "--is-ancestor", review_base, target)
-    changed_paths, diff, changed_loc = exact_diff(repo, review_base, target)
+    max_bytes = 900000 if args.full_integration else 200000
+    changed_paths, diff, changed_loc = exact_diff(repo, review_base, target, max_bytes=max_bytes)
     incremental_eligible = (
         incremental_candidate
         and len(changed_paths) <= 8
@@ -192,7 +198,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     )
     if review_base != args.base and not incremental_eligible:
         review_base = args.base
-        changed_paths, diff, changed_loc = exact_diff(repo, review_base, target)
+        changed_paths, diff, changed_loc = exact_diff(repo, review_base, target, max_bytes=max_bytes)
     try:
         diff_text = diff.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -272,10 +278,16 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--invariant", action="append", required=True)
     root.add_argument("--deadline", required=True)
     root.add_argument("--max-model-launches", type=int)
-    root.add_argument(
+    review_mode = root.add_mutually_exclusive_group()
+    review_mode.add_argument(
         "--allow-incremental",
         action="store_true",
         help="allow a bounded weight-1 fix review when all mechanical safety rails pass",
+    )
+    review_mode.add_argument(
+        "--full-integration", action="store_true",
+        help="review every base..target change, raising the 200000-byte budget to 900000; "
+             "never incremental and never a substitute for the existing final review gate",
     )
     root.add_argument(
         "--surface-change",

@@ -698,6 +698,32 @@ class ConvergenceGateTest(unittest.TestCase):
         self.assertEqual(decision["next_mode"], "initial-full")
         self.assertEqual(decision["next_persona"], None)
 
+    def test_large_packet_requires_explicit_whole_change_review(self) -> None:
+        (self.repo / "large.txt").write_text("required integration evidence\n" * 8000)
+        self.git("add", "large.txt")
+        self.git("commit", "-qm", "large integration surface")
+        self.target_sha = self.git("rev-parse", "HEAD")
+        before = self.manifest.read_bytes()
+        args = ["python3", str(PACKET), "--repo", str(self.repo),
+                "--base", self.base_sha, "--target", self.target_sha,
+                "--scope", "issue-107", "--invariant", "bounded-review-loop",
+                "--deadline", (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+                "--output", str(self.manifest)]
+        result = run(*args)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("exceeds 200000 bytes", result.stderr)
+        self.assertEqual(self.manifest.read_bytes(), before)
+        result = run(*args, "--full-integration")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(self.manifest.read_text())
+        self.assertEqual(payload["review_base_git_sha"], self.base_sha)
+        self.assertEqual(payload["changed_paths"], ["helper.py", "implementation.py", "large.txt"])
+        self.assertFalse(payload["incremental_review"]["eligible"])
+        self.assertEqual(payload["review_packet"]["diff"].count("+required integration evidence"), 8000)
+        result = run(*args, "--full-integration", "--allow-incremental")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not allowed with argument", result.stderr)
+
     def test_packet_builder_archives_previous_exact_revision(self) -> None:
         previous_sha = file_sha(self.manifest)
         previous_target = self.target_sha

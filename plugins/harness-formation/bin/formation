@@ -550,7 +550,7 @@ Parent (lead) commands:
   formation inbox                         Read unread reports addressed to self
   formation inbox --count                 Print unread count, max seq, and oldest timestamp
   formation inbox --history               Also show the last 50 addressed mailbox rows
-  formation inbox --follow                Stream one metadata line per NEW addressed row
+  formation inbox --follow                Stream one metadata line per NEW addressed batch
                                           (for a Claude Monitor wake rail; never prints
                                           bodies, never touches cursor or badge)
   formation ack <request_id> [summary]     Acknowledge an ASK; worker resumes RUNNING
@@ -1296,7 +1296,11 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
       settings_json="$(echo "$settings_json" | jq -c '. + {theme:"formation-bypass"}')"
     fi
     goal_prompt="Session goal: $goal — if you notice your work drifting from this goal, stop and realign, or surface the conflict via 'formation ask'."
-    tmux send-keys -t "$pane_id" "$guard_command claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
+    # Native compaction keeps the pane, draft, jobs and routing intact. An
+    # explicit native environment override remains the user's authority.
+    local compact_window="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
+    echo "formation: native auto-compact window=$compact_window tokens (subject to model capacity and native auto-compact setting)." >&2
+    tmux send-keys -t "$pane_id" "env CLAUDE_CODE_AUTO_COMPACT_WINDOW=$(printf '%q' "$compact_window") $guard_command claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
 
     # Wait for claude prompt. Poll up to 30s.
     local i
@@ -1684,7 +1688,7 @@ cmd_inbox() {
   if [[ "$follow" == "1" ]]; then
     # Event stream for the idle-wake rail (gh #282): a Claude orchestrator arms
     # `Monitor(formation inbox --follow, persistent:true)` before going idle;
-    # each emitted stdout line becomes a task notification that starts a turn
+    # each emitted batch line becomes a task notification that starts a turn
     # even when the session is idle. Contract:
     #   - metadata only (seq/from/ts/subject, control-stripped, bounded) —
     #     never the body: bodies are attacker-controllable free text and this
@@ -1702,15 +1706,22 @@ cmd_inbox() {
 
     follow_scan() {
       local out line seqf rest emitted=1
-      out="$(jq -Rrc --arg self "$f_self" --arg pane "$f_pane_alias" \
+      out="$(jq -Rnrc --arg self "$f_self" --arg pane "$f_pane_alias" \
                --argjson last "$f_last" '
         def ch: tostring | gsub("[\\x{00}-\\x{1f}\\x{7f}]"; "") | .[0:120];
-        fromjson?
-        | select(((.seq? // null) | type) == "number" and .seq > $last)
-        | select(.to == $self or ($pane != "" and .to == $pane))
-        | "\(.seq)\t📬 mailbox seq=\(.seq) from=\((.from // "?") | ch) ts=\((.ts // "?") | ch)"
-          + (if (((.subject // "") | ch) != "") then " subject:\(.subject | ch)" else "" end)
-          + " — pull with formation inbox"
+        [inputs | fromjson?
+         | select(((.seq? // null) | type) == "number" and .seq > $last)
+         | select(.seq == (.seq | floor))
+         | select(.to == $self or ($pane != "" and .to == $pane))] as $rows
+        | if ($rows | length) == 0 then empty
+          elif ($rows | length) == 1 then $rows[0]
+            | "\(.seq)\t📬 mailbox seq=\(.seq) from=\((.from // "?") | ch) ts=\((.ts // "?") | ch)"
+              + (if (((.subject // "") | ch) != "") then " subject:\(.subject | ch)" else "" end)
+              + " — pull with formation inbox"
+          else ($rows | map(.seq) | max) as $max
+            | "\($max)\t📬 mailbox batch=\($rows | length) through_seq=\($max)"
+              + " — pull with formation inbox (all messages, including ASK/DONE, remain unread)"
+          end
       ' "$MAILBOX_LOG" 2>/dev/null || true)"
       [[ -n "$out" ]] || return 1
       while IFS=$'\t' read -r seqf rest; do
@@ -1722,7 +1733,7 @@ cmd_inbox() {
       return "$emitted"
     }
 
-    # Baseline: only NEW arrivals stream row-by-row. Mail already pending at
+    # Baseline: NEW arrivals emit one bounded event per scan. Mail pending at
     # arm time collapses into one summary event so arming late cannot silently
     # skip it, and cannot replay a long backlog either.
     f_last="$(jq -Rrc --arg self "$f_self" --arg pane "$f_pane_alias" '
@@ -1748,10 +1759,13 @@ cmd_inbox() {
       if [[ "$f_use_inotify" == "1" ]]; then
         inotifywait -qq -t "$f_interval" -e modify -e create -e close_write \
           "$MAILBOX_LOG" 2>/dev/null || true
+        # Coalesce close-in-time arrivals into one Monitor notification. The
+        # canonical inbox still holds every row; this never moves its cursor.
+        sleep 1
       else
         sleep "$f_interval"
       fi
-      while follow_scan; do :; done
+      follow_scan || true
     done
     return 0
   fi
