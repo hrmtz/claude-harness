@@ -1298,7 +1298,7 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     goal_prompt="Session goal: $goal — if you notice your work drifting from this goal, stop and realign, or surface the conflict via 'formation ask'."
     # Native compaction keeps the pane, draft, jobs and routing intact. An
     # explicit native environment override remains the user's authority.
-    local compact_window="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
+    local compact_window="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-1000000}"
     echo "formation: native auto-compact window=$compact_window tokens (subject to model capacity and native auto-compact setting)." >&2
     tmux send-keys -t "$pane_id" "env CLAUDE_CODE_AUTO_COMPACT_WINDOW=$(printf '%q' "$compact_window") $guard_command claude --name $session_name $claude_perm_flag $claude_model_flag --settings $(printf '%q' "$settings_json") --append-system-prompt $(printf '%q' "$goal_prompt")" Enter
 

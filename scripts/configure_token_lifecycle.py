@@ -45,7 +45,7 @@ def configure(path, window, apply=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--settings", type=Path, default=Path.home() / ".claude/settings.json")
-    parser.add_argument("--window", type=int, default=100000)
+    parser.add_argument("--window", type=int, default=1000000)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     if not 100000 <= args.window <= 1000000:

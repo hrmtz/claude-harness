@@ -16,9 +16,14 @@ claimed. Ultramagi remains required if an irreversible rotation is later added.
 
 ## Implementation
 
-- Formation launches set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` unless the
+- Formation launches set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000` unless the
   caller explicitly supplied that native environment variable. Claude caps the
   window at model capacity; native disable/override settings remain authoritative.
+  Issue #308 replaces the initial 100k default with 1M: the user prioritizes
+  retaining useful reasoning over aggressive context reduction. No comparison
+  established 100k as a quality/cost optimum. Coordination batching and bounded
+  review inputs remain the primary token controls; compaction is left near the
+  model's capacity. The configurator uses the same 1M default.
 - `scripts/configure_token_lifecycle.py` previews by default; `--apply` atomically
   sets the native `autoCompactWindow` user setting after persistent backup. It
   preserves every other setting and does not restart existing sessions.
