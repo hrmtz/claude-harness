@@ -26,6 +26,11 @@ def test_preview_apply_backup_and_idempotence(tmp_path, monkeypatch):
     assert policy.configure(settings, 100000, True) == "unchanged"
     assert len(list((tmp_path / "sanada_backup_persistent").glob("*"))) == 1
 
+    # The public CLI default must agree with Formation's quality-first policy.
+    monkeypatch.setattr("sys.argv", ["configure_token_lifecycle.py", "--apply"])
+    policy.main()
+    assert json.loads(settings.read_text()) == dict(original, autoCompactWindow=1000000)
+
 
 def test_spawn_uses_native_default_without_replacing_explicit_override():
     # This checks the actual generated launch command, without starting tmux or
@@ -46,7 +51,7 @@ claude_model_flag=''
 settings_json='{}'
 goal_prompt='test goal'
 '''
-    for explicit, expected in [(None, "100000"), ("200000", "200000")]:
+    for explicit, expected in [(None, "1000000"), ("200000", "200000")]:
         environment = dict(os.environ)
         environment.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
         if explicit:

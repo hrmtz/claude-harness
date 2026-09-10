@@ -97,7 +97,7 @@ discipline. Override only with a written reason below.
   parent decides whether to promote them. Do not promote yourself.
 
 ### Token discipline (claude-harness#218)
-- Claude workers use a native **100k auto-compact window** by default;
+- Claude workers use a native **1M auto-compact window** by default;
   explicit `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides remain effective.
   Native compaction preserves the running CLI; it is not a fresh session.
 - At each task boundary, save the short handoff JSON at the path supplied by
