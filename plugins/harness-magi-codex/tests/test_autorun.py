@@ -60,6 +60,7 @@ class AutorunTest(unittest.TestCase):
             capture_output=True,
             env=self.env,
             check=False,
+            timeout=15,
         )
 
     def test_malformed_hook_input_blocks_visibly(self) -> None:
@@ -164,6 +165,87 @@ class AutorunTest(unittest.TestCase):
         self.assertNotIn("decision", terminal)
         self.assertEqual(self.registry()["status"], "blocked")
         self.assertIn("no durable campaign progress", self.registry()["reason"])
+
+    def test_continuation_requires_evidence_before_revise_repair_and_re_review(self) -> None:
+        self.arm()
+        reason = json.loads(self.hook().stdout)["reason"]
+        for required in (
+            "If a valid REVISE or finding requires repair",
+            "Before investigation:", "hypothesis", "support or refute",
+            "Before editing:", "evidence-backed cause", "related callers",
+            "same-cause paths", "why existing tests missed",
+            "Before re-review:", "same fixture and assertion",
+            "target symptom fails before", "passes after", "code and test revisions",
+            "same root recurs", "correct the prior explanation",
+            "format or transport errors", "If direct reproduction is unavailable",
+            "record its limits and alternative causal checks", "insufficient evidence remains unresolved",
+            "No additional LLM review", "does not automatically detect REVISE",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, reason)
+        record = self.doc.parent / ".dual-magi" / (
+            f"REPAIR.{autorun_module.document_id(self.doc)}.md"
+        )
+        self.assertIn(str(record), reason)
+
+    def test_repair_record_content_updates_reset_only_the_no_progress_counter(self) -> None:
+        ledger_path = self.seed_ledger([[]])
+        ledger_before = ledger_path.read_bytes()
+        doc_before = self.doc.read_bytes()
+        self.arm()
+        self.hook()
+        self.hook()
+        self.assertEqual(self.registry()["no_progress_stops"], 1)
+        record = self.doc.parent / ".dual-magi" / (
+            f"REPAIR.{autorun_module.document_id(self.doc)}.md"
+        )
+        private = "synthetic-private-repair-body"
+        for content in (private + " hypothesis", private + " counterexample"):
+            record.write_text(content)
+            result = self.hook()
+            self.assertEqual(json.loads(result.stdout).get("decision"), "block")
+            self.assertEqual(self.registry()["status"], "active")
+            self.assertEqual(self.registry()["no_progress_stops"], 0)
+            self.assertNotIn(private, result.stdout + result.stderr)
+            self.assertNotIn(private, json.dumps(self.registry()))
+            record.touch()
+            self.hook()
+            self.assertEqual(self.registry()["no_progress_stops"], 1)
+        terminal = json.loads(self.hook().stdout)
+        self.assertNotIn("decision", terminal)
+        self.assertEqual(self.registry()["status"], "blocked")
+        self.assertEqual(ledger_path.read_bytes(), ledger_before)
+        self.assertEqual(self.doc.read_bytes(), doc_before)
+
+    def test_invalid_repair_record_blocks_visibly_without_reading_its_body(self) -> None:
+        record = self.doc.parent / ".dual-magi" / (
+            f"REPAIR.{autorun_module.document_id(self.doc)}.md"
+        )
+        target = self.root / "synthetic-record-target.md"
+        private = "synthetic-private-repair-body"
+        target.write_text(private)
+        for kind in ("oversized", "symlink", "dangling-symlink", "directory", "fifo"):
+            with self.subTest(kind=kind):
+                self.arm()
+                if kind == "oversized":
+                    record.write_bytes(b"x" * (64 * 1024 + 1))
+                elif kind in {"symlink", "dangling-symlink"}:
+                    record.symlink_to(target if kind == "symlink" else self.root / "absent")
+                elif kind == "directory":
+                    record.mkdir()
+                else:
+                    os.mkfifo(record)
+                try:
+                    result = self.hook()
+                    self.assertEqual(result.returncode, 0)
+                    output = json.loads(result.stdout)
+                    self.assertEqual(output["decision"], "block")
+                    self.assertIn("repair record", output["reason"])
+                    self.assertEqual(self.registry()["status"], "blocked")
+                    self.assertEqual(result.stderr, "")
+                    self.assertNotIn(private, result.stdout)
+                finally:
+                    record.rmdir() if kind == "directory" else record.unlink()
 
     def test_exact_revision_plateau_completes_without_ack(self) -> None:
         self.arm()

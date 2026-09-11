@@ -9,6 +9,10 @@ Resolve the installed `harness-magi-codex` plugin root with
 `scripts/resolve-root.sh`; it supports native/symlink installs and the legacy
 `--copy` ownership marker. Never assume the user's project root contains it.
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## Protocol
 
 1. Write a brief of at most 200 lines covering the change, driver, resource

@@ -66,6 +66,10 @@ Trigger on:
 - Diffs already bug-hunted (cite the prior hunt)
 - WIP commits known to be incomplete
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## Protocol
 
 ### 1. Pin the diff
@@ -113,7 +117,8 @@ first.
 
 Per finding, decide:
 
-- **Fix now** — HIGH severity, fix in same session, re-deploy after batch
+- **Fix now** — HIGH severity, complete the cause-first repair contract before editing;
+  re-verify the correction. Deployment still requires the existing release authority.
 - **gh issue** — MEDIUM, capture as P2/P3, fix in next pass
 - **Dismiss with reason** — false positive (write down *why* the hunter was
   wrong; that protects against repeat false positives)

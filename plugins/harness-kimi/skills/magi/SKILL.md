@@ -17,6 +17,10 @@ disableModelInvocation: true
 
 Claude harness の `magi` skill を Kimi 用に移植したもの。Claude/Codex の過剰な guardrail で議論しにくい高リスク変更を、Kimi で事前に検討するのに使う。
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## 目的
 
 高リスクな変更を始める前に、**技術・運用・商業**の 3 つの直交する視点から計画を審査する。実行者本人が見落としがちな silent failure、回復コスト、代替案、ROI を事前に浮き彫りにする。

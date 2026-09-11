@@ -33,6 +33,39 @@ subtract shared training-data bias.
 
 Inspired by Evangelion's 三賢者 system + academic peer review compression.
 
+## Cause-first repair contract
+
+Apply this contract when addressing a valid REVISE/REJECT or another finding chosen for repair.
+The reviewer supplies the symptom, expected behavior, triggering conditions, and evidence.
+The implementer must establish the cause; a suggested patch is not proof of that cause.
+
+1. **Before investigation:** record a causal hypothesis, observations that would support or
+   falsify it, and a bounded investigation scope. Then inspect the relevant evidence.
+2. **Before editing:** explain the cause from those observations, affected callers/shared paths,
+   why existing checks missed it, and the proposed correction. Revise a contradicted hypothesis;
+   do not turn an unverified guess directly into a product patch.
+3. **Before re-review:** apply the same fixture and assertions to the before/after revisions.
+   Show that the original fails with the reported symptom and the correction passes; an import
+   error or unrelated failure is not a reproduction. Bind results to code/test revisions and
+   check affected sibling paths. A passing generic suite alone does not demonstrate this fix.
+
+Keep one short evidence-linked record per existing finding/source and root_cause_id. For a
+same-root recurrence, first correct the previous causal explanation and identify the condition
+that its test missed. Do not rename the root or repeat the same patch story.
+If direct reproduction is unavailable, explain the limit and test the causal account against
+static evidence or a concrete counterexample. Insufficient evidence stays unresolved; bound the
+investigation and continue independent work. For document findings use the same before/after
+consistency check. Record evidence-backed dismissals and permitted deferrals without unnecessary
+code changes. Cause analysis itself does not require another model/reviewer launch.
+
+Treat malformed reviewer artifacts and provider/transport failures as review-infrastructure
+failures, not product REVISE findings. Preserve the original evidence and existing retry/budget
+rules. These steps never authorize mutation, another preflight round, or shipping.
+For an armed Codex campaign, keep the record at the REPAIR.<document_id>.md path emitted by
+the Stop hook; other orchestrators keep it with their existing review notes.
+This is an orchestration requirement, not a mechanical edit or provider-admission gate.
+The record digest tracks progress; it does not certify the truth of the causal explanation.
+
 ## Family routing policy
 
 For design docs that will lead to implementation, reviewers should evaluate whether the design
@@ -504,7 +537,7 @@ freerange 禁止なので、12 launch の campaign 累計は通常 round 1 の 4
 
 If mutation flag set:
 - Read doc again (= check artifact_sha unchanged, fail if changed)
-- Apply REJECT + HIGH REVISE findings via Edit
+- Complete the cause-first repair contract before applying REJECT + HIGH REVISE findings via Edit
 - Update doc's changelog section with version note
 - If `--commit-push`:
   - Verify branch policy (= current != main)

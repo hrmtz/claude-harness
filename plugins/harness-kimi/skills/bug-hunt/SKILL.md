@@ -34,6 +34,10 @@ Claude harness の `bug-hunt` skill を Kimi 用に移植したもの。Claude/C
 
 以下はスキップ：doc-only diff、1 行 config 変更、既に同じプロトコルでレビュー済み、WIP コミット。
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## 手順
 
 ### 1. diff を固定する
@@ -113,7 +117,7 @@ Quality over quantity — 3 sharp findings beat 10 fuzzy ones.
 - 2 人以上が同じ箇所を指摘 → **convergent**（真陽性率が高い）
 - 1 人だけ → single-hunter（見る価値ありだが優先度低）
 - 各 finding に対して判断：
-  - **Fix now** — HIGH severity は同セッションで修正し、smoke/test を再実行
+  - **Fix now** — HIGH severity は上記の原因分析契約を完了してから修正し、同じ再現条件で修正前後を検証
   - **gh issue** — MEDIUM は issue 化
   - **Dismiss with reason** — false positive は理由を書く（次の hunt で同じ誤検出を繰り返さないため）
 
