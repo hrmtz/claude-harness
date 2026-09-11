@@ -162,15 +162,19 @@ class PublicationTests(unittest.TestCase):
 
     def test_invalid_publication_and_retry_exhaustion(self):
         for family in ("claude", "grok"):
-            for defect in ("missing_source_ref", "mismatched_id_ref", "unsupported_reviewer"):
+            for defect in ("missing_source_ref", "mismatched_id_ref", "unsupported_reviewer",
+                           "duplicate_finding_id"):
                 with self.subTest(family=family, defect=defect), tempfile.TemporaryDirectory() as raw:
                     fixture = Fixture(Path(raw), family)
                     if defect == "missing_source_ref":
                         fixture.payload["dispositions"][0]["source_ref"] = "round_1_synthesis.json#SYN-1"
                     elif defect == "mismatched_id_ref":
                         fixture.payload["dispositions"][0]["synthesis_finding_id"] = "SYN-2"
-                    else:
+                    elif defect == "unsupported_reviewer":
                         fixture.payload["reviewer"] = "UNSUPPORTED-REVIEWER"
+                    else:
+                        fixture.payload["dispositions"] = []
+                        fixture.payload["findings"][1]["finding_id"] = fixture.payload["findings"][0]["finding_id"]
                     fixture.respond()
                     self.assert_failed(fixture, fixture.invoke(), 1)
                     self.assert_failed(fixture, fixture.invoke(), 2)

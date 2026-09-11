@@ -204,9 +204,6 @@ def load_sources(
             artifact_identity = identity
         elif identity != artifact_identity:
             raise ValueError(f"source artifact identity differs: {path.name}")
-        finding_ids = [finding.get("finding_id") for finding in payload.get("findings", [])]
-        if len(finding_ids) != len(set(finding_ids)):
-            raise ValueError(f"source contains duplicate finding_id values: {path.name}")
         loaded.append((path, payload, raw))
     return loaded
 

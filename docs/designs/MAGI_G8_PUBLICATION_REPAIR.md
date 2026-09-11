@@ -56,8 +56,8 @@ An AST comparison confirms the extracted G8 function is unchanged except for exp
 snapshot is unchanged because none of those external inputs changed.
 
 Evidence directory: `/home/hrmtz/sanada_backup_persistent/g8-repair_20260911_110923/`.
-Final regression SHA256: `6d74a609bcd967226ac40b50643c0932a239b1df9577ae5c97ad90b9a73e5849`.
-Final identical-test results: base exit 1 with eight failures (83.485 s); candidate exit 0,
+Initial regression SHA256: `6d74a609bcd967226ac40b50643c0932a239b1df9577ae5c97ad90b9a73e5849`.
+Initial identical-test results: base exit 1 with eight failures (83.485 s); candidate exit 0,
 all four tests / sixteen subcases passed (95.578 s). Every base failure is the claimed
 symptom: invalid output returned exit 0, recorded success, and published canonical files.
 The valid-pair, product REVISE and transport/retry-ceiling cases also pass on base.
@@ -72,3 +72,36 @@ This prospective repair does not change old successful claims to failed, refund 
 reset cycles, alter provider output, or authorize recovery of the blocked Shinfutsu campaign.
 The old campaign, archive, installed plugin and pinned runtime remain read-only. Historical
 admission must be evaluated separately under its preserved history; no recovery run here.
+
+
+## Independent review correction: GNAT-R1-001
+
+The first cause account omitted another identity check: synthesis rejects duplicate
+finding_id values within one source, but shared validation accepts the same payload.
+The reviewer supplied this counterexample; a local two-entry payload with identical IDs
+and different titles confirmed acceptance by shared validation before this correction.
+The old fixture used unique finding IDs, so its otherwise correct before/after evidence
+could not detect this condition. This is the same publication-validation gap, not a new
+budget, gate, or product-severity rule.
+
+Move the existing length-versus-set uniqueness check into shared `validate`; synthesis
+already calls that function. This also keeps same-family and prior-envelope validation
+consistent with the existing downstream requirement. Add the duplicate-ID fixture to the
+same before/after adapter matrix. Preserve the first round and all charged review history.
+
+Final test SHA256: `6b7542bee764a22f121a7567cd63193bdee2b5e3839fa0b6bdf4f2a7c907a95f`.
+The same final fixture produces base RED (exit 1, ten target failures, 87.654 s) and
+candidate GREEN (exit 0, four tests / eighteen subcases, 105.986 s). The duplicate-ID
+cases use empty dispositions to isolate identity uniqueness from carried-reference checks.
+Both provider cases verify charged failure, canonical absence and the unchanged two-attempt
+ceiling. Logs: `publication-base-final-v2.log`, `publication-candidate-final-v2.log`; exact
+fixture: `test_xfamily_publication.final-v2.py`. Earlier evidence remains preserved.
+
+## Family routing and delivery
+
+Preferred: Claude design intent -> Codex implementation -> Claude independent review ->
+Codex final fixes/tests. Actual: Codex performed this bounded cause-first repair and offline
+regression; three independent Codex bug-hunt reviewers examined aa46cb0. Their MED duplicate-ID
+finding prompted the correction above; no HIGH+ finding was reported. Claude cross-family
+review of the final revision is pending; exact results and artifact identities belong in
+the PR handoff. No design plateau, installed distribution, or historical recovery is claimed.

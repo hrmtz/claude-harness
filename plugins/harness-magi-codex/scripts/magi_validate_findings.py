@@ -53,6 +53,9 @@ def validate(
             if payload.get("artifact_sha") != expected_sha:
                 raise ValueError("artifact_sha does not match the current document revision")
     findings = payload.get("findings") or []
+    finding_ids = [finding.get("finding_id") for finding in findings]
+    if len(finding_ids) != len(set(finding_ids)):
+        raise ValueError("source contains duplicate finding_id values")
     for finding in findings:
         if finding.get("severity") in BLOCKING_SEVERITIES:
             if not finding.get("subsystem") or not finding.get("root_cause_id"):
