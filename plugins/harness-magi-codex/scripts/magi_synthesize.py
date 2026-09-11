@@ -15,7 +15,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from magi_validate_findings import validate, validate_prior_envelope
+from magi_validate_findings import validate, validate_prior_envelope, validate_xfamily_reviewer
 from magi_campaign_guard import load_ledger
 from magi_protocol import sha256_file
 from magi_verify_xfamily_artifacts import verify as verify_xfamily_artifacts
@@ -194,17 +194,7 @@ def load_sources(
         expected_persona = path.stem.rsplit("_", 1)[-1]
         reviewer = str(payload.get("reviewer", "")).lower()
         if persona_set == "xfamily":
-            expected_reviewers = {
-                xfamily_reviewer,
-                f"{xfamily_reviewer}-cross-family",
-                f"{xfamily_reviewer}-xfamily",
-                f"xfamily-{xfamily_reviewer}",
-            }
-            if (
-                xfamily_reviewer not in {"claude", "grok"}
-                or reviewer not in expected_reviewers
-            ):
-                raise ValueError(f"source has wrong reviewer identity: {path.name}")
+            validate_xfamily_reviewer(payload, xfamily_reviewer)
         elif reviewer != expected_persona:
             raise ValueError(f"source has wrong reviewer identity: {path.name}")
         if payload.get("round") != round_number:
@@ -214,9 +204,6 @@ def load_sources(
             artifact_identity = identity
         elif identity != artifact_identity:
             raise ValueError(f"source artifact identity differs: {path.name}")
-        finding_ids = [finding.get("finding_id") for finding in payload.get("findings", [])]
-        if len(finding_ids) != len(set(finding_ids)):
-            raise ValueError(f"source contains duplicate finding_id values: {path.name}")
         loaded.append((path, payload, raw))
     return loaded
 

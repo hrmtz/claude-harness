@@ -388,6 +388,11 @@ behavior itself is unsafe, classify it new or regression instead. Do not perpetu
 demanding optional scope. If those are the only findings, verdict must be GO-WITH-REVISE, not
 REVISE or REJECT.
 
+For carried/duplicate dispositions, copy the exact source_ref and synthesis_finding_id
+pair from the preceding synthesis dispositions. Do not invent a reference to the synthesis
+file itself or pair a source_ref with another finding's synthesis_finding_id.
+Set reviewer to the exact REVIEWER FAMILY value below.
+
 Return ONLY a JSON object conforming to the output schema.
 HDR
     printf '\nREVIEWER FAMILY: %s\nROUND: %s\n' "$REVIEWER" "$ROUND"
