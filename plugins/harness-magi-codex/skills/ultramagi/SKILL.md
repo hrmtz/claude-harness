@@ -19,6 +19,10 @@ literal verification — and the cheapest place to catch that is before the irre
 This is the Codex-orchestrated mirror of `plugins/harness-magi/skills/ultramagi`. The loop is
 family-agnostic; only the adapters differ.
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## Default family routing
 
 For hard design→implementation work, prefer this routing unless the user explicitly overrides it:

@@ -47,6 +47,35 @@ class ProfileMirrorTest(unittest.TestCase):
                 self.assertIn("PLATEAU_CANDIDATE", text)
                 self.assertIn("magi_plateau_gate.sh", text)
 
+    def test_repair_contract_is_shared_by_all_review_entry_points(self) -> None:
+        contracts = []
+        for plugin in ("harness-magi-codex", "harness-magi", "harness-kimi"):
+            skills = ROOT / "plugins" / plugin / "skills"
+            dual = skills / "dual-magi-review/SKILL.md"
+            text = dual.read_text(encoding="utf-8")
+            heading = "## Cause-first repair contract\n"
+            with self.subTest(plugin=plugin):
+                self.assertEqual(text.count(heading), 1)
+                contract = text.split(heading, 1)[1].split("\n## ", 1)[0].strip()
+                contracts.append(contract)
+                for required in (
+                    "Before investigation", "Before editing", "Before re-review",
+                    "same fixture and assertions", "previous causal explanation",
+                    "not a mechanical edit or provider-admission gate",
+                ):
+                    self.assertIn(required, contract)
+                for skill in ("magi", "ultramagi", "bug-hunt"):
+                    entry = skills / skill / "SKILL.md"
+                    if plugin == "harness-magi-codex" and skill == "bug-hunt":
+                        continue
+                    self.assertIn(
+                        "../dual-magi-review/SKILL.md#cause-first-repair-contract",
+                        entry.read_text(encoding="utf-8"),
+                    )
+        self.assertEqual(len(contracts), 3)
+        self.assertEqual(contracts[0], contracts[1])
+        self.assertEqual(contracts[0], contracts[2])
+
     def test_ultramagi_mirrors_split_warmup_from_irreversible_boundaries(self) -> None:
         paths = (
             PLUGIN / "skills/ultramagi/SKILL.md",

@@ -31,6 +31,10 @@ the design's core attribution premise (REJECTED on its own flagship example via 
 the heuristic's 10–55% ambiguity (measured), and the migration script's silent 31%-edge drop
 (caught before the swap). Straight-to-code would have shipped all three.
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## Default family routing
 
 For hard design→implementation work, prefer this routing unless the user explicitly overrides it:
