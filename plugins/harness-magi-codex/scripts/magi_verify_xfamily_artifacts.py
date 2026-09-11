@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from magi_protocol import protocol_sha, strict_json_loads
-from magi_validate_findings import validate
+from magi_validate_findings import validate, validate_xfamily_reviewer, carried_prior_blockers
 
 MAX_JSON_BYTES = 10 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024
@@ -67,6 +67,8 @@ def verify(args: argparse.Namespace) -> None:
     if not isinstance(findings, dict) or not isinstance(meta, dict):
         raise ValueError("findings and meta must be JSON objects")
     validate(findings, schema, doc=doc)
+    validate_xfamily_reviewer(findings, args.reviewer)
+    carried_prior_blockers(findings, findings_path, doc)
     if findings.get("round") != args.round:
         raise ValueError("findings round does not match recovery target")
 

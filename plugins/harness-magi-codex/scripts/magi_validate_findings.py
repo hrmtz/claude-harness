@@ -160,6 +160,105 @@ def validate_prior_envelope(
             )
 
 
+def validate_xfamily_reviewer(payload: dict, reviewer_family: str) -> None:
+    """Use the same provider identity contract at publication and synthesis."""
+    reviewer = str(payload.get("reviewer", "")).lower()
+    if reviewer_family not in {"claude", "grok"} or reviewer not in {
+        reviewer_family,
+        f"{reviewer_family}-cross-family",
+        f"{reviewer_family}-xfamily",
+        f"xfamily-{reviewer_family}",
+    }:
+        raise ValueError("source has wrong reviewer identity")
+
+
+def carried_prior_blockers(current_findings, out_prefix, doc):
+    """Return unresolved prior HIGH+ findings carried by the current round.
+
+    The current reviewer may recalibrate a duplicated finding downward, but a
+    carried/duplicate disposition is not a resolution. Bind those dispositions
+    back to the validated immediately preceding SYNTHESIS envelope and retain
+    its blocking severity for G8.
+    """
+    carried = [
+        item
+        for item in (current_findings.get("dispositions") or [])
+        if isinstance(item, dict)
+        and item.get("disposition") in {"carried", "duplicate"}
+    ]
+    if not carried:
+        return []
+    current_round = current_findings.get("round")
+    if type(current_round) is not int or current_round <= 1:
+        raise ValueError("carried dispositions require a preceding review round")
+    state_dir = Path(out_prefix).resolve().parent
+    candidates = sorted(state_dir.glob(f"round_{current_round - 1}_*_synthesis.json"))
+    schema_path = (
+        Path(__file__).resolve().parent.parent
+        / "schemas"
+        / "finding.schema.json"
+    )
+    schema = strict_json_loads(schema_path.read_bytes())
+    valid_priors = []
+    for candidate in candidates:
+        try:
+            prior = strict_json_loads(candidate.read_bytes())
+            validate(
+                prior,
+                schema,
+                doc=Path(doc).resolve(),
+                same_doc_only=True,
+                expected_reviewer="SYNTHESIS",
+                expected_round=current_round - 1,
+            )
+            if prior.get("artifact_sha") != current_findings.get("artifact_sha"):
+                raise ValueError("prior synthesis artifact revision mismatch")
+            validate_prior_envelope(
+                prior,
+                candidate,
+                schema,
+                Path(doc).resolve(),
+                current_round,
+                state_dir,
+            )
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        valid_priors.append(prior)
+    if len(valid_priors) != 1:
+        raise ValueError(
+            f"expected exactly one validated prior synthesis, found {len(valid_priors)}"
+        )
+    prior = valid_priors[0]
+    prior_findings = {
+        item.get("finding_id"): item
+        for item in (prior.get("findings") or [])
+        if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+    }
+    prior_dispositions = {
+        item.get("source_ref"): item
+        for item in (prior.get("dispositions") or [])
+        if isinstance(item, dict) and isinstance(item.get("source_ref"), str)
+    }
+    blocking = []
+    for item in carried:
+        source_ref = item.get("source_ref")
+        finding_id = item.get("synthesis_finding_id")
+        prior_disposition = prior_dispositions.get(source_ref)
+        if (
+            not isinstance(finding_id, str)
+            or not finding_id
+            or not isinstance(prior_disposition, dict)
+            or prior_disposition.get("synthesis_finding_id") != finding_id
+        ):
+            raise ValueError(f"carried disposition is not bound to prior synthesis: {source_ref}")
+        prior_finding = prior_findings.get(finding_id)
+        if not isinstance(prior_finding, dict):
+            raise ValueError(f"carried prior finding is missing: {finding_id}")
+        if prior_finding.get("severity") in {"REJECT", "CRITICAL", "HIGH"}:
+            blocking.append(prior_finding)
+    return blocking
+
+
 def main() -> int:
     import argparse
 

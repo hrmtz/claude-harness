@@ -1,0 +1,34 @@
+name: magi-publication
+
+on:
+  pull_request:
+    paths:
+      - "plugins/harness-magi-codex/**"
+      - ".github/workflows/magi-publication.yml"
+  push:
+    paths:
+      - "plugins/harness-magi-codex/**"
+      - ".github/workflows/magi-publication.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install jsonschema pytest
+      - name: Verify publication, synthesis and gate contracts without live providers
+        run: |
+          python3 plugins/harness-magi-codex/tests/test_xfamily_publication.py
+          python3 plugins/harness-magi-codex/tests/test_synthesize.py
+          bash plugins/harness-magi-codex/tests/test_plateau_gate.sh
+          bash plugins/harness-magi-codex/tests/test_claude_provider.sh
+          bash plugins/harness-magi-codex/tests/test_grok_provider.sh
