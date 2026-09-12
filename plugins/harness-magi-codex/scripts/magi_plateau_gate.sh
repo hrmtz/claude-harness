@@ -148,37 +148,31 @@ def carried_prior_blockers(current_findings, out_prefix):
             )
         except (OSError, json.JSONDecodeError, ValueError):
             continue
-        valid_priors.append(prior)
+        valid_priors.append((candidate, prior))
     if len(valid_priors) != 1:
         raise ValueError(
             f"expected exactly one validated prior synthesis, found {len(valid_priors)}"
         )
-    prior = valid_priors[0]
+    prior_path, prior = valid_priors[0]
     prior_findings = {
         item.get("finding_id"): item
         for item in (prior.get("findings") or [])
         if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
     }
-    prior_dispositions = {
-        item.get("source_ref"): item
-        for item in (prior.get("dispositions") or [])
-        if isinstance(item, dict) and isinstance(item.get("source_ref"), str)
-    }
     blocking = []
     for item in carried:
         source_ref = item.get("source_ref")
-        finding_id = item.get("synthesis_finding_id")
-        prior_disposition = prior_dispositions.get(source_ref)
+        if not isinstance(source_ref, str) or "#" not in source_ref:
+            raise ValueError(f"carried disposition has malformed source_ref: {source_ref}")
+        source_name, prior_finding_id = source_ref.rsplit("#", 1)
         if (
-            not isinstance(finding_id, str)
-            or not finding_id
-            or not isinstance(prior_disposition, dict)
-            or prior_disposition.get("synthesis_finding_id") != finding_id
+            source_name != prior_path.name
+            or not prior_finding_id
         ):
             raise ValueError(f"carried disposition is not bound to prior synthesis: {source_ref}")
-        prior_finding = prior_findings.get(finding_id)
+        prior_finding = prior_findings.get(prior_finding_id)
         if not isinstance(prior_finding, dict):
-            raise ValueError(f"carried prior finding is missing: {finding_id}")
+            raise ValueError(f"carried prior finding is missing: {prior_finding_id}")
         if prior_finding.get("severity") in {"REJECT", "CRITICAL", "HIGH"}:
             blocking.append(prior_finding)
     return blocking

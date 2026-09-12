@@ -202,13 +202,21 @@ prior_payload = {
 prior.write_text(json.dumps(prior_payload))
 current = json.loads(pathlib.Path(str(current_path) + ".json").read_text())
 current["source_artifacts"] = [{"path": "design.md", "sha256": artifact_sha}]
-current["dispositions"] = [{"source_ref": "round_1_gnat.json#GNAT-R1-001", "disposition": "carried", "synthesis_finding_id": synthesis_id}]
+current["dispositions"] = [{"source_ref": f"{prior.name}#{synthesis_id}", "disposition": "carried", "synthesis_finding_id": "x-1"}]
 current["findings"][0]["root_cause_id"] = "ABC-JSON-STRICTNESS-NONFINITE"
 current["findings"][0]["relation_to_prior"] = "same-root"
 pathlib.Path(str(current_path) + ".json").write_text(json.dumps(current))
 PY
 mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
-denied "G8 carried prior CRITICAL cannot be downgraded to MED" "$P"
+g8c_error="$TMP/g8c.error"
+if "$GATE" "$DOC" "$P" --orchestrator-family codex >/dev/null 2>"$g8c_error"; then
+  bad "G8 carried prior CRITICAL cannot be downgraded to MED -> plateau GRANTED"
+elif grep -q 'G8: 1 unresolved REJECT/CRITICAL/HIGH finding' "$g8c_error" \
+  && ! grep -q 'carried-prior verification failed' "$g8c_error"; then
+  ok "G8 carried prior CRITICAL cannot be downgraded to MED -> denied by prior severity"
+else
+  bad "G8 carried prior CRITICAL denied for the wrong reason"
+fi
 
 # G9: a reviewer that self-reports ungrounded cannot plateau
 P="$TMP/g9"; mkfind "$P" "GO" 0 "FAIL"; mkmeta "$P" "claude-fable-5" "$SHA" 4 "$REAL_SID"
