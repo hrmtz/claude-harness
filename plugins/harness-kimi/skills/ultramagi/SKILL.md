@@ -14,6 +14,10 @@ disableModelInvocation: false
 
 # ultramagi — Kimi orchestrator
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 Before writing a design, classify the request as one task or an Epic. It is an Epic when it has
 multiple independently mergeable/verifiable/rollbackable outcomes, cannot be described by one
 invariant plus one acceptance-test/rollback pair, crosses ordered phases with separate failure
@@ -60,8 +64,10 @@ as next-step scope; do not fix it opportunistically while the current job runs.
 6. Run the following even-numbered `magi_xfamily.sh --reviewer claude` phase against the same
    implementation artifact, using the bug-hunt synthesis as prior. Use Grok only as an explicit
    fallback. Then run `magi_plateau_gate.sh` on that exact artifact and reviewer family.
-7. Any blocking finding or nonzero gate requires a fix, regenerated artifact, cross-family
-   synthesis, and the next odd/even round pair. Never reuse a marker after code changes.
+7. For blocking findings, complete the cause-first repair contract before a fix and regenerated
+   artifact. Treat nonzero provider/validation exits separately from product findings. Preserve
+   cross-family synthesis and use only the next phase permitted by the campaign guards.
+   Never reuse a marker after code changes.
 8. Only after the implementation marker matches the current artifact, run final executable tests
    and inspect the final diff against both the design and implementation artifacts.
 

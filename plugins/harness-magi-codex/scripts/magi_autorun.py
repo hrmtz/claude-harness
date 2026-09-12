@@ -22,6 +22,7 @@ from magi_campaign_guard import StateError, campaign_admission_status
 MAX_NO_PROGRESS_STOPS = 2
 MAX_MARKER_BYTES = 64 * 1024
 MAX_REGISTRY_BYTES = 128 * 1024
+MAX_REPAIR_BYTES = 64 * 1024
 
 
 def now() -> str:
@@ -41,6 +42,29 @@ def document_id(doc: Path) -> str:
 
 def file_sha(path: Path) -> str:
     return sha256_file(path)
+
+
+def repair_digest(path: Path) -> str:
+    """Observe a bounded repair note as progress, without interpreting its claims."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return "absent"
+    except OSError as exc:
+        raise ValueError("repair record cannot be safely opened") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("repair record must be a regular file, not a symlink")
+        if info.st_size > MAX_REPAIR_BYTES:
+            raise ValueError("repair record exceeds the size limit")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_REPAIR_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_REPAIR_BYTES:
+        raise ValueError("repair record exceeds the size limit")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def state_root() -> Path:
@@ -338,10 +362,13 @@ def hook() -> int:
             persist(payload)
             print(json.dumps({"systemMessage": "Magi autorun reached a definitive NOT PLATEAU blocked state; no acknowledgement is requested."}))
             return 0
+        repair_path = doc.parent / ".dual-magi" / f"REPAIR.{document_id(doc)}.md"
+        repair_sha = repair_digest(repair_path)
         fingerprint = hashlib.sha256(
             (
                 f"{file_sha(doc)}:{ledger_sha}:{used}:{campaign['kind']}:"
-                f"{campaign.get('round')}:{campaign.get('phase')}:{campaign.get('attempt')}"
+                f"{campaign.get('round')}:{campaign.get('phase')}:{campaign.get('attempt')}:"
+                f"{repair_sha}"
             ).encode()
         ).hexdigest()
         if payload.get("last_fingerprint") == fingerprint:
@@ -358,8 +385,22 @@ def hook() -> int:
         persist(payload)
         reason = (
             f"Magi autorun is active for {doc}. Continue the campaign now without asking for user "
-            "acknowledgement: inspect durable state, apply in-scope fixes, run the next legal phase, "
-            "and stop only after exact-revision PLATEAU or a definitive fixed-fuse BLOCKED state."
+            "acknowledgement: inspect durable state and follow the next legal phase. "
+            "If a valid REVISE or finding requires repair, follow this contract; this hook "
+            "does not automatically detect REVISE or validate the cause. "
+            "Before investigation: state the hypothesis and how evidence can support or refute it. "
+            "Before editing: record the evidence-backed cause, related callers and same-cause paths, "
+            "and why existing tests missed the symptom. "
+            "Before re-review: use the same fixture and assertion to show the target symptom fails before "
+            "the fix and passes after; reference the code and test revisions and results. "
+            "If the same root recurs, correct the prior explanation's error or omission before another fix. "
+            "Separate format or transport errors from product REVISE. "
+            "If direct reproduction is unavailable, record its limits and alternative causal checks; "
+            "insufficient evidence remains unresolved. "
+            "No additional LLM review is required for these investigation steps. "
+            f"Keep short per-finding/root records in {repair_path} (regular file, at most 64 KiB); "
+            "its digest tracks progress, not correctness or review admission. "
+            "Stop only after exact-revision PLATEAU or a definitive fixed-fuse BLOCKED state."
         )
         print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     except (

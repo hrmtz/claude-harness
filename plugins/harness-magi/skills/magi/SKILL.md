@@ -28,6 +28,10 @@ together). Here, three parallel Task agents with distinct perspectives surface
 divergent observations in the planning phase — before you spend hours doing
 the wrong thing.
 
+Before investigating or editing to address a review finding, apply the
+[Cause-first repair contract](../dual-magi-review/SKILL.md#cause-first-repair-contract).
+It preserves the existing mutation authority, review budget, and one-shot preflight limits.
+
 ## When to invoke
 
 Trigger on **any one** of:
