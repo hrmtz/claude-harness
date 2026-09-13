@@ -119,6 +119,38 @@ def empty_review(doc: Path, round_no: int, reviewer: str) -> dict[str, object]:
 
 
 class ScopedFuseAuthorityTests(unittest.TestCase):
+    def test_vvt154_authority_is_exact_artifact_one_cycle_only(self) -> None:
+        path = Path(next(
+            item for item in SCOPED_GLOBAL_CEILING_OVERRIDES if "VVT_AJ_GRADIENT" in item
+        ))
+        ceiling, authority = global_ceiling_policy(path)
+        self.assertEqual(ceiling, 19)
+        self.assertIsNotNone(authority)
+        assert authority is not None
+        self.assertEqual(authority["prior_usage"], 15)
+        self.assertEqual(authority["additional_slots"], 4)
+        self.assertEqual(
+            authority["authorized_phase_plan"],
+            [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+        )
+        self.assertFalse(authority["drift_audit"]["distribution_authority_added"])
+        campaign_guard.enforce_scoped_artifact_sha(
+            authority, "b47a588666046584f0e16f328fba30e54af71cf38b4b9ad9da059e7b3aa2b70c"
+        )
+        with self.assertRaises(campaign_guard.StateError):
+            campaign_guard.enforce_scoped_artifact_sha(authority, "0" * 64)
+
+        malformed = copy.deepcopy(authority)
+        malformed["new_ceiling"] = 20
+        with mock.patch.dict(
+            SCOPED_GLOBAL_CEILING_OVERRIDES, {str(path): malformed}, clear=False
+        ):
+            with self.assertRaises(campaign_guard.StateError):
+                global_ceiling_policy(path)
+
     def test_scoped_authority_extends_only_the_exact_slice_path(self) -> None:
         fi_path = Path(next(
             path for path in SCOPED_GLOBAL_CEILING_OVERRIDES if "TELEMETRY-FI" in path
