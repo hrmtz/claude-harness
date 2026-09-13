@@ -65,11 +65,11 @@ GLOBAL_MAX_MODEL_LAUNCHES = 16
 SCOPED_GLOBAL_CEILING_OVERRIDES: dict[str, dict[str, object]] = {
     "/home/hrmtz/projects/ZN6/ecu-tuning-wt-vvt-v154-20260913/docs/designs/"
     "VVT_AJ_GRADIENT_V154_20260913.md": {
-        "authority_id": "ZN6-VVT154-OWNER-AFK-AUDIT-2026-09-13-24-28",
+        "authority_id": "ZN6-VVT154-OWNER-AFK-AUDIT-2026-09-13-27-31",
         "doc_id": "0a34380799f6c9bd",
         "scope": (
-            "VVT v15.4 exact design after acyclic execution-receipt and replay-"
-            "cardinality remediation; one Codex fanout then one Claude xfamily"
+            "VVT v15.4 exact design after immutable-attempt and truthful lean-scope "
+            "remediation; one Codex fanout then one Claude xfamily"
         ),
         "authority_reference": (
             "owner explicitly allowed contextual mechanical-block extension and "
@@ -78,23 +78,24 @@ SCOPED_GLOBAL_CEILING_OVERRIDES: dict[str, dict[str, object]] = {
         "drift_audit": {
             "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
             "prior_review_artifact_sha256": (
-                "ffd28b0b00839464b46ebf85d969761825834c8fb72d3170251024be88646ffa"
-            ),
-            "prior_synthesis_sha256": (
-                "95cf9d8e9f15c2a114e9de009a38f4ec5f27063f3421d9f1955f16082c716853"
-            ),
-            "authorized_artifact_sha256": (
                 "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
             ),
+            "prior_synthesis_sha256": (
+                "dd42064625bde81e4ff6752076b669f4a805cdabfaa74afff45a248d1f5e7138"
+            ),
+            "authorized_artifact_sha256": (
+                "ed3043003bf644237d0a3217a71ba44b6f9581af12ec2512761ec222f749e574"
+            ),
             "remediated_roots": [
-                "RC-RUN-ATTESTATION-CYCLE",
-                "ops.run-supervision",
-                "RC-REPLAY-CARDINALITY-UNDERBOUND",
+                "ops.recovery.unowned-staging-residue",
+                "vvt154.attempt-state-identity",
+                "commercial.scope.baseline_mismatch",
+                "vvt154.checkonly-bootstrap-capacity",
             ],
             "measured_replay_peak_rss_kib": 2773072,
             "measured_replay_elapsed_seconds": 38.98,
-            "design_lines_before": 489,
-            "design_lines_after": 515,
+            "design_lines_before": 515,
+            "design_lines_after": 558,
             "outcome_changed": False,
             "calibration_values_changed": False,
             "implementation_authority_changed": False,
@@ -105,13 +106,13 @@ SCOPED_GLOBAL_CEILING_OVERRIDES: dict[str, dict[str, object]] = {
             "classification": "BOUNDED_FINDING_REMEDIATION",
         },
         "authorized_artifact_sha256": (
-            "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
+            "ed3043003bf644237d0a3217a71ba44b6f9581af12ec2512761ec222f749e574"
         ),
         "default_ceiling": 16,
-        "previous_scoped_ceiling": 25,
-        "authorized_max_ceiling": 28,
+        "previous_scoped_ceiling": 28,
+        "authorized_max_ceiling": 31,
         "checkpoint_interval": 4,
-        "prior_usage": 24,
+        "prior_usage": 27,
         "additional_slots": 4,
         "authorized_cycle_weight": 4,
         "authorized_phase_plan": [
@@ -119,7 +120,7 @@ SCOPED_GLOBAL_CEILING_OVERRIDES: dict[str, dict[str, object]] = {
             {"phase": "xfamily", "weight": 1, "family": "claude"},
         ],
         "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
-        "new_ceiling": 28,
+        "new_ceiling": 31,
     },
     "/home/hrmtz/projects/ZN6/ecu-re-abc-calibration-bind-20260824/docs/re/"
     "RACEROM_ABC_CHANGER_V1.md": {
@@ -581,6 +582,63 @@ HISTORICAL_SCOPED_GLOBAL_CEILING_AUTHORITIES: dict[str, tuple[dict[str, object],
             ],
             "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
             "new_ceiling": 25,
+        },
+        {
+            "authority_id": "ZN6-VVT154-OWNER-AFK-AUDIT-2026-09-13-24-28",
+            "doc_id": "0a34380799f6c9bd",
+            "scope": (
+                "VVT v15.4 exact design after acyclic execution-receipt and replay-"
+                "cardinality remediation; one Codex fanout then one Claude xfamily"
+            ),
+            "authority_reference": (
+                "owner explicitly allowed contextual mechanical-block extension and "
+                "required AFK ROM generation on 2026-09-13"
+            ),
+            "drift_audit": {
+                "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
+                "prior_review_artifact_sha256": (
+                    "ffd28b0b00839464b46ebf85d969761825834c8fb72d3170251024be88646ffa"
+                ),
+                "prior_synthesis_sha256": (
+                    "95cf9d8e9f15c2a114e9de009a38f4ec5f27063f3421d9f1955f16082c716853"
+                ),
+                "authorized_artifact_sha256": (
+                    "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
+                ),
+                "remediated_roots": [
+                    "RC-RUN-ATTESTATION-CYCLE",
+                    "ops.run-supervision",
+                    "RC-REPLAY-CARDINALITY-UNDERBOUND",
+                ],
+                "measured_replay_peak_rss_kib": 2773072,
+                "measured_replay_elapsed_seconds": 38.98,
+                "design_lines_before": 489,
+                "design_lines_after": 515,
+                "outcome_changed": False,
+                "calibration_values_changed": False,
+                "implementation_authority_changed": False,
+                "rom_authority_changed": False,
+                "distribution_authority_added": False,
+                "flash_authority_added": False,
+                "hardware_authority_added": False,
+                "classification": "BOUNDED_FINDING_REMEDIATION",
+            },
+            "authorized_artifact_sha256": (
+                "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
+            ),
+            "default_ceiling": 16,
+            "previous_scoped_ceiling": 25,
+            "authorized_max_ceiling": 28,
+            "checkpoint_interval": 4,
+            "prior_usage": 24,
+            "additional_slots": 4,
+            "authorized_cycle_weight": 4,
+            "authorized_phase_plan": [
+                {"phase": "fanout", "weight": 3, "family": "codex"},
+                {"phase": "xfamily", "weight": 1, "family": "claude"},
+            ],
+            "authority_continuation_kind": "ONE_EXACT_REVISION_COMPLETE_CYCLE",
+            "new_ceiling": 28,
         },
     ),
     "/home/hrmtz/projects/ZN6/ecu-re-abc-calibration-bind-20260824/docs/re/"
@@ -2438,7 +2496,7 @@ def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
         )
     elif (
         authority.get("authority_id")
-        == "ZN6-VVT154-OWNER-AFK-AUDIT-2026-09-13-24-28"
+        == "ZN6-VVT154-OWNER-AFK-AUDIT-2026-09-13-27-31"
     ):
         exact_keys = {
             "authority_id", "doc_id", "scope", "authority_reference",
@@ -2458,8 +2516,8 @@ def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
             and all(type(authority.get(field)) is int for field in exact_integer_fields)
             and authority.get("scope")
             == (
-                "VVT v15.4 exact design after acyclic execution-receipt and replay-"
-                "cardinality remediation; one Codex fanout then one Claude xfamily"
+                "VVT v15.4 exact design after immutable-attempt and truthful lean-scope "
+                "remediation; one Codex fanout then one Claude xfamily"
             )
             and authority.get("authority_reference")
             == (
@@ -2471,23 +2529,24 @@ def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
                 {
                     "result": "PASS_BOUNDED_REMEDIATION_NOT_SCOPE_DRIFT",
                     "prior_review_artifact_sha256": (
-                        "ffd28b0b00839464b46ebf85d969761825834c8fb72d3170251024be88646ffa"
-                    ),
-                    "prior_synthesis_sha256": (
-                        "95cf9d8e9f15c2a114e9de009a38f4ec5f27063f3421d9f1955f16082c716853"
-                    ),
-                    "authorized_artifact_sha256": (
                         "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
                     ),
+                    "prior_synthesis_sha256": (
+                        "dd42064625bde81e4ff6752076b669f4a805cdabfaa74afff45a248d1f5e7138"
+                    ),
+                    "authorized_artifact_sha256": (
+                        "ed3043003bf644237d0a3217a71ba44b6f9581af12ec2512761ec222f749e574"
+                    ),
                     "remediated_roots": [
-                        "RC-RUN-ATTESTATION-CYCLE",
-                        "ops.run-supervision",
-                        "RC-REPLAY-CARDINALITY-UNDERBOUND",
+                        "ops.recovery.unowned-staging-residue",
+                        "vvt154.attempt-state-identity",
+                        "commercial.scope.baseline_mismatch",
+                        "vvt154.checkonly-bootstrap-capacity",
                     ],
                     "measured_replay_peak_rss_kib": 2773072,
                     "measured_replay_elapsed_seconds": 38.98,
-                    "design_lines_before": 489,
-                    "design_lines_after": 515,
+                    "design_lines_before": 515,
+                    "design_lines_after": 558,
                     "outcome_changed": False,
                     "calibration_values_changed": False,
                     "implementation_authority_changed": False,
@@ -2499,11 +2558,11 @@ def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
                 },
             )
             and authority.get("authorized_artifact_sha256")
-            == "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
-            and authority.get("previous_scoped_ceiling") == 25
-            and authority.get("authorized_max_ceiling") == 28
+            == "ed3043003bf644237d0a3217a71ba44b6f9581af12ec2512761ec222f749e574"
+            and authority.get("previous_scoped_ceiling") == 28
+            and authority.get("authorized_max_ceiling") == 31
             and authority.get("checkpoint_interval") == 4
-            and authority.get("prior_usage") == 24
+            and authority.get("prior_usage") == 27
             and authority.get("additional_slots") == 4
             and authority.get("authorized_cycle_weight") == 4
             and exact_json_equal(
@@ -2515,7 +2574,7 @@ def global_ceiling_policy(doc: Path) -> tuple[int, dict[str, object] | None]:
             )
             and authority.get("authority_continuation_kind")
             == "ONE_EXACT_REVISION_COMPLETE_CYCLE"
-            and authority.get("new_ceiling") == 28
+            and authority.get("new_ceiling") == 31
         )
     else:
         specific_valid = False

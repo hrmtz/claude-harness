@@ -124,10 +124,10 @@ class ScopedFuseAuthorityTests(unittest.TestCase):
             item for item in SCOPED_GLOBAL_CEILING_OVERRIDES if "VVT_AJ_GRADIENT" in item
         ))
         ceiling, authority = global_ceiling_policy(path)
-        self.assertEqual(ceiling, 28)
+        self.assertEqual(ceiling, 31)
         self.assertIsNotNone(authority)
         assert authority is not None
-        self.assertEqual(authority["prior_usage"], 24)
+        self.assertEqual(authority["prior_usage"], 27)
         self.assertEqual(authority["additional_slots"], 4)
         self.assertEqual(
             authority["authorized_phase_plan"],
@@ -138,7 +138,7 @@ class ScopedFuseAuthorityTests(unittest.TestCase):
         )
         self.assertFalse(authority["drift_audit"]["distribution_authority_added"])
         campaign_guard.enforce_scoped_artifact_sha(
-            authority, "fba23b540d4e1194bbf53802de0bcb3c5dbd60f57358b19bec9176d0979d6cc7"
+            authority, "ed3043003bf644237d0a3217a71ba44b6f9581af12ec2512761ec222f749e574"
         )
         with self.assertRaises(campaign_guard.StateError):
             campaign_guard.enforce_scoped_artifact_sha(authority, "0" * 64)
@@ -154,8 +154,8 @@ class ScopedFuseAuthorityTests(unittest.TestCase):
         historical = campaign_guard.HISTORICAL_SCOPED_GLOBAL_CEILING_AUTHORITIES[
             str(path)
         ]
-        self.assertEqual(len(historical), 3)
-        self.assertEqual([item["new_ceiling"] for item in historical], [19, 22, 25])
+        self.assertEqual(len(historical), 4)
+        self.assertEqual([item["new_ceiling"] for item in historical], [19, 22, 25, 28])
 
     def test_scoped_authority_extends_only_the_exact_slice_path(self) -> None:
         fi_path = Path(next(
