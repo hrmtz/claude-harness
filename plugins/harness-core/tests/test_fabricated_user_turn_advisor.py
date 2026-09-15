@@ -469,6 +469,22 @@ assert_silent(
     "safe final",
     "safe baseline",
 )
+
+# Stop's direct field is authoritative when transcript persistence lags.
+delivery_gap_incident = (
+    "完了。\n\nuser もう業務時間終わりだから今日はここまで。おつかれ！"
+)
+result = run(
+    [assistant("安全な stale transcript。")],
+    {"last_assistant_message": delivery_gap_incident},
+)
+assert result.returncode == 0 and "systemMessage" in result.stdout, result.stdout
+result = run(
+    [assistant(delivery_gap_incident)],
+    {"last_assistant_message": "安全な final response。"},
+)
+assert result.returncode == 0 and result.stdout == "", result.stdout
+
 result = run(
     [
         assistant("user おｋ\n\nそこ重要なところだね"),
