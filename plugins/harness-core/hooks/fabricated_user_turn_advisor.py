@@ -258,10 +258,14 @@ def _hook() -> int:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict) or payload.get("stop_hook_active"):
             return 0
-        transcript_path = payload.get("transcript_path")
-        if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
-            return 0
-        text = _last_assistant_text(transcript_path)
+        # Stop provides the completed response directly. Prefer it over the
+        # persistence-lag-prone transcript, while retaining older-host support.
+        text = payload.get("last_assistant_message")
+        if not isinstance(text, str):
+            transcript_path = payload.get("transcript_path")
+            if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
+                return 0
+            text = _last_assistant_text(transcript_path)
         if not isinstance(text, str):
             return 0
         detection = detect_fabricated_tail(text)
