@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acknowledgement gate for sessions latched by fabricated-user-turn detection.
+"""Per-tool quarantine for sessions latched by fabricated-user-turn detection.
 
 The hook is deliberately fail-open.  State and input failures are logged
 best-effort and produce no hook decision.
@@ -26,8 +26,9 @@ VERSION = 1
 SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 ASK_REASON = (
     "acknowledgement-gate quarantine: operator acknowledgement required "
-    "for this outward action"
+    "before any tool use"
 )
+ALL_TOOL_QUARANTINE_REASONS = frozenset({"fabricated_user_turn"})
 CONTROL_TOKENS = {";", ";;", ";&", ";;&", "&&", "||", "|", "|&", "&", "(", ")"}
 WRAPPERS = {
     "command", "env", "exec", "flock", "nice", "nohup", "setsid", "stdbuf",
@@ -215,6 +216,13 @@ def arm_session(session_id: object, fingerprint: str, armed_by: str) -> bool:
             raise GuardError("invalid armed_by")
         with _session_lock(sid) as path:
             state = _read_state(path)
+            if (
+                state is not None
+                and state["status"] == "active"
+                and state["armed_by"] in ALL_TOOL_QUARANTINE_REASONS
+                and armed_by not in ALL_TOOL_QUARANTINE_REASONS
+            ):
+                return True
             if (
                 state is not None
                 and state["incident_fingerprint"] == fingerprint
@@ -553,15 +561,21 @@ def _payload_targeted(payload: dict) -> bool:
 
 def pre_tool_use(payload: dict) -> dict | None:
     try:
-        if not _payload_targeted(payload):
-            return None
         sid = _validate_session_id(payload.get("session_id"))
         tool_use_id = payload.get("tool_use_id")
         if not isinstance(tool_use_id, str) or not tool_use_id:
             raise GuardError("invalid tool_use_id")
+        tool_name = payload.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            raise GuardError("invalid tool_name")
         with _session_lock(sid) as path:
             state = _read_state(path)
             if state is None or state["status"] != "active":
+                return None
+            if (
+                state["armed_by"] not in ALL_TOOL_QUARANTINE_REASONS
+                and not _payload_targeted(payload)
+            ):
                 return None
             if tool_use_id not in state["pending_tool_use_ids"]:
                 state["pending_tool_use_ids"].append(tool_use_id)
@@ -591,6 +605,10 @@ def post_tool_use(payload: dict) -> None:
                 or state["status"] != "active"
                 or tool_use_id not in state["pending_tool_use_ids"]
             ):
+                return
+            if state["armed_by"] in ALL_TOOL_QUARANTINE_REASONS:
+                state["pending_tool_use_ids"].remove(tool_use_id)
+                _write_state(path, state)
                 return
             state["status"] = "acknowledged"
             state["acknowledged_tool_use_id"] = tool_use_id

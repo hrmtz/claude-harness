@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acceptance tests for the fabricated-user-turn acknowledgement gate."""
+"""Acceptance tests for the fabricated-user-turn quarantine gate."""
 from __future__ import annotations
 
 import concurrent.futures
@@ -73,11 +73,12 @@ def test_arm_idempotence_rearm_and_permissions(monkeypatch, tmp_path):
 
     assert guard.pre_tool_use(payload("PreToolUse", "tool-approved"))
     guard.post_tool_use(payload("PostToolUse", "tool-approved"))
-    acknowledged = read_state(tmp_path)
-    assert acknowledged["status"] == "acknowledged"
+    quarantined = read_state(tmp_path)
+    assert quarantined["status"] == "active"
+    assert quarantined["pending_tool_use_ids"] == []
 
     assert guard.arm_session(SESSION, FP1, "fabricated_user_turn")
-    assert read_state(tmp_path) == acknowledged
+    assert read_state(tmp_path) == quarantined
     assert guard.arm_session(SESSION, FP2, "fabricated_user_turn")
     rearmed = read_state(tmp_path)
     assert rearmed["status"] == "active"
@@ -97,6 +98,29 @@ def test_pre_post_ack_semantics(monkeypatch, tmp_path):
     guard.post_tool_use(payload("PostToolUse", "wrong-id"))
     assert read_state(tmp_path)["status"] == "active"
 
+    assert guard.pre_tool_use(payload("PreToolUse", "approved-read", "Read"))
+    guard.post_tool_use(payload("PostToolUse", "approved-read", "Read"))
+    state = read_state(tmp_path)
+    assert state["status"] == "active"
+    assert "approved-read" not in state["pending_tool_use_ids"]
+
+    guard.pre_tool_use(
+        payload("PreToolUse", "approved-push", "Bash", "git push origin HEAD")
+    )
+    guard.post_tool_use(
+        payload("PostToolUse", "approved-push", "Bash", "git push origin HEAD")
+    )
+    state = read_state(tmp_path)
+    assert state["status"] == "active"
+    assert "approved-push" not in state["pending_tool_use_ids"]
+
+    assert guard.arm_session(SESSION, FP2, "other_detector")
+    state = read_state(tmp_path)
+    assert state["armed_by"] == "fabricated_user_turn"
+    assert state["incident_fingerprint"] == FP1
+
+    state_path(tmp_path).unlink()
+    assert guard.arm_session(SESSION, FP2, "other_detector")
     ask = guard.pre_tool_use(payload("PreToolUse", "attempted-but-failed"))
     assert ask["hookSpecificOutput"]["permissionDecision"] == "ask"
     guard.post_tool_use(payload("PostToolUseFailure", "attempted-but-failed"))
@@ -104,7 +128,7 @@ def test_pre_post_ack_semantics(monkeypatch, tmp_path):
     assert state["status"] == "acknowledged"
     assert state["acknowledged_tool_use_id"] == "attempted-but-failed"
 
-    assert guard.arm_session(SESSION, FP2, "fabricated_user_turn")
+    assert guard.arm_session(SESSION, FP1, "fabricated_user_turn")
     guard.post_tool_use(payload("PostToolUse", "denied"))
     assert read_state(tmp_path)["status"] == "active"
 
@@ -210,7 +234,9 @@ def test_command_matching_selected_and_excluded():
 def test_tool_classes_and_fail_open(monkeypatch, tmp_path):
     monkeypatch.setenv("FABRICATED_USER_TURN_GUARD_STATE_DIR", str(tmp_path))
     assert guard.arm_session(SESSION, FP1, "fabricated_user_turn")
-    for index, tool_name in enumerate(("Agent", "Task")):
+    for index, tool_name in enumerate(
+        ("Agent", "Task", "Skill", "Edit", "Write", "Read", "WebFetch", "mcp__example__run")
+    ):
         result = guard.pre_tool_use(payload("PreToolUse", f"spawn-{index}", tool_name))
         assert result["hookSpecificOutput"]["permissionDecision"] == "ask"
     result = guard.pre_tool_use(
@@ -219,8 +245,15 @@ def test_tool_classes_and_fail_open(monkeypatch, tmp_path):
     assert result["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert guard.pre_tool_use(
         payload("PreToolUse", "bash-read", "Bash", "gh issue view 154")
-    ) is None
-    assert guard.pre_tool_use(payload("PreToolUse", "read", "Read")) is None
+    )["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    # Other detector reasons retain the original outward-action-only policy.
+    state_path(tmp_path).unlink()
+    assert guard.arm_session(SESSION, FP2, "other_detector")
+    assert guard.pre_tool_use(payload("PreToolUse", "other-read", "Read")) is None
+    assert guard.pre_tool_use(
+        payload("PreToolUse", "other-push", "Bash", "git push origin HEAD")
+    )["hookSpecificOutput"]["permissionDecision"] == "ask"
 
     malformed = run_hook({"hook_event_name": "PreToolUse"}, tmp_path)
     assert malformed.returncode == 0 and malformed.stdout == ""
@@ -266,7 +299,9 @@ def test_advisor_arms_and_reports_arm_failure(tmp_path):
         check=False,
     )
     assert result.returncode == 0
-    assert "gate not armed" not in json.loads(result.stdout)["systemMessage"]
+    output = json.loads(result.stdout)
+    assert "gate not armed" not in output["systemMessage"]
+    assert output["decision"] == "block"
     assert read_state(state_dir)["status"] == "active"
 
     env["FABRICATED_USER_TURN_GUARD_STATE_DIR"] = "/dev/null/state"
@@ -279,7 +314,9 @@ def test_advisor_arms_and_reports_arm_failure(tmp_path):
         check=False,
     )
     assert failed.returncode == 0
-    assert "gate not armed" in json.loads(failed.stdout)["systemMessage"]
+    output = json.loads(failed.stdout)
+    assert "gate not armed" in output["systemMessage"]
+    assert output["decision"] == "block"
 
     isolated_advisor = tmp_path / "fabricated_user_turn_advisor.py"
     shutil.copyfile(ADVISOR, isolated_advisor)
@@ -292,20 +329,22 @@ def test_advisor_arms_and_reports_arm_failure(tmp_path):
         check=False,
     )
     assert missing_dependency.returncode == 0
-    assert "gate not armed" in json.loads(missing_dependency.stdout)["systemMessage"]
+    output = json.loads(missing_dependency.stdout)
+    assert "gate not armed" in output["systemMessage"]
+    assert output["decision"] == "block"
 
 
 def test_hooks_json_registration():
     config = json.loads(HOOKS_JSON.read_text())
     hooks = config["hooks"]
     assert any(
-        entry.get("matcher") == "Agent|Task|Bash"
+        entry.get("matcher") == "*"
         and "fabricated_user_turn_guard.py" in entry["hooks"][0]["command"]
         for entry in hooks["PreToolUse"]
     )
     for event in ("PostToolUse", "PostToolUseFailure"):
         assert any(
-            entry.get("matcher") == "Agent|Task|Bash"
+            entry.get("matcher") == "*"
             and "fabricated_user_turn_guard.py" in entry["hooks"][0]["command"]
             for entry in hooks[event]
         )

@@ -52,7 +52,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent|Task|Bash",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -149,7 +149,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Agent|Task|Bash",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -190,7 +190,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Agent|Task|Bash",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
