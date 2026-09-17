@@ -80,18 +80,19 @@ metadata)。負の結果が検出器の偏りでないことは、**各 chassis 
 
 1. **Stop 検出器** (`fabricated_user_turn_advisor.py`、PR #244) — 最終 assistant
    message の末尾を検査、advisory / fail-open
-2. **PreToolUse ack gate** (`fabricated_user_turn_guard.py`、PR #256) — 捏造を
-   検出した session の**外向き・非可逆 action だけ** `permissionDecision: "ask"`。
-   通常 session は無影響 (実測: gh mutation 273 / formation 制御 312 / git push 117
-   回という高頻度呼び出しを無条件には止めない)
+2. **PreToolUse quarantine gate** (`fabricated_user_turn_guard.py`、PR #256) — 捏造を
+   検出した session の**全 tool call**を `permissionDecision: "ask"` にする。
+   承認はその `tool_use_id` だけを通し、quarantine は session 終了まで維持する。
+   通常 session は無影響。
 
-**解除は operator の承認のみ**。承認された `tool_use_id` に対応する PostToolUse /
-PostToolUseFailure でだけ `acknowledged` に遷移する。**assistant が自分で解除する
-経路は無い** — 自分の捏造を自分で見抜けなかったのが本件の核心なので、そこは機械側で持つ。
-**時間経過での自動解除も入れていない** (実害は後続の非人間 notification が引金)。
+**単一 tool の承認では解除しない**。PostToolUse / PostToolUseFailure は承認済み
+`tool_use_id` を pending から除くだけで、後続 tool は再度 ask になる。脱出手順は
+影響 session を終了して新しい session を開始すること。state は session id 単位なので
+新 session へ持ち越されない。**assistant が自分で解除する経路も時間解除も無い**。
 
-arming は検出器から分離してあり、state schema が理由を持つ。gate 側は理由を見ず
-「active なら ask」で動くので、**将来 injection 検出** (mailbox の
+arming は検出器から分離してあり、state schema が理由を持つ。fabricated-user-turn
+理由だけ persistent all-tool quarantine、他理由は従来の outward-action ack policy。
+**将来 injection 検出** (mailbox の
 `UNTRUSTED MAILBOX DATA` block や WebFetch 結果という既存の untrusted 境界を latch に
 繋ぐ) を足すとき gate 本体は変更不要。
 
