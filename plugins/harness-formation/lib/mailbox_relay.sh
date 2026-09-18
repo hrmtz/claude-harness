@@ -71,7 +71,7 @@ if [[ ! -f "$MAILBOX" ]]; then
   mkdir -p "$(dirname "$MAILBOX")"
   touch "$MAILBOX"
 fi
-LAST_SEQ="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
+LAST_SEQ="$(jq -Rsc '[split("\n")[] | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
 echo "$LOG_PREFIX start, agent=$AGENT pane=$PANE mailbox=$MAILBOX last_seq=$LAST_SEQ"
 if [[ -n "$RELAY_READY_FILE" ]]; then
   relay_publish_pid "$RELAY_READY_FILE" || {
@@ -90,7 +90,7 @@ fi
 
 process_new_lines() {
   local current_seq
-  current_seq="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
+  current_seq="$(jq -Rsc '[split("\n")[] | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX")"
   [[ "$current_seq" =~ ^[0-9]+$ ]] || current_seq=0
   if [[ "$current_seq" -lt "$LAST_SEQ" ]]; then
     echo "$LOG_PREFIX sequence generation moved backwards; re-anchor seq=$LAST_SEQ -> 0"

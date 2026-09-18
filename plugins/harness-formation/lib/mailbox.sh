@@ -45,7 +45,7 @@ mailbox_append() {
     # Ignore malformed historical rows and derive seq from the largest valid
     # numeric value rather than line count.
     local log_max state_max=0 state_tmp
-    log_max="$(jq -Rsc '[splits("\n") | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX_LOG")"
+    log_max="$(jq -Rsc '[split("\n")[] | fromjson? | .seq? | numbers] | max // 0' "$MAILBOX_LOG")"
     if [[ -f "$MAILBOX_SEQ_STATE" ]]; then
       state_max="$(cat "$MAILBOX_SEQ_STATE" 2>/dev/null || echo 0)"
       [[ "$state_max" =~ ^[0-9]+$ ]] || state_max=0
@@ -86,7 +86,7 @@ mailbox_mark_read() {
   local cursor_file="$MAILBOX_CURSOR_DIR/$self.txt"
   if [[ -z "$through" ]]; then
     through="$(jq -Rsc --arg self "$self" --arg pane "$pane_alias" \
-      '[splits("\n") | fromjson?
+      '[split("\n")[] | fromjson?
         | select(.to == $self or ($pane != "" and .to == $pane))
         | .seq? | numbers] | max // 0' "$MAILBOX_LOG")"
   fi
