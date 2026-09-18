@@ -25,7 +25,7 @@ _review_snapshot_unlocked() {
       and ((.subject? | type) == "string")
       and ((.created_at? | type) == "string")
       and ((.updated_at? | type) == "string");
-    reduce (splits("\n") | fromjson? | select(valid_review_event)) as $event
+    reduce (split("\n")[] | fromjson? | select(valid_review_event)) as $event
       ({}; .[$event.request_id] = $event)
     | [.[]] | sort_by(.created_at // .updated_at // "")
   ' "$FORMATION_REVIEW_LOG"

@@ -1540,7 +1540,7 @@ clear_mailbox_badge_through() {
       # a later signal waits and can only move the badge further forward.
       local newer
       newer="$(jq -Rsc --arg self "$self" --arg pane "$pane_alias" --argjson after "$read_through" \
-        '[splits("\n") | fromjson?
+        '[split("\n")[] | fromjson?
           | select((.to == $self or ($pane != "" and .to == $pane))
                    and ((.seq? | type) == "number") and .seq > $after)
           | .seq] | max // 0' "$MAILBOX_LOG" 2>/dev/null || echo 0)"

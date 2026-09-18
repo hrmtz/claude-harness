@@ -31,7 +31,7 @@ _request_snapshot_unlocked() {
       and ((.parent_id? | type) == "string")
       and ((.question? | type) == "string")
       and ((.next_state? | type) == "string");
-    reduce (splits("\n") | fromjson? | select(valid_request_event)) as $event
+    reduce (split("\n")[] | fromjson? | select(valid_request_event)) as $event
       ({}; .[$event.request_id] = $event)
     | [.[]] | sort_by(.created_at // .ts // "")
   ' "$FORMATION_REQUEST_LOG"
