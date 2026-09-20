@@ -75,9 +75,14 @@ NARRATION_TAIL = re.compile(r"(?:ました|ます|です|でした|,|:|：|;|；
 # model has no reason to emit one as a whole line of its own output, so a
 # single unfenced occurrence anywhere in the message is conclusive. Matching
 # whole lines (and honouring fences) keeps prose *about* these tokens clear.
+# Anchored at column 0 on purpose: the transport emits these flush left, and
+# the indent requirement drops the 4-space-indented-code false positive for
+# free. The token budget line must carry its real payload (digits + "tokens
+# left") so prose placeholders such as `system<total_tokens>example</...>` do
+# not quarantine a session.
 TRANSPORT_ENVELOPE = re.compile(
-    r"^[ \t]*(?:"
-    r"system<total_tokens>[^<>\n]*</total_tokens>"
+    r"^(?:"
+    r"system<total_tokens>[ \t]*[\d,]+[ \t]*tokens left</total_tokens>"
     r"|</?pasted_content\b[^>\n]*>"
     r")[ \t]*$",
     re.IGNORECASE,
@@ -112,8 +117,32 @@ def _final_text_block(record: dict) -> str | None:
     return texts[-1] if texts else None
 
 
-def _last_assistant_text(path: str) -> str | None:
+def _message_text_blocks(record: dict) -> str | None:
+    """Return every text block of the assistant record, newline-joined.
+
+    The staleness rule that keeps the other detectors on the final block does
+    not apply to a transport wrapper: an earlier block that carries one was
+    still authored and emitted by the model, and #318's shape puts the
+    fabricated turn before a tool_use with the self-authored reply after it.
+    """
+    if _final_text_block(record) is None:
+        return None
+    content = record["message"].get("content")
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block["text"]
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    )
+
+
+def _last_assistant_text(path: str) -> tuple[str | None, str | None]:
+    """Return (final text block, every text block) of the last assistant message."""
     last: str | None = None
+    last_joined: str | None = None
     last_message_id: str | None = None
     with open(path, encoding="utf-8", errors="replace") as transcript:
         for line in transcript:
@@ -126,31 +155,70 @@ def _last_assistant_text(path: str) -> str | None:
             message = record.get("message")
             message_id = message.get("id") if isinstance(message, dict) else None
             text = _final_text_block(record)
+            joined = _message_text_blocks(record)
             # Claude normally writes one content block per transcript record.
             # Records sharing message.id are one assistant message, so a later
             # tool_use/thinking record must not erase that message's text.
             if isinstance(message_id, str) and message_id == last_message_id:
                 if text is not None:
                     last = text
+                if joined is not None:
+                    last_joined = "\n".join(filter(None, (last_joined, joined)))
             else:
                 last_message_id = message_id if isinstance(message_id, str) else None
                 last = text
-    return last
+                last_joined = joined
+    return last, last_joined
+
+
+FENCE_MARKER = re.compile(r"^[ \t]*(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+
+
+def _fence_state(lines: list[str], stop: int) -> tuple[bool, str | None]:
+    """Track CommonMark fences up to ``stop``; return (inside, open marker).
+
+    A longer marker opens a block that a shorter one cannot close, which is how
+    a fenced example of a fence is written. Treating every ``` as a toggle both
+    quarantined valid nested citations and desynchronised the scan after them
+    (harness #318 review).
+    """
+    open_marker: str | None = None
+    for line in lines[:stop]:
+        match = FENCE_MARKER.match(line)
+        if not match:
+            continue
+        marker = match.group("marker")
+        if open_marker is None:
+            # An opening fence may carry an info string; a closing one may not.
+            open_marker = marker
+        elif marker[0] == open_marker[0] and len(marker) >= len(open_marker) and not match.group("info").strip():
+            open_marker = None
+    return open_marker is not None, open_marker
 
 
 def _inside_fence(lines: list[str], marker_index: int) -> bool:
     """Conservative Markdown fence check; uncertainty suppresses the warning."""
-    fence_count = sum(line.lstrip().startswith("```") for line in lines[:marker_index])
-    return fence_count % 2 == 1
+    return _fence_state(lines, marker_index)[0]
 
 
 def _outside_fence_lines(lines: list[str], start: int) -> list[str]:
-    """Return post-start lines outside conservative triple-backtick fences."""
+    """Return post-start lines outside Markdown code fences."""
     outside: list[str] = []
-    in_fence = _inside_fence(lines, start)
+    in_fence, open_marker = _fence_state(lines, start)
     for line in lines[start:]:
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
+        match = FENCE_MARKER.match(line)
+        if match:
+            marker = match.group("marker")
+            if not in_fence:
+                in_fence, open_marker = True, marker
+                continue
+            if (
+                open_marker is not None
+                and marker[0] == open_marker[0]
+                and len(marker) >= len(open_marker)
+                and not match.group("info").strip()
+            ):
+                in_fence, open_marker = False, None
             continue
         if not in_fence:
             outside.append(line)
@@ -219,16 +287,10 @@ def _has_forged_transport_envelope(lines: list[str]) -> bool:
     the fabricated turn mid-message and answered it, so a tail window cannot
     see it. Precision comes from the token, not from position.
     """
-    in_fence = False
-    for line in lines:
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if TRANSPORT_ENVELOPE.fullmatch(line):
-            return True
-    return False
+    return any(
+        TRANSPORT_ENVELOPE.fullmatch(line)
+        for line in _outside_fence_lines(lines, 0)
+    )
 
 
 def _has_orphan_fragment_document(lines: list[str]) -> bool:
@@ -288,17 +350,27 @@ def _has_orphan_fragment_document(lines: list[str]) -> bool:
     return False
 
 
-def detect_fabricated_tail(text: str) -> str | None:
-    """Return the narrow detector class for a suspicious assistant tail."""
+def _normalize(text: str) -> list[str]:
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip().split("\n")
+
+
+def detect_fabricated_tail(text: str, whole_message: str | None = None) -> str | None:
+    """Return the narrow detector class for a suspicious assistant tail.
+
+    ``whole_message`` carries every text block of the message when the caller
+    has it; only the envelope class reads it, because that token stays
+    conclusive in a block the staleness rule would otherwise skip.
+    """
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
     if not normalized:
         return None
     lines = normalized.split("\n")
+    envelope_lines = _normalize(whole_message) if whole_message else lines
     if _has_fabricated_user_turn(lines):
         return "role_marker"
     if _has_forged_hook_envelope(lines):
         return "forged_hook_envelope"
-    if _has_forged_transport_envelope(lines):
+    if _has_forged_transport_envelope(envelope_lines):
         return "forged_transport_envelope"
     if _has_orphan_fragment_document(lines):
         return "orphan_fragment_document"
@@ -319,14 +391,15 @@ def _hook() -> int:
         # Stop provides the completed response directly. Prefer it over the
         # persistence-lag-prone transcript, while retaining older-host support.
         text = payload.get("last_assistant_message")
+        whole_message: str | None = None
         if not isinstance(text, str):
             transcript_path = payload.get("transcript_path")
             if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
                 return 0
-            text = _last_assistant_text(transcript_path)
+            text, whole_message = _last_assistant_text(transcript_path)
         if not isinstance(text, str):
             return 0
-        detection = detect_fabricated_tail(text)
+        detection = detect_fabricated_tail(text, whole_message)
         if detection is None:
             return 0
         fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
