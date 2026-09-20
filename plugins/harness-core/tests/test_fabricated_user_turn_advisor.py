@@ -540,6 +540,58 @@ assert result.returncode == 0 and result.stdout == "", result.stdout
 result = run(["not-json"])
 assert result.returncode == 0 and result.stdout == "", result.stdout
 
+# Issue #318: a fabricated turn the model then answered itself. The `user`
+# marker lands outside the tail window, so the transport envelope carries the
+# detection instead.
+INCIDENT_318 = (
+    "ドーモ。**そこが構造的な差デス。**\n\n"
+    "MT-25 単体なら 9 年もののそこそこ人気車だが、実際の部品市場は 4 車種で共通。\n\n"
+    "user\n\n"
+    '<pasted_content id="111f">\n'
+    "【楽天市場】frando フランド キャリパーサポート YZF-R3 YZF-R25 MT-03 MT-25\n"
+    '</pasted_content id="111f">\n\n'
+    "これがそれか\n\n"
+    "system<total_tokens>15000000 tokens left</total_tokens>\n\n"
+    "ドーモ。**同じ製品系統デス。ただし品番を必ず確認しろ。**\n\n"
+) + "\n".join(f"- 行 {index}: サポートの適合とキャリパー品番の対応について。" for index in range(40))
+assert_advisory(INCIDENT_318, "issue-318 fabricated turn answered by the model")
+
+# The same block truncated at the fabricated turn still trips the original
+# role-marker path; #318 is about the *continued* message, not a new shape.
+assert_advisory(
+    INCIDENT_318.split("ドーモ。**同じ製品系統デス。")[0],
+    "issue-318 prefix still caught by role_marker",
+)
+
+# Either envelope token alone is conclusive.
+assert_advisory(
+    "本文の締め。\n\nsystem<total_tokens>15000000 tokens left</total_tokens>",
+    "bare total_tokens accounting line",
+)
+assert_advisory(
+    '本文の締め。\n\n<pasted_content id="abc123">\nURL\n</pasted_content id="abc123">',
+    "bare pasted_content wrapper",
+)
+
+# Quoting those tokens inside a fence is how an issue body or a runbook cites
+# them, and must stay silent.
+assert_silent(
+    "検出対象の token は以下の形デス:\n\n"
+    "```\n"
+    "system<total_tokens>15000000 tokens left</total_tokens>\n"
+    '<pasted_content id="111f">\n'
+    "```\n\n"
+    "行全体一致のみ、fence 内は除外する。",
+    "fenced citation of envelope tokens",
+)
+
+# Inline prose about the tokens is not a whole-line match.
+assert_silent(
+    "`<pasted_content>` と `system<total_tokens>` は transport 注入の wrapper デス。"
+    "行頭に単独で出た場合のみ検出する。",
+    "inline mention of envelope tokens",
+)
+
 print(
     "fabricated_user_turn_advisor: OK "
     f"calibration_precision={calibration_precision:.3f} "
