@@ -65,9 +65,9 @@ Rule: before sending a secret through a channel, establish what the receiver rea
 that channel as. Place the program first, then reserve its stdin for data:
 
 ```bash
-ssh "$host" 'cat > "$1" && chmod 600 "$1"' sh "$remote_program" < program.py
-ssh "$host" 'python3 "$1"' sh "$remote_program" <<< "$secret"
-ssh "$host" 'rm -f -- "$1"' sh "$remote_program" </dev/null
+ssh "$host" 'cat > <tmpfile> && chmod 600 <tmpfile>' < program.py
+ssh "$host" 'python3 <tmpfile>' <<< "$secret"
+ssh "$host" 'rm -f <tmpfile>' </dev/null
 ```
 
 The sourceable helper generates and cleans up the remote temporary file while
