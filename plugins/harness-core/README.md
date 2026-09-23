@@ -46,6 +46,38 @@ export HARNESS_CREDENTIAL_LEAK_ISSUES=1
 export CREDENTIAL_LEAK_ISSUE_REPO=owner/repo
 ```
 
+For a per-host opt-in that does not put the destination in a public repository,
+write one `owner/repo` line to
+`~/.claude/config/credential-leak-issue-repo`. Environment variables remain the
+CI-friendly override. Every detected leak is recorded first in the local,
+append-only `~/.claude/state/credential_scrub/incidents.log`, even when GitHub
+filing is not configured or is unavailable. Neither record includes a credential
+value.
+
+### Program/data stdin collision
+
+Never prepend a secret to a program sent to an interpreter's stdin. Commands such
+as `python3 -`, `bash -s`, `sh -s`, and `psql -f -` read stdin as program text; an
+interpreter error can quote the secret back into tool output. An SSH heredoc and a
+piped payload have the same collision because both need the one remote stdin.
+
+Rule: before sending a secret through a channel, establish what the receiver reads
+that channel as. Place the program first, then reserve its stdin for data:
+
+```bash
+ssh "$host" 'cat > "$1" && chmod 600 "$1"' sh "$remote_program" < program.py
+ssh "$host" 'python3 "$1"' sh "$remote_program" <<< "$secret"
+ssh "$host" 'rm -f -- "$1"' sh "$remote_program" </dev/null
+```
+
+The sourceable helper generates and cleans up the remote temporary file while
+keeping the two stdin streams separate:
+
+```bash
+source "<plugin-root>/lib/remote_secret.sh"
+printf '%s\n' "$secret" | harness_remote_python_with_secret "$host" program.py
+```
+
 Autonomous credential rotation is also disabled unless `HARNESS_AUTOROTATE_SCRIPT`
 points to an operator-owned runbook. Optional notification/comment destinations:
 `HARNESS_AUTOROTATE_DISCORD_CHANNEL` and `HARNESS_AUTOROTATE_ISSUE_REPO`.

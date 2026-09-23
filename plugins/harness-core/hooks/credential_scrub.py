@@ -74,6 +74,7 @@ STATE_DIR = Path.home() / ".claude" / "state" / "credential_scrub"
 MANIFEST_DIR = STATE_DIR / "manifest"
 SALT_FILE = STATE_DIR / "salt.bin"
 HOOK_LOG = Path.home() / ".claude" / "state" / "hook_logs" / "hooks.log"
+LOCAL_ISSUE_REPO_FILE = Path.home() / ".claude" / "config" / "credential-leak-issue-repo"
 
 # NOTE (#39): MAX_SCAN_BYTES is NO LONGER a hard skip. It is retained only as the
 # "this output is very large" threshold used to phrase the incomplete-scan warning.
@@ -551,25 +552,29 @@ def resume_context(replaced: int, scan_complete: bool = True) -> str:
     the output was fully auto-handled, so it drops the "no manual steps needed" wording
     and asks for manual review (MED finding: an incomplete-but-redacted scan previously
     routed through the all-clear wording, contradicting the manual-review caveat)."""
-    issue_enabled = (
-        os.environ.get("HARNESS_CREDENTIAL_LEAK_ISSUES") == "1"
-        and bool(os.environ.get("CREDENTIAL_LEAK_ISSUE_REPO"))
-    )
-    if issue_enabled:
+    issue_repo = ""
+    if os.environ.get("HARNESS_CREDENTIAL_LEAK_ISSUES") == "1":
+        issue_repo = os.environ.get("CREDENTIAL_LEAK_ISSUE_REPO", "")
+    if not issue_repo:
+        try:
+            candidate = LOCAL_ISSUE_REPO_FILE.read_text(encoding="utf-8").splitlines()[0]
+            if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
+                issue_repo = candidate
+        except (OSError, IndexError):
+            pass
+    if issue_repo:
         ref = ""
         try:
             last_ref = (STATE_DIR / "last_issue").read_text().strip()
-            repo = os.environ["CREDENTIAL_LEAK_ISSUE_REPO"]
-            if last_ref.startswith(f"{repo}#"):
+            if last_ref.startswith(f"{issue_repo}#"):
                 ref = f" (tracked in {last_ref})"
         except OSError:
             pass
-        incident_status = f"incident issue filing is enabled{ref}"
+        incident_status = f"incident recorded locally; incident issue filing is enabled{ref}"
         action_status = "No manual transcript cleanup is needed. Rotation for the affected credential is tracked in that issue."
     else:
         incident_status = (
-            "incident issue filing is disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 "
-            "and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable it"
+            "incident recorded in the local append-only log; incident issue filing is disabled"
         )
         action_status = "No manual transcript cleanup is needed, but rotate the affected credential if this was a real exposure."
     base = (

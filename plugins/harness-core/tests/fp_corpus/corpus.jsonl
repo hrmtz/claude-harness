@@ -77,3 +77,4 @@
 {"id": "ben77", "label": "benign", "type": "output", "payload": "set PASSWORD via the runbook; rotate the credential quarterly", "note": "prose mentioning PASSWORD/credential, no value", "owners": []}
 {"id": "ben78", "label": "benign", "type": "output", "payload": "example token: test-token-placeholder-dummy-1234567890", "note": "allowlisted placeholder token", "owners": []}
 {"id": "ben79", "label": "benign", "type": "output", "payload": "build finished in 12345 seconds with hash abcdef1234567890", "note": "long hex hash but no KEY keyword", "owners": []}
+{"id": "mal80", "label": "malicious", "type": "output", "payload": "Traceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nNameError: name 'SyntheticOnly7fB3kR9mQ2vX8zL' is not defined", "note": "synthetic known-secret fixture: interpreter consumed the secret as program text", "owners": ["hash-scrub"]}
