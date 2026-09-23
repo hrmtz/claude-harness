@@ -67,10 +67,10 @@ fi
 
 # Durable local audit is unconditional and independent of GitHub configuration.
 # Fields are metadata-only and flattened so one invocation always occupies one line.
-safe_source=$(printf '%s' "$LEAK_SOURCE" | tr '\r\n\t' '   ' | cut -c1-64)
-safe_detail=$(printf '%s' "$LEAK_DETAIL" | tr '\r\n\t' '   ' | cut -c1-256)
-safe_replaced=$(printf '%s' "$LEAK_REPLACED" | tr '\r\n\t' '   ' | cut -c1-32)
-safe_session=$(printf '%s' "$LEAK_SESSION_ID" | tr '\r\n\t' '   ' | cut -c1-128)
+safe_source=$(printf '%s' "$LEAK_SOURCE" | LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-64)
+safe_detail=$(printf '%s' "$LEAK_DETAIL" | LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-256)
+safe_replaced=$(printf '%s' "$LEAK_REPLACED" | LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-32)
+safe_session=$(printf '%s' "$LEAK_SESSION_ID" | LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-128)
 if printf '[%s] source=%s detail=%s replacements=%s session=%s transcript_sanitized=yes\n' \
     "$(date +%F_%T)" "$safe_source" "$safe_detail" "$safe_replaced" "$safe_session" \
     >> "$INCIDENT_LOG" 2>/dev/null; then

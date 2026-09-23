@@ -75,6 +75,16 @@ class TestPublicSafeConfig(unittest.TestCase):
         msg = scrub.resume_context(1, scan_complete=True)
         self.assertIn("incident issue filing is disabled", msg)
 
+    def test_resume_context_ignores_symlink_local_repo_config(self):
+        config = Path(os.environ["HOME"]) / ".claude" / "config"
+        config.mkdir(parents=True)
+        target = self.tmp / "repo-target"
+        target.write_text("private/incidents\n")
+        (config / "credential-leak-issue-repo").symlink_to(target)
+        scrub = load_scrub()
+        msg = scrub.resume_context(1, scan_complete=True)
+        self.assertIn("incident issue filing is disabled", msg)
+
     def run_followup(self, **extra_env):
         env = dict(os.environ, **extra_env)
         return subprocess.run(
@@ -88,7 +98,7 @@ class TestPublicSafeConfig(unittest.TestCase):
     def test_followup_always_appends_local_incident_log(self):
         common = {
             "LEAK_SOURCE": "hash_scrub",
-            "LEAK_DETAIL": "SYNTHETIC_KEY",
+            "LEAK_DETAIL": "SYNTHETIC_KEY\x1b[31m雪",
             "LEAK_REPLACED": "1",
         }
         self.assertEqual(self.run_followup(**common, LEAK_SESSION_ID="one").returncode, 0)
@@ -106,6 +116,8 @@ class TestPublicSafeConfig(unittest.TestCase):
         self.assertIn("source=hash_scrub", lines[0])
         self.assertIn("session=one", lines[0])
         self.assertIn("session=two", lines[1])
+        self.assertNotIn("\x1b", "\n".join(lines))
+        self.assertNotIn("雪", "\n".join(lines))
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
 
     def test_local_repo_config_opts_in_without_environment_flags(self):
