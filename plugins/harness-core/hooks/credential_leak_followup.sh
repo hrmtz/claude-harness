@@ -28,14 +28,19 @@
 #   LEAK_SESSION_ID   session id (for dedup + audit)
 #   CREDENTIAL_LEAK_ISSUE_REPO   target repo for rolling incident issue, e.g. owner/repo
 #   HARNESS_CREDENTIAL_LEAK_ISSUES=1  opt in to issue filing
+# Local opt-in:
+#   ~/.claude/config/credential-leak-issue-repo  one owner/repo line; existence enables filing
 
 set -u
+umask 077
 
-REPO="${CREDENTIAL_LEAK_ISSUE_REPO:-}"
+REPO=""
 ISSUES_ENABLED="${HARNESS_CREDENTIAL_LEAK_ISSUES:-0}"
 STATE_DIR="$HOME/.claude/state/credential_scrub"
 FILED_DIR="$STATE_DIR/filed"
 LOG_DIR="$HOME/.claude/state/hook_logs"
+INCIDENT_LOG="$STATE_DIR/incidents.log"
+LOCAL_REPO_FILE="$HOME/.claude/config/credential-leak-issue-repo"
 mkdir -p "$FILED_DIR" "$LOG_DIR" 2>/dev/null
 
 _log() {
@@ -48,8 +53,34 @@ LEAK_REPLACED="${LEAK_REPLACED:-?}"
 LEAK_TRANSCRIPT="${LEAK_TRANSCRIPT:-}"
 LEAK_SESSION_ID="${LEAK_SESSION_ID:-unknown}"
 
+if [ "$ISSUES_ENABLED" = "1" ] && [ -n "${CREDENTIAL_LEAK_ISSUE_REPO:-}" ]; then
+    REPO="$CREDENTIAL_LEAK_ISSUE_REPO"
+elif [ -f "$LOCAL_REPO_FILE" ] && [ ! -L "$LOCAL_REPO_FILE" ]; then
+    IFS= read -r LOCAL_REPO < "$LOCAL_REPO_FILE" || LOCAL_REPO=""
+    if printf '%s' "$LOCAL_REPO" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+        REPO="$LOCAL_REPO"
+        ISSUES_ENABLED=1
+    else
+        _log "ignored invalid local issue repo config"
+    fi
+fi
+
+# Durable local audit is unconditional and independent of GitHub configuration.
+# Fields are metadata-only and flattened so one invocation always occupies one line.
+safe_source=$(printf '%s' "$LEAK_SOURCE" | tr '\r\n\t' '   ' | cut -c1-64)
+safe_detail=$(printf '%s' "$LEAK_DETAIL" | tr '\r\n\t' '   ' | cut -c1-256)
+safe_replaced=$(printf '%s' "$LEAK_REPLACED" | tr '\r\n\t' '   ' | cut -c1-32)
+safe_session=$(printf '%s' "$LEAK_SESSION_ID" | tr '\r\n\t' '   ' | cut -c1-128)
+if printf '[%s] source=%s detail=%s replacements=%s session=%s transcript_sanitized=yes\n' \
+    "$(date +%F_%T)" "$safe_source" "$safe_detail" "$safe_replaced" "$safe_session" \
+    >> "$INCIDENT_LOG" 2>/dev/null; then
+    chmod 600 "$INCIDENT_LOG" 2>/dev/null || true
+else
+    _log "local incident log append failed"
+fi
+
 if [ "$ISSUES_ENABLED" != "1" ] || [ -z "$REPO" ]; then
-    _log "incident issue filing disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable"
+    _log "incident recorded locally; issue filing disabled"
     exit 0
 fi
 

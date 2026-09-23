@@ -115,15 +115,27 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
 
     # Step 3 (resume) — terse context: the leak is ALREADY neutralized + logged,
     # so Claude should keep going rather than stop to do manual cleanup.
+    LOCAL_ISSUE_REPO_FILE="$HOME/.claude/config/credential-leak-issue-repo"
+    LOCAL_ISSUE_REPO=""
+    if [ -f "$LOCAL_ISSUE_REPO_FILE" ] && [ ! -L "$LOCAL_ISSUE_REPO_FILE" ]; then
+        IFS= read -r LOCAL_ISSUE_REPO < "$LOCAL_ISSUE_REPO_FILE" || LOCAL_ISSUE_REPO=""
+        printf '%s' "$LOCAL_ISSUE_REPO" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || LOCAL_ISSUE_REPO=""
+    fi
+    ISSUE_REPO=""
     if [ "${HARNESS_CREDENTIAL_LEAK_ISSUES:-0}" = "1" ] && [ -n "${CREDENTIAL_LEAK_ISSUE_REPO:-}" ]; then
+        ISSUE_REPO="$CREDENTIAL_LEAK_ISSUE_REPO"
+    elif [ -n "$LOCAL_ISSUE_REPO" ]; then
+        ISSUE_REPO="$LOCAL_ISSUE_REPO"
+    fi
+    if [ -n "$ISSUE_REPO" ]; then
         LAST_ISSUE_REF=$(cat "$HOME/.claude/state/credential_scrub/last_issue" 2>/dev/null)
         ISSUE_REF=""
         case "$LAST_ISSUE_REF" in
-            "${CREDENTIAL_LEAK_ISSUE_REPO}#"*) ISSUE_REF=" (tracked in ${LAST_ISSUE_REF})" ;;
+            "${ISSUE_REPO}#"*) ISSUE_REF=" (tracked in ${LAST_ISSUE_REF})" ;;
         esac
-        INCIDENT_STATUS="incident issue filing is enabled${ISSUE_REF}"
+        INCIDENT_STATUS="incident recorded locally; incident issue filing is enabled${ISSUE_REF}"
     else
-        INCIDENT_STATUS="incident issue filing is disabled; set HARNESS_CREDENTIAL_LEAK_ISSUES=1 and CREDENTIAL_LEAK_ISSUE_REPO=owner/repo to enable it"
+        INCIDENT_STATUS="incident recorded in the local append-only log; incident issue filing is disabled"
     fi
     if [ -n "${HARNESS_AUTOROTATE_SCRIPT:-}" ] && [ -f "${HARNESS_AUTOROTATE_SCRIPT:-}" ]; then
         ROTATION_STATUS="rotation is SOURCE-TRUST gated — a trusted-source leak auto-rotates, an untrusted-source one (external fetch / mailbox / transcript) is REFUSED, an ambiguous one awaits a human ack"
