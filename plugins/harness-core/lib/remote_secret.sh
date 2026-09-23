@@ -22,7 +22,7 @@ harness_remote_python_with_secret() (
     remote_program=""
     cleanup() {
         [ -z "$remote_program" ] || command ssh "$destination" \
-            'rm -f -- "$1"' sh "$remote_program" </dev/null >/dev/null 2>&1 || true
+            "rm -f -- '$remote_program'" </dev/null >/dev/null 2>&1 || true
     }
     trap cleanup EXIT
     trap 'exit 130' INT
@@ -37,7 +37,11 @@ harness_remote_python_with_secret() (
         return 1
     fi
 
-    command ssh "$destination" 'cat > "$1" && chmod 600 "$1"' \
-        sh "$remote_program" < "$program" || return
-    command ssh "$destination" 'python3 "$1"' sh "$remote_program"
+    # remote_program passed validation above: absolute path, ASCII path chars only.
+    # OpenSSH concatenates command arguments rather than preserving positional args,
+    # so embed this validated value in the one remote command string.
+    command ssh "$destination" \
+        "cat > '$remote_program' && chmod 600 '$remote_program'" \
+        < "$program" || return
+    command ssh "$destination" "python3 '$remote_program'"
 )
