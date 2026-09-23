@@ -22,7 +22,7 @@ harness_remote_python_with_secret() (
     remote_program=""
     remote_program_safe=0
     cleanup() {
-        [ "$remote_program_safe" -ne 1 ] || command ssh "$destination" \
+        [ "$remote_program_safe" -ne 1 ] || command timeout 10 ssh "$destination" \
             "rm -f -- '$remote_program'" </dev/null >/dev/null 2>&1 || true
     }
     trap cleanup EXIT

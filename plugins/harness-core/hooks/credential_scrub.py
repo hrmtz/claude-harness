@@ -557,6 +557,8 @@ def resume_context(replaced: int, scan_complete: bool = True) -> str:
         issue_repo = os.environ.get("CREDENTIAL_LEAK_ISSUE_REPO", "")
     if not issue_repo:
         try:
+            if LOCAL_ISSUE_REPO_FILE.is_symlink():
+                raise OSError("local issue repo config must not be a symlink")
             candidate = LOCAL_ISSUE_REPO_FILE.read_text(encoding="utf-8").splitlines()[0]
             if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
                 issue_repo = candidate

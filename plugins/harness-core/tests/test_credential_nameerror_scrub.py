@@ -34,6 +34,10 @@ class CredentialNameErrorScrubTest(unittest.TestCase):
         scrub = load_scrub()
         salt = bytes(32)
         digest = scrub.compute_hmac(secret.encode(), salt, "sha256-hmac")
+        self.assertEqual(
+            digest,
+            "10e381a4b5bfc2556daca12f31f89ebc154b246da479b7c4bf29b6440e7bc6fa",
+        )
         manifest = {len(secret): {digest: ["SYNTHETIC_KEY"]}}
         hits, complete = scrub.scan_output(
             case["payload"].encode(), manifest, salt, "sha256-hmac"
