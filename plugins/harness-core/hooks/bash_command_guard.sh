@@ -998,8 +998,17 @@ declare -a PATTERNS_REASONS=(
     # 限定だと `set | rg postgres` 等がすり抜け)。 bare `set` 検出は `set -e`/`set -x` を誤爆
     # しないよう ($|;|\n) 終端を維持。
     '(^|;|&&|[[:space:]])set[[:space:]]*($|;|\n)|(^|;|&&|[[:space:]])set[[:space:]]*\|:::env | cut -d= -f1 で key 名のみ取れる (set は env+func 全 dump で過剰)'
-    '(^|[^a-zA-Z_/])cat[[:space:]]+/proc/[^[:space:]]+/environ:::ps p <pid> -o comm,args で代替 (env 不要なら)'
-    '(^|[^a-zA-Z_/])ps[[:space:]]+[a-z]*e[a-z]*([[:space:]]|$)|(^|[^a-zA-Z_/])ps[[:space:]]+-o[[:space:]]+[a-z,]*environ:::ps -o pid,comm,args で env 出さず取れる'
+    '(^|[^a-zA-Z_/])cat[[:space:]]+/proc/[^[:space:]]+/environ:::ps -o pid,comm で代替 (argv も env も出さない)'
+    '(^|[^a-zA-Z_/])ps[[:space:]]+[a-z]*e[a-z]*([[:space:]]|$)|(^|[^a-zA-Z_/])ps[[:space:]]+-o[[:space:]]+[a-z,]*environ:::ps -o pid,comm で env も argv も出さずに取れる'
+    # 2026-09-24 issue #316: ps の args/cmd/command 列と BSD 形式 (a/x を含む dashless
+    # cluster) は、同一 user の任意
+    # プロセスの argv を出す。credential を argv で受け取る呼び出し (psql/mysql/curl -u/
+    # rclone 等) の値がそこに乗るため、env 列だけ塞いでも同じ出口から漏れる。
+    # 直前の 2 rule が代替として args を勧めていたのが #316 の直接原因だったので、
+    # 文面の修正と合わせてここで形自体を止める。
+    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*-o[[:space:]]*[a-zA-Z=,]*(^|[,=[:space:]])(args|cmd|command)([,=[:space:]]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
+    '(^|[^a-zA-Z_/])ps[[:space:]]+([a-z]*[ax][a-z]*|-[a-zA-Z]*[fF][a-zA-Z]*)([[:space:]]|$):::ps -o pid,comm で argv を出さずに取れる。DB の接続元は pg_stat_activity 側で見る'
+    '(^|[^a-zA-Z_/])pgrep[[:space:]]+([^|;&]*[[:space:]])?(-[a-zA-Z]*a[a-zA-Z]*|--list-full)([[:space:]]|$):::pgrep -f の bracket 形で id のみ取る。-a は cmdline 全体を出す'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][[:space:]]*(python[3]?|node|deno|bun|ruby|perl|php|bash|sh|dash|zsh)[[:space:]]+-[ce]([[:space:]]|$):::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
     'sops[[:space:]]+exec-env[[:space:]].+[^a-zA-Z_]eval[[:space:]]:::eval 抜きで script 化、sops exec-env <file> <script-path>'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][^'\''"]*[[:space:]]>[[:space:]]*[^[:space:]&|]:::redirect は plain text のみ、credential 値は file 化しない'
