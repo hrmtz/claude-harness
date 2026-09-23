@@ -20,8 +20,9 @@ harness_remote_python_with_secret() (
     fi
 
     remote_program=""
+    remote_program_safe=0
     cleanup() {
-        [ -z "$remote_program" ] || command ssh "$destination" \
+        [ "$remote_program_safe" -ne 1 ] || command ssh "$destination" \
             "rm -f -- '$remote_program'" </dev/null >/dev/null 2>&1 || true
     }
     trap cleanup EXIT
@@ -36,6 +37,7 @@ harness_remote_python_with_secret() (
         echo "harness_remote_python_with_secret: invalid remote temporary path" >&2
         return 1
     fi
+    remote_program_safe=1
 
     # remote_program passed validation above: absolute path, ASCII path chars only.
     # OpenSSH concatenates command arguments rather than preserving positional args,

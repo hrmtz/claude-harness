@@ -12,6 +12,11 @@ cat > "$FAKE_SSH" <<'SH'
 destination="$1"
 shift
 printf '%s %s\n' "$destination" "$*" >> "$SSH_ARGV_LOG"
+if [ -n "${SSH_MKTEMP_OUTPUT:-}" ]; then
+    case "$*" in
+        *mktemp*) printf '%s\n' "$SSH_MKTEMP_OUTPUT"; exit 0 ;;
+    esac
+fi
 cd "$SSH_REMOTE_CWD"
 TMPDIR="$SSH_REMOTE_CWD" sh -c "$*"
 SH
@@ -43,4 +48,12 @@ cmp "$PROGRAM" "$SSH_PROGRAM_COPY"
 ! grep -Fq "$SYNTHETIC_SECRET" "$SSH_ARGV_LOG"
 [ "$(cat "$WORK/remote/sh")" = "must survive cleanup" ]
 ! find "$WORK/remote" -maxdepth 1 -name 'harness-secret-program.*' | grep -q .
+
+export SSH_MKTEMP_OUTPUT="/tmp/rejected'; touch '$WORK/injected'; echo 'path"
+if printf '%s\n' "$SYNTHETIC_SECRET" \
+    | harness_remote_python_with_secret host.example "$PROGRAM" 2>/dev/null; then
+    echo "malicious temporary path was accepted" >&2
+    exit 1
+fi
+[ ! -e "$WORK/injected" ]
 printf 'remote secret stdin separation: PASS\n'
