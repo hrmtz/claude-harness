@@ -560,7 +560,7 @@ def resume_context(replaced: int, scan_complete: bool = True) -> str:
             candidate = LOCAL_ISSUE_REPO_FILE.read_text(encoding="utf-8").splitlines()[0]
             if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
                 issue_repo = candidate
-        except (OSError, IndexError):
+        except (OSError, UnicodeError, IndexError):
             pass
     if issue_repo:
         ref = ""

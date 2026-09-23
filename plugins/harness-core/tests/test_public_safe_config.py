@@ -67,6 +67,14 @@ class TestPublicSafeConfig(unittest.TestCase):
         self.assertIn("incident recorded locally", msg)
         self.assertIn("issue filing is enabled", msg)
 
+    def test_resume_context_ignores_non_utf8_local_repo_config(self):
+        config = Path(os.environ["HOME"]) / ".claude" / "config"
+        config.mkdir(parents=True)
+        (config / "credential-leak-issue-repo").write_bytes(b"private/\xffrepo\n")
+        scrub = load_scrub()
+        msg = scrub.resume_context(1, scan_complete=True)
+        self.assertIn("incident issue filing is disabled", msg)
+
     def run_followup(self, **extra_env):
         env = dict(os.environ, **extra_env)
         return subprocess.run(
