@@ -118,7 +118,11 @@ if [ "$LEAK_DETECTED" -eq 1 ]; then
     LOCAL_ISSUE_REPO_FILE="$HOME/.claude/config/credential-leak-issue-repo"
     LOCAL_ISSUE_REPO=""
     if [ -f "$LOCAL_ISSUE_REPO_FILE" ] && [ ! -L "$LOCAL_ISSUE_REPO_FILE" ]; then
-        IFS= read -r LOCAL_ISSUE_REPO < "$LOCAL_ISSUE_REPO_FILE" || LOCAL_ISSUE_REPO=""
+        # 行末の違いで判定が割れないよう、他 2 つの reader と同じ扱いにする。
+        # read は改行なし EOF で値を入れたうえで非ゼロを返すため、戻り値で分岐すると
+        # 読めた値を捨ててしまう。判定は slug の regex に任せる。
+        IFS= read -r LOCAL_ISSUE_REPO < "$LOCAL_ISSUE_REPO_FILE" || :
+        LOCAL_ISSUE_REPO="${LOCAL_ISSUE_REPO%$'\r'}"
         printf '%s' "$LOCAL_ISSUE_REPO" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || LOCAL_ISSUE_REPO=""
     fi
     ISSUE_REPO=""
