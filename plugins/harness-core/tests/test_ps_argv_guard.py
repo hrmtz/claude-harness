@@ -61,6 +61,9 @@ class PsArgvGuard(unittest.TestCase):
             "ps --format pid,args",     # 長形式
             "ps --format=args",         # 長形式の = 付き
             "ps -e -o cmd",
+            # ucmd は comm の alias で argv を出さないが cmd を含むため deny 側に落ちる。
+            # 実害はなく同じものは comm で取れるので、fail-closed の誤爆として意図的に固定する。
+            "ps -o ucmd",
             # round2: 列指定の綴り以外にも軸が残っていた (cross-family review 実測)。
             # terminator が空白と行末のみだったため、spaced 版が deny される一方で
             # 打ち直すと通るという最悪の形になっていた。
@@ -106,8 +109,9 @@ class PsArgvGuard(unittest.TestCase):
             # ことの確認で、これが落ちると metadata 取得が全面的に止まる。
             "ps -eocomm",
             "ps --ppid 100 -o pid=,comm=",
-            "ps -o user=,etime= -p 1",
             "ps -o pid=,ppid=,pcpu= -p 5",
+            "ps -o comm",
+            "ps -o ucomm",
             # BSD letter の判定を第 1 token に固定した理由の pin。segment 全体に広げると
             # user= の u/s や args.txt の文字を拾って、metadata 取得まで止まる。
             "ps -o user=,etime= -p 1",
