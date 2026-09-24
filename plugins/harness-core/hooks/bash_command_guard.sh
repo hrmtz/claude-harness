@@ -1009,11 +1009,16 @@ declare -a PATTERNS_REASONS=(
     # 列指定の綴りは -o / -eo / -ocmd / --format / --format= と複数あり、後ろが空白でも
     # pipe でも付着でも成立する。綴りを列挙すると取りこぼすので、ps の呼び出しに argv を出す
     # 列名が現れること自体を見る。comm / ucomm のような metadata 列は対象にしない。
-    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*[^a-zA-Z](args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
-    # 列指定の o に列名が付着する形 (-ocmd / -eocmd / -Aocommand)。前方境界を英字以外で
-    # 取ると o 自体が英字なので当たらないため、option cluster の末尾 o として別に見る。
-    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*-[a-zA-Z]*o(args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
-    '(^|[^a-zA-Z_/])ps[[:space:]]+([a-z]*[ax][a-z]*|-[a-zA-Z]*[fF][a-zA-Z]*)([[:space:]]|$):::ps -o pid,comm で argv を出さずに取れる。DB の接続元は pg_stat_activity 側で見る'
+    # 列名の前方境界は捨てる。列指定の綴りは -o / -eo / -ocmd / -Oargs / ocmd / kcmd /
+    # --format= と多様で、綴りを追うと必ず取りこぼす (round1 で 8 系統、round2 で更に発覚)。
+    # comm / ucomm は cmd も args も含まないので metadata 取得には当たらない。
+    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*(args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
+    # BSD の format letter は ps 直後の token に限って見る。segment 全体に広げると
+    # user= や args.txt のような値の文字を拾って metadata 取得まで止まるため、意図的に固定。
+    '(^|[^a-zA-Z_/])ps[[:space:]]+[a-z]*[axuwsvf][a-z]*([[:space:]]|[;|&<>]|$):::ps -o pid,comm で argv を出さずに取れる。DB の接続元は pg_stat_activity 側で見る'
+    # -f / -F は後続 token にも来る (ps -e -f)。dash 付き token を segment 全体で見る。
+    # --format は先頭が -- なので [a-zA-Z]* が - を食えず、ここには当たらない。
+    '(^|[^a-zA-Z_/])ps[[:space:]]+([^|;&]*[[:space:]])?-[a-zA-Z]*[fF][a-zA-Z]*([[:space:]]|[;|&<>]|$):::ps -o pid,comm で argv を出さずに取れる。DB の接続元は pg_stat_activity 側で見る'
     '(^|[^a-zA-Z_/])pgrep[[:space:]]+([^|;&]*[[:space:]])?(-[a-zA-Z]*a[a-zA-Z]*|--list-full)([[:space:]]|$):::pgrep -f の bracket 形で id のみ取る。-a は cmdline 全体を出す'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][[:space:]]*(python[3]?|node|deno|bun|ruby|perl|php|bash|sh|dash|zsh)[[:space:]]+-[ce]([[:space:]]|$):::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
     'sops[[:space:]]+exec-env[[:space:]].+[^a-zA-Z_]eval[[:space:]]:::eval 抜きで script 化、sops exec-env <file> <script-path>'

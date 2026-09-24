@@ -61,6 +61,21 @@ class PsArgvGuard(unittest.TestCase):
             "ps --format pid,args",     # 長形式
             "ps --format=args",         # 長形式の = 付き
             "ps -e -o cmd",
+            # round2: 列指定の綴り以外にも軸が残っていた (cross-family review 実測)。
+            # terminator が空白と行末のみだったため、spaced 版が deny される一方で
+            # 打ち直すと通るという最悪の形になっていた。
+            "ps -ef|grep x",            # 無空白 pipe
+            "ps -ef>out",               # 無空白 redirect
+            "ps -ef;echo x",            # 無空白 separator
+            "ps -e -f",                 # 後続 token に分割された -f
+            "ps -fp 1",
+            "ps ww -p 1",               # BSD format letter (a/x 以外)
+            "ps u -p 1",
+            "ps s -p 1",
+            "ps v -p 1",
+            "ps -Oargs",                # 大文字 O に列名が付着
+            "ps ocmd",                  # dashless o に列名が付着
+            "ps kcmd",                  # sort key に列名
             # BSD 形式は既定で cmdline を出す
             "ps aux",
             "ps auxww | grep psql",
@@ -93,6 +108,9 @@ class PsArgvGuard(unittest.TestCase):
             "ps --ppid 100 -o pid=,comm=",
             "ps -o user=,etime= -p 1",
             "ps -o pid=,ppid=,pcpu= -p 5",
+            # BSD letter の判定を第 1 token に固定した理由の pin。segment 全体に広げると
+            # user= の u/s や args.txt の文字を拾って、metadata 取得まで止まる。
+            "ps -o user=,etime= -p 1",
             "pgrep -f santei_api",
             "pgrep -l psql",
             "pgrep -c psql",
