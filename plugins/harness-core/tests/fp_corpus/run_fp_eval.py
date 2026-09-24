@@ -18,7 +18,7 @@ SCOPE: only the side-effect-free allow/deny/advisory guards. The PostToolUse scr
 trigger the leak-followup path; it has its own sandboxed tests (test_value_scrub_*.py).
 All corpus secrets are SYNTHETIC.
 """
-import json, os, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
@@ -37,6 +37,7 @@ HOOKS = {
 
 
 MAIN_REPO_PLACEHOLDER = "{{MAIN_REPO}}"
+DEV_REPO_PLACEHOLDER = "{{DEV_REPO}}"
 
 
 def make_main_repo(parent):
@@ -49,7 +50,14 @@ def make_main_repo(parent):
     """
     path = os.path.join(parent, "repo_main")
     os.makedirs(path)
-    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    # GIT_DIR が継承されていると、この fixture build が外部 repo を操作したうえで
+    # check=True を通してしまう。周囲の git 状態を持ち込まないよう、対象 repo を指す
+    # 変数と設定注入経路をまとめて外す。
+    env = {k: v for k, v in os.environ.items()
+           if k not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+                        "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_PARAMETERS",
+                        "GIT_TEMPLATE_DIR", "GIT_COMMON_DIR", "GIT_NAMESPACE"}}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
 
     def git(*args):
         subprocess.run(["git", "-C", path, *args], check=True,
@@ -71,17 +79,42 @@ def make_main_repo(parent):
         fh.write("main moved ahead of dev\n")
     git("add", "README")
     git("commit", "-q", "-m", "fixture: main ahead of dev")
-    return path
+
+    # benign 側 (ben04/ben05) は dev が checkout された repo を要る。同じ dead-path 病が
+    # FP 側にも残っており、そちらは「guard が deny しない」ではなく「repo が無いので
+    # 何も起きない」を確認している状態だった = FP 検知が空洞化していた。
+    dev_path = os.path.join(parent, "repo_dev")
+    shutil.copytree(path, dev_path, symlinks=False)
+    subprocess.run(["git", "-C", dev_path, "checkout", "-q", "dev"], check=True,
+                   capture_output=True, text=True, env=env)
+    return path, dev_path
 
 
-def load_corpus(main_repo=None):
+def load_corpus(main_repo=None, dev_repo=None):
     with open(os.path.join(HERE, "corpus.jsonl")) as f:
         rows = [json.loads(l) for l in f if l.strip()]
+    substitutions = {}
     if main_repo is not None:
-        for row in rows:
-            if MAIN_REPO_PLACEHOLDER in row.get("payload", ""):
-                row["payload"] = row["payload"].replace(
-                    MAIN_REPO_PLACEHOLDER, main_repo)
+        substitutions[MAIN_REPO_PLACEHOLDER] = main_repo
+    if dev_repo is not None:
+        substitutions[DEV_REPO_PLACEHOLDER] = dev_repo
+    for row in rows:
+        payload = row.get("payload", "")
+        for token, value in substitutions.items():
+            payload = payload.replace(token, value)
+        row["payload"] = payload
+    # 置換し損ねた placeholder を黙って通すと、guard は literal の token を cd 先として
+    # 扱い、また「repo が無いので何も起きない」に落ちる。fixture が測れていないことを
+    # 見逃す経路なので、ここで落とす。
+    leftover = sorted({
+        token
+        for token in (MAIN_REPO_PLACEHOLDER, DEV_REPO_PLACEHOLDER)
+        for row in rows
+        if token in row.get("payload", "")
+    })
+    if leftover:
+        raise RuntimeError(
+            f"corpus placeholder was not substituted: {', '.join(leftover)}")
     return rows
 
 
@@ -134,7 +167,8 @@ def main():
     # ここで作って捨てる。作れなかった場合に黙って通る (= guard を測らない) のを
     # 避けたいので、失敗はそのまま伝播させる。
     with tempfile.TemporaryDirectory(prefix="fp-corpus-") as scratch:
-        return run(load_corpus(make_main_repo(scratch)))
+        main_repo, dev_repo = make_main_repo(scratch)
+        return run(load_corpus(main_repo, dev_repo))
 
 
 def run(corpus):
