@@ -1,8 +1,8 @@
 {"id": "ben01", "label": "benign", "type": "bash", "payload": "git status", "note": "plain git", "owners": []}
 {"id": "ben02", "label": "benign", "type": "bash", "payload": "git diff --stat", "note": "plain git", "owners": []}
 {"id": "ben03", "label": "benign", "type": "bash", "payload": "git log --oneline -5", "note": "plain git", "owners": []}
-{"id": "ben04", "label": "benign", "type": "bash", "payload": "cd /tmp/claude-1000/-home-hrmtz-projects-claude-harness/9a36b75e-e515-4331-bb20-749d7f82aee7/scratchpad/repo_dev && git commit -m \"fix: handle rotate edge case\"", "note": "commit on dev branch -> allowed", "owners": []}
-{"id": "ben05", "label": "benign", "type": "bash", "payload": "cd /tmp/claude-1000/-home-hrmtz-projects-claude-harness/9a36b75e-e515-4331-bb20-749d7f82aee7/scratchpad/repo_dev && git push origin dev", "note": "push to dev -> allowed", "owners": []}
+{"id": "ben04", "label": "benign", "type": "bash", "payload": "cd {{DEV_REPO}} && git commit -m \"fix: handle rotate edge case\"", "note": "commit on dev branch -> allowed", "owners": []}
+{"id": "ben05", "label": "benign", "type": "bash", "payload": "cd {{DEV_REPO}} && git push origin dev", "note": "push to dev -> allowed", "owners": []}
 {"id": "ben06", "label": "benign", "type": "bash", "payload": "gh issue create --title \"repro\" --body 'Repro loop: for i in 1 2 3 4; do echo $i; done ; then run ALTER ROLE prs PASSWORD to rotate the credential'", "note": "#5 numeric-range + rotate/ALTER words inside --body", "owners": []}
 {"id": "ben07", "label": "benign", "type": "bash", "payload": "gh issue comment 5 --body \"rotate the credential and update the DSN on all hosts\"", "note": "rotate/credential/DSN in body", "owners": []}
 {"id": "ben08", "label": "benign", "type": "bash", "payload": "gh issue create --body 'we should rotate the postgres password; run ALTER ROLE prs PASSWORD soon'", "note": "rotate/ALTER ROLE PASSWORD in body", "owners": []}
