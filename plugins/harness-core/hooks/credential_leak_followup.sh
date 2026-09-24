@@ -56,7 +56,15 @@ LEAK_SESSION_ID="${LEAK_SESSION_ID:-unknown}"
 if [ "$ISSUES_ENABLED" = "1" ] && [ -n "${CREDENTIAL_LEAK_ISSUE_REPO:-}" ]; then
     REPO="$CREDENTIAL_LEAK_ISSUE_REPO"
 elif [ -f "$LOCAL_REPO_FILE" ] && [ ! -L "$LOCAL_REPO_FILE" ]; then
-    IFS= read -r LOCAL_REPO < "$LOCAL_REPO_FILE" || LOCAL_REPO=""
+    # 行末の違いで incident 記録が黙って無効化されるのを避ける。python 側の reader は
+    # splitlines() を使うため CR と末尾改行の有無を吸収する。ここが割れると、通知文は
+    # 「filing 有効」と告げながら実際には filed されない状態になる。
+    #   * CRLF: read が末尾 CR を残すので落とす
+    #   * 末尾改行なし: read は値を入れたうえで非ゼロを返すため、戻り値で分岐すると
+    #     読めた値を捨ててしまう。判定は slug の regex に任せる
+    LOCAL_REPO=""
+    IFS= read -r LOCAL_REPO < "$LOCAL_REPO_FILE" || :
+    LOCAL_REPO="${LOCAL_REPO%$'\r'}"
     if printf '%s' "$LOCAL_REPO" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
         REPO="$LOCAL_REPO"
         ISSUES_ENABLED=1
