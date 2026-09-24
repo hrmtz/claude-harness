@@ -49,6 +49,18 @@ class PsArgvGuard(unittest.TestCase):
             "ps -o pid,command",
             "ps -o pid=,cmd= -p 1234",
             "ps -p 1 -o args=",
+            # 列指定の綴りは -o + 空白 だけではない。初稿はこの軸を落としており、
+            # cross-family review が実測で 8 系統の素通りを出した (#323 BLOCK)。
+            "ps -eo pid,args",          # option cluster に o が混ざる
+            "ps -Ao args",              # 同 (大文字 option)
+            "ps -eo args|grep psql",    # 直後が pipe で空白なし
+            "ps -ocmd",                 # -o に列名が付着
+            "ps -ocommand",
+            "ps -eocmd",                # cluster 末尾 o に列名が付着
+            "ps -Aocommand",
+            "ps --format pid,args",     # 長形式
+            "ps --format=args",         # 長形式の = 付き
+            "ps -e -o cmd",
             # BSD 形式は既定で cmdline を出す
             "ps aux",
             "ps auxww | grep psql",
@@ -75,6 +87,9 @@ class PsArgvGuard(unittest.TestCase):
             "ps -o pid=,comm= -p 1234",
             "ps -o pid,comm",
             "ps -eo pid,comm",
+            # cluster + metadata 列は通り続ける。cmd と comm を境界で分けられている
+            # ことの確認で、これが落ちると metadata 取得が全面的に止まる。
+            "ps -eocomm",
             "ps --ppid 100 -o pid=,comm=",
             "ps -o user=,etime= -p 1",
             "ps -o pid=,ppid=,pcpu= -p 5",

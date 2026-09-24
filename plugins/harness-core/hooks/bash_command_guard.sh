@@ -1006,7 +1006,13 @@ declare -a PATTERNS_REASONS=(
     # rclone 等) の値がそこに乗るため、env 列だけ塞いでも同じ出口から漏れる。
     # 直前の 2 rule が代替として args を勧めていたのが #316 の直接原因だったので、
     # 文面の修正と合わせてここで形自体を止める。
-    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*-o[[:space:]]*[a-zA-Z=,]*(^|[,=[:space:]])(args|cmd|command)([,=[:space:]]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
+    # 列指定の綴りは -o / -eo / -ocmd / --format / --format= と複数あり、後ろが空白でも
+    # pipe でも付着でも成立する。綴りを列挙すると取りこぼすので、ps の呼び出しに argv を出す
+    # 列名が現れること自体を見る。comm / ucomm のような metadata 列は対象にしない。
+    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*[^a-zA-Z](args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
+    # 列指定の o に列名が付着する形 (-ocmd / -eocmd / -Aocommand)。前方境界を英字以外で
+    # 取ると o 自体が英字なので当たらないため、option cluster の末尾 o として別に見る。
+    '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*-[a-zA-Z]*o(args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
     '(^|[^a-zA-Z_/])ps[[:space:]]+([a-z]*[ax][a-z]*|-[a-zA-Z]*[fF][a-zA-Z]*)([[:space:]]|$):::ps -o pid,comm で argv を出さずに取れる。DB の接続元は pg_stat_activity 側で見る'
     '(^|[^a-zA-Z_/])pgrep[[:space:]]+([^|;&]*[[:space:]])?(-[a-zA-Z]*a[a-zA-Z]*|--list-full)([[:space:]]|$):::pgrep -f の bracket 形で id のみ取る。-a は cmdline 全体を出す'
     'sops[[:space:]]+exec-env[[:space:]].+['\''"][[:space:]]*(python[3]?|node|deno|bun|ruby|perl|php|bash|sh|dash|zsh)[[:space:]]+-[ce]([[:space:]]|$):::scripts/ に repo-baked script 置いて sops exec-env <file> <script-path> で呼ぶ'
