@@ -1008,10 +1008,12 @@ declare -a PATTERNS_REASONS=(
     # 文面の修正と合わせてここで形自体を止める。
     # 列指定の綴りは -o / -eo / -ocmd / --format / --format= と複数あり、後ろが空白でも
     # pipe でも付着でも成立する。綴りを列挙すると取りこぼすので、ps の呼び出しに argv を出す
-    # 列名が現れること自体を見る。comm / ucomm のような metadata 列は対象にしない。
+    # 列名が現れること自体を見る。
     # 列名の前方境界は捨てる。列指定の綴りは -o / -eo / -ocmd / -Oargs / ocmd / kcmd /
     # --format= と多様で、綴りを追うと必ず取りこぼす (round1 で 8 系統、round2 で更に発覚)。
-    # comm / ucomm は cmd も args も含まないので metadata 取得には当たらない。
+    # comm / ucomm は cmd も args も含まないので当たらない。ただし ucmd は comm の alias
+    # (コマンド名のみで argv は出さない) にも関わらず cmd を含むため deny 側に落ちる。
+    # argv は出ないので実害はなく、同じものは comm で取れる。fail-closed 側の誤爆として許容する。
     '(^|[^a-zA-Z_/])ps[[:space:]][^|;&]*(args|cmd|command)([^a-zA-Z]|$):::ps -o pid,comm で argv を出さずに取れる。特定 process の id だけなら pgrep -f の bracket 形'
     # BSD の format letter は ps 直後の token に限って見る。segment 全体に広げると
     # user= や args.txt のような値の文字を拾って metadata 取得まで止まるため、意図的に固定。
