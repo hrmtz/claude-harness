@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ローカル設定 file を読む 2 つの経路が同じ判定になることを pin する。
+"""ローカル設定 file を読む 3 つの経路が同じ判定になることを pin する。
 
 incident 記録の宛先は **3 箇所** が独立に読む:
   * credential_leak_followup.sh   実際に filing する経路
@@ -99,7 +99,7 @@ class LocalConfigReaderParity(unittest.TestCase):
     def test_non_utf8_is_rejected_by_both(self):
         self.check(b"\xff\xfe owner/repo\n", "reject", binary=True)
 
-    def test_both_readers_still_strip_carriage_returns_in_source(self):
+    def test_every_reader_source_still_absorbs_line_endings(self):
         # 実装が分岐に戻ったら落ちるようにする。上の parity test は切り出した
         # reader を評価するので、本体側の一致もここで確かめる。
         self.assertIn("%$'\\r'", FOLLOWUP.read_text(encoding="utf-8"))
