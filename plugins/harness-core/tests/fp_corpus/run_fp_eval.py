@@ -18,7 +18,7 @@ SCOPE: only the side-effect-free allow/deny/advisory guards. The PostToolUse scr
 trigger the leak-followup path; it has its own sandboxed tests (test_value_scrub_*.py).
 All corpus secrets are SYNTHETIC.
 """
-import json, os, subprocess, sys
+import json, os, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
@@ -36,9 +36,53 @@ HOOKS = {
 }
 
 
-def load_corpus():
+MAIN_REPO_PLACEHOLDER = "{{MAIN_REPO}}"
+
+
+def make_main_repo(parent):
+    """main が checkout された最小 repo を作る。
+
+    branch_policy_guard は `cd <dir> && git ...` の <dir> を取り出して
+    `git -C <dir> symbolic-ref --short HEAD` で branch を見る。dev ref の有無も
+    別の分岐で参照されるので両方用意する。repo が無いと guard は branch を解決できず
+    黙って通るため、fixture が周囲の filesystem に依存しないようここで用意する。
+    """
+    path = os.path.join(parent, "repo_main")
+    os.makedirs(path)
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+
+    def git(*args):
+        subprocess.run(["git", "-C", path, *args], check=True,
+                       capture_output=True, text=True, env=env)
+
+    subprocess.run(["git", "init", "-q", "-b", "main", path], check=True,
+                   capture_output=True, text=True, env=env)
+    git("config", "user.email", "fixture@example.invalid")
+    git("config", "user.name", "fp corpus fixture")
+    with open(os.path.join(path, "README"), "w") as fh:
+        fh.write("fixture\n")
+    git("add", "README")
+    git("commit", "-q", "-m", "fixture base")
+    # dev は base に残し、main だけ 1 commit 進める。push の rule は
+    # main が dev より先行している時だけ発火する (= 居座りの徴候) ので、
+    # 両者が同じ commit だと allow が正しい挙動になり fixture が guard を測れない。
+    git("branch", "dev")
+    with open(os.path.join(path, "README"), "a") as fh:
+        fh.write("main moved ahead of dev\n")
+    git("add", "README")
+    git("commit", "-q", "-m", "fixture: main ahead of dev")
+    return path
+
+
+def load_corpus(main_repo=None):
     with open(os.path.join(HERE, "corpus.jsonl")) as f:
-        return [json.loads(l) for l in f if l.strip()]
+        rows = [json.loads(l) for l in f if l.strip()]
+    if main_repo is not None:
+        for row in rows:
+            if MAIN_REPO_PLACEHOLDER in row.get("payload", ""):
+                row["payload"] = row["payload"].replace(
+                    MAIN_REPO_PLACEHOLDER, main_repo)
+    return rows
 
 
 def build_input(typ, payload):
@@ -86,7 +130,14 @@ def eval_hook(hook, corpus):
 
 
 def main():
-    corpus = load_corpus()
+    # fixture が周囲の filesystem に依存しないよう、branch-policy の対象 repo は
+    # ここで作って捨てる。作れなかった場合に黙って通る (= guard を測らない) のを
+    # 避けたいので、失敗はそのまま伝播させる。
+    with tempfile.TemporaryDirectory(prefix="fp-corpus-") as scratch:
+        return run(load_corpus(make_main_repo(scratch)))
+
+
+def run(corpus):
     results = {h: eval_hook(h, corpus) for h in HOOKS}
     if "--json" in sys.argv:
         print(json.dumps(results, indent=2, ensure_ascii=False))
