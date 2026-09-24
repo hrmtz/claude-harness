@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """ローカル設定 file を読む 2 つの経路が同じ判定になることを pin する。
 
-incident 記録の宛先は shell 側 (credential_leak_followup.sh) と python 側
-(credential_scrub.py) の両方が独立に読む。片方だけが受理すると、通知文は
-「filing 有効」と告げながら実際には filed されない状態になる。行末の違いで
-そこが割れていたので、同じ入力に対して同じ答えを返すことを test で固定する。
+incident 記録の宛先は **3 箇所** が独立に読む:
+  * credential_leak_followup.sh   実際に filing する経路
+  * credential_scrub.py           leak 検出後の通知文
+  * credential_value_scrub.sh     resume context (続行してよいと告げる出口)
+
+どれか 1 つだけが受理すると、「記録済みだから続行してよい」と告げながら実際には
+記録されていない状態になる。行末の違いでそこが割れていた。初稿は 2 つだけを揃えており、
+cross-family review が 3 つ目を見つけた (#325 BLOCK)。**reader の数を数える工程自体が
+抜けていた** ので、この test は 3 経路を並べて同じ答えになることを固定する。
 
 判定だけを見るため、shell 側の読み取り部分と python 側の読み取り部分をそれぞれ
 切り出して評価する。GitHub を叩く経路には入らない。
@@ -17,6 +22,7 @@ from pathlib import Path
 
 CORE = Path(__file__).resolve().parents[1]
 FOLLOWUP = CORE / "hooks" / "credential_leak_followup.sh"
+VALUE_SCRUB = CORE / "hooks" / "credential_value_scrub.sh"
 SCRUB = CORE / "hooks" / "credential_scrub.py"
 
 SLUG_RE = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -94,6 +100,22 @@ class LocalConfigReaderParity(unittest.TestCase):
         # reader を評価するので、本体側の一致もここで確かめる。
         self.assertIn("%$'\\r'", FOLLOWUP.read_text(encoding="utf-8"))
         self.assertIn("splitlines()", SCRUB.read_text(encoding="utf-8"))
+        self.assertIn("%$'\\r'", VALUE_SCRUB.read_text(encoding="utf-8"))
+
+    def test_every_reader_of_this_config_is_covered(self):
+        # reader を数え損ねたのが #325 BLOCK の原因だった。設定 file を参照する
+        # hook が増えたら、この test が気付けるようにしておく。
+        hooks = sorted(
+            p.name for p in (CORE / "hooks").iterdir()
+            if p.is_file() and "credential-leak-issue-repo" in p.read_text(
+                encoding="utf-8", errors="replace")
+        )
+        self.assertEqual(
+            hooks,
+            ["credential_leak_followup.sh", "credential_scrub.py",
+             "credential_value_scrub.sh"],
+            "a hook started reading the local issue-repo config; add it to this parity test",
+        )
 
 
 if __name__ == "__main__":
