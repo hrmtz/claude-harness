@@ -11,8 +11,12 @@ incident 記録の宛先は **3 箇所** が独立に読む:
 cross-family review が 3 つ目を見つけた (#325 BLOCK)。**reader の数を数える工程自体が
 抜けていた** ので、この test は 3 経路を並べて同じ答えになることを固定する。
 
-判定だけを見るため、shell 側の読み取り部分と python 側の読み取り部分をそれぞれ
-切り出して評価する。GitHub を叩く経路には入らない。
+**この test が実際に実行するのは 2 経路** — shell 側と python 側の読み取り部分を切り出した
+ものだけ。第 3 経路 (credential_value_scrub.sh) は本体を走らせると leak 処理全体に入るため、
+ここでは実装が同じ扱いをしていることを substring で pin するに留める。3 つとも実行している
+わけではない点を明示しておく (commit message で一度そう書いてしまった)。
+
+GitHub を叩く経路には入らない。
 """
 import re
 import subprocess
