@@ -24,16 +24,20 @@
 #
 # Options:
 #   --from NAME    explicit sender override and tmux-free/offline-safe identity.
+#                  Refused in a registered worker's pane unless NAME is that worker.
 #                  Default: FORMATION_SELF, then the pane's locked Formation
 #                  identity, then MAILBOX_FROM/window fallback.
 #   --session ID   session uuid for the entry (default: $MAILBOX_SESSION|"unknown")
-#   --no-nudge     append only; registered id or numeric pane required (no tmux lookup)
+#   --no-nudge     append only; registered id or numeric pane required (no
+#                  recipient lookup or signal; inside tmux the identity gate
+#                  still lists panes once, read-only)
 #   --inject       also attempt prompt inject (exclusive workers / explicit wake).
 #                  Default is OFF — draft non-destruction > immediacy (#166).
 #   --force        bypass the credential-shaped-body guard (use with care)
 #
 # Exit: 0 ok / 2 usage / 3 credential-shaped body refused /
-#       4 pane/signal/nudge unavailable / 5 injection refused (not exclusive)
+#       4 pane/signal/nudge unavailable / 5 injection refused (not exclusive) /
+#       8 caller identity unverifiable, or --from used in a worker's pane
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -68,19 +72,21 @@ TO="${posargs[0]}"; BODY="${posargs[1]}"
 REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
 
 # --- resolve sender codename ---
-# An explicit --from is the operator's tmux-free override. Otherwise the
-# inherited environment is only a claim (#335): pass the identity gate and
-# read the pane lock from the ancestry-verified pane, not from $TMUX_PANE.
-if [[ -z "$FROM" ]]; then
-  mailbox_guard_identity "$REGISTRY" || exit $?
-  VERIFIED_PANE="$(mailbox_resolve_caller_pane || true)"
-  [[ -n "$VERIFIED_PANE" ]] && TMUX_PANE="$VERIFIED_PANE"
+# The inherited environment is only a claim (#335). Every send passes the
+# identity gate; an explicit --from is honoured where the FORMATION_SELF
+# override is (outside a registered worker's pane), and the pane lock is read
+# from the proven pane, not from $TMUX_PANE.
+mailbox_guard_identity "$REGISTRY" || exit $?
+if [[ -n "$FROM" && -n "$MAILBOX_CALLER_WORKER" && "$FROM" != "$MAILBOX_CALLER_WORKER" ]]; then
+  echo "mailbox-send: REFUSED (exit 8): --from $FROM from the pane of worker $MAILBOX_CALLER_WORKER. A worker sends as itself; --from is for panes without a worker lock." >&2
+  exit 8
 fi
+[[ -n "$MAILBOX_CALLER_PANE" ]] && TMUX_PANE="$MAILBOX_CALLER_PANE"
 FROM="$(mailbox_resolve_sender "$FROM" unknown)"
 SESSION="${SESSION:-${MAILBOX_SESSION:-unknown}}"
 
 # Prefer registered ids; normal sends can discover a live locked identity.
-# --no-nudge remains tmux-free when the sender is explicit.
+# --no-nudge does no recipient lookup in tmux.
 if ! mailbox_resolve_recipient "$TO" "$REGISTRY" 1 "$NUDGE"; then
   echo "mailbox-send: unknown recipient '$TO' (use a live locked identity, numeric pane id, or registered worker id; --no-nudge requires pane/id)" >&2
   exit 2

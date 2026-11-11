@@ -52,6 +52,12 @@ self_id() {
   # standalone mailbox sender override. Resolve the caller's actual pane by
   # process ancestry so a stale inherited TMUX_PANE cannot split spawn routing
   # from inbox/ACK authorization or badge clearing (#59).
+  # The dispatcher runs the identity gate once in the main shell (#335). A
+  # caller that sourced this file and skipped it is gated here instead, so no
+  # path resolves an identity from an unverified environment.
+  if [[ -z "${MAILBOX_IDENTITY_GATED:-}" ]]; then
+    mailbox_guard_identity "$REGISTRY" || return 8
+  fi
   local pane
   pane="$(mailbox_resolve_caller_pane || true)"
   TMUX_PANE="$pane" mailbox_resolve_sender "" "shell-$$" 0 0
@@ -568,6 +574,7 @@ Parent (lead) commands:
 Worker-side commands (invoked by the worker agent via Bash):
   formation report <text>                 Append status to parent mailbox + own pane border
   formation done <summary>                Mark finished (mailbox)
+  formation whoami [--pane]               Print the caller's verified identity/pane
   formation ask [--next-state <state>] <question>
                                           Create durable WAITING_PARENT state + mailbox ASK
 
@@ -575,7 +582,9 @@ Env:
   FORMATION_HOME   default ~/.formation
   FORMATION_SELF   caller id claim (else tmux @formation_id, else pane-%N).
                    Ignored with a warning inside a registered worker's pane:
-                   the pane lock wins (#335). Exit 8 = identity unverifiable.
+                   the registry row of the proven pane wins (#335).
+                   Exit 8 = the caller's pane cannot be proven (e.g. a shell
+                   served by the shared Codex daemon); nothing is sent or read.
   TMUX_PANE        register requires this pane id to match ancestry/TTY proof
 
 Credential safety:
@@ -670,10 +679,6 @@ cmd_register() {
     refuse_credential register "$worker_id" "task/goal metadata refused"
     return 3
   fi
-  if mailbox_caller_behind_detached_server; then
-    echo "formation: REFUSED (exit 8): register cannot verify a pane from a shell served by a shared Codex daemon. Start Codex with --no-daemon in this pane, then register." >&2
-    return 8
-  fi
   if [[ -n "${FORMATION_SELF:-}" && "$FORMATION_SELF" != "$worker_id" ]]; then
     echo "formation: refusing registration: FORMATION_SELF=$FORMATION_SELF does not match requested id=$worker_id" >&2
     return 2
@@ -689,6 +694,13 @@ cmd_register() {
     echo "formation: refusing registration: TMUX_PANE=$pane disagrees with ancestry/TTY pane=${verified_pane:-unresolved}" >&2
     return 2
   }
+  # The ancestry match above is also true for a shell served by the shared
+  # Codex daemon, for every session attached to it (#335).
+  mailbox_prove_caller_pane
+  if [[ "$MAILBOX_CALLER_PANE" != "$pane" || "$MAILBOX_CALLER_SESSIONS" -ge 2 ]]; then
+    echo "formation: REFUSED (exit 8): register cannot prove that this shell belongs to pane $pane (it reaches it through a detached server, e.g. the shared Codex daemon). Start Codex with --no-daemon in this pane, then register." >&2
+    return 8
+  fi
   reported_pane="$(tmux display-message -p -t "$pane" '#{pane_id}' 2>/dev/null || true)"
   [[ "$reported_pane" == "$pane" ]] || {
     echo "formation: refusing registration: targeted tmux pane did not confirm $pane" >&2
@@ -1128,6 +1140,10 @@ cmd_spawn() {
     model="$ORCHESTRATOR_MODEL"
   fi
 
+  # Identity gate (#335): the caller becomes this worker's parent, so it must
+  # be proven before any pane or registry mutation.
+  mailbox_guard_identity "$REGISTRY" || return $?
+
   local briefing="$1" name="${2:-}"
   briefing="$(realpath "$briefing")"
   [[ -f "$briefing" ]] || { echo "briefing not found: $briefing" >&2; exit 2; }
@@ -1247,7 +1263,6 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning codex worker '$name' with EXPLICIT workspace-write sandbox (--sandbox), approvals disabled, and scoped mailbox write access at $FORMATION_HOME." >&2
     fi
-    tmux set-option -p -t "$pane_id" @formation_codex_isolated 1 >/dev/null
     tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $(codex_isolation_flags) $codex_sandbox_flag $codex_model_flag $codex_effort_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
@@ -1946,6 +1961,19 @@ cmd_reap() {
   echo "reaped $worker_id"
 }
 
+# Print the caller's verified identity and pane. This is the only supported
+# way for an agent to ask "who am I": $TMUX_PANE and $FORMATION_SELF are
+# claims that a Codex tool shell can inherit from another worker (#335).
+cmd_whoami() {
+  local id; id="$(self_id)"
+  if [[ "${1:-}" == "--pane" ]]; then
+    printf '%s\n' "$MAILBOX_CALLER_PANE"
+  else
+    printf '%s pane=%s verified=%s\n' "$id" "${MAILBOX_CALLER_PANE:--}" \
+      "$([[ -n "$MAILBOX_CALLER_WORKER" ]] && echo worker || echo unlocked)"
+  fi
+}
+
 cmd_report() {
   [[ $# -ge 1 ]] || { echo "usage: formation report <text>" >&2; exit 2; }
   local from; from="$(self_id)"
@@ -2081,6 +2109,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # Every command that acts as the caller passes the identity gate first (#335).
   case "$cmd" in
     help|-h|--help|status|remote-check) ;;
+    # These two prove the caller themselves: spawn after admission and before
+    # any mutation, register without adopting an existing row's identity.
+    spawn|register) ;;
     *) mailbox_guard_identity "$REGISTRY" || exit $? ;;
   esac
   case "$cmd" in
@@ -2092,6 +2123,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     inbox)  cmd_inbox  "$@" ;;
     remote-check) cmd_remote_check "$@" ;;
     reap)   cmd_reap   "$@" ;;
+    whoami) cmd_whoami "$@" ;;
     report) cmd_report "$@" ;;
     done)   cmd_done   "$@" ;;
     ask)    cmd_ask    "$@" ;;

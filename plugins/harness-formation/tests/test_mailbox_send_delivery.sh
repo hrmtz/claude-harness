@@ -339,8 +339,11 @@ if grep -Eq 'signaled|inject=' "$FIXTURE/nonudge.stdout"; then
   cat "$FIXTURE/nonudge.stdout" >&2
   exit 1
 fi
-if [[ -s "$TMUX_LOG" ]]; then
-  echo "FAIL: --no-nudge must not call tmux" >&2
+# Inside tmux the identity gate (#335) lists panes once, read-only, to prove
+# which pane the sender is in. Nothing else may reach tmux: no recipient
+# lookup, no signal, no injection.
+if grep -Fv 'tmux list-panes -a -F #{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}' "$TMUX_LOG" | grep -q .; then
+  echo "FAIL: --no-nudge must not call tmux beyond the identity gate's pane listing" >&2
   cat "$TMUX_LOG" >&2
   exit 1
 fi
@@ -376,7 +379,7 @@ run_send "$FIXTURE/relay-owned.stdout" %42 "canonical worker fixture"
 grep -Fq 'to=worker-42' "$FIXTURE/relay-owned.stdout"
 grep -Fq 'signal=relay-owned relay_pid=' "$FIXTURE/relay-owned.stdout"
 grep -Fq 'receipt=unconfirmed recipient_activity=unknown' "$FIXTURE/relay-owned.stdout"
-if [[ -s "$TMUX_LOG" ]]; then
+if grep -Fv 'tmux list-panes -a -F #{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}' "$TMUX_LOG" | grep -q .; then
   echo "FAIL: mailbox-send duplicated signaling owned by the live relay" >&2
   cat "$TMUX_LOG" >&2
   exit 1

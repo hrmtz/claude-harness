@@ -15,14 +15,19 @@ set -uo pipefail
 
 cat > /dev/null || true   # drain stdin; unused
 
-[[ -n "${FORMATION_SELF:-}" ]] || exit 0
-
 # Same home resolution as bin/formation (keep in sync).
 FORMATION_HOME="${FORMATION_HOME:-$HOME/.formation}"
 REGISTRY="$FORMATION_HOME/formation/registry.jsonl"
 [[ -s "$REGISTRY" ]] || exit 0
 
-row="$(jq -c --arg id "$FORMATION_SELF" 'select(.id == $id)' "$REGISTRY" 2>/dev/null | tail -n1)"
+# $FORMATION_SELF is a claim (#335): show the goal of the worker whose pane
+# this really is, and nothing when that cannot be verified.
+# shellcheck source=/dev/null
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/mailbox_delivery.sh"
+mailbox_guard_identity "$REGISTRY" 2>/dev/null || exit 0
+[[ -n "${FORMATION_SELF:-}" ]] || exit 0
+
+row="$(jq -Rc --arg id "$FORMATION_SELF" 'fromjson? | select(.id == $id)' "$REGISTRY" 2>/dev/null | tail -n1)"
 [[ -n "$row" ]] || exit 0
 
 goal="$(echo "$row" | jq -r '.goal // .task // empty')"
