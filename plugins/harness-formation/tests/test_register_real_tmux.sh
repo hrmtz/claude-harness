@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # Real-pane acceptance for `formation register` (#235).
 
 set -euo pipefail
@@ -82,7 +82,7 @@ fi
 rc="$(run_register "$child_pane" stale-pane \
   "TMUX_PANE=$parent_pane" "--cli codex wrong-target")"
 [[ "$rc" == "2" ]]
-grep -Fq 'disagrees with ancestry/TTY' "$FIXTURE/stale-pane.err"
+grep -Fq 'disagrees with ancestry-proven pane' "$FIXTURE/stale-pane.err"
 [[ "$(wc -l < "$registry" | tr -d ' ')" == "1" ]]
 [[ -z "$(tmux -L "$SOCKET" show-options -p -q -v -t "$child_pane" \
   @formation_identity_locked 2>/dev/null || true)" ]]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # An ordinary named CLI pane can receive mail without a Formation registry row.
 set -euo pipefail
 trap 'echo "FAIL: test_unregistered_mailbox line $LINENO" >&2' ERR

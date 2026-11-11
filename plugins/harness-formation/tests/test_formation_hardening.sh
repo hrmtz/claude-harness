@@ -1,5 +1,5 @@
 #!/bin/bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
 export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Regression tests for the formation security-hardening layer (PR #43).
@@ -56,6 +56,13 @@ export FORMATION_SELF="tester"
 unset TMUX_PANE
 # shellcheck source=/dev/null
 source "$BIN"
+
+# This file changes the simulated caller between calls inside one process.
+# Production proves its pane once per process, so drop the cached proof before
+# every gate run and every direct pane lookup here.
+eval "_cached_$(declare -f mailbox_resolve_caller_pane)"
+mailbox_resolve_caller_pane() { _MAILBOX_PROOF_PID=""; _cached_mailbox_resolve_caller_pane; }
+mailbox_require_identity() { _MAILBOX_PROOF_PID=""; mailbox_guard_identity; }
 # bin/formation sets `set -euo pipefail`; relax it so the test driver can keep
 # running after an individual expectation fails.
 set +eu +o pipefail

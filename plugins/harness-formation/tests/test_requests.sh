@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
 export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Durable semantic ASK/ACK state (#136). Transport receipt remains separate.
@@ -39,6 +39,13 @@ tmux() {
 
 # shellcheck source=/dev/null
 source "$HERE/../bin/formation"
+
+# This file changes the simulated caller between calls inside one process.
+# Production proves its pane once per process, so drop the cached proof before
+# every gate run and every direct pane lookup here.
+eval "_cached_$(declare -f mailbox_resolve_caller_pane)"
+mailbox_resolve_caller_pane() { _MAILBOX_PROOF_PID=""; _cached_mailbox_resolve_caller_pane; }
+mailbox_require_identity() { _MAILBOX_PROOF_PID=""; mailbox_guard_identity; }
 
 [[ "$(grep -Fc 'def valid_request_event' "$HERE/../lib/requests.sh")" -eq 1 ]] || {
   echo "FAIL: request event schema gate is duplicated" >&2
@@ -452,6 +459,10 @@ grep -Fq '== MAILBOX HISTORY (last 50 addressed rows) ==' <<<"$history"
   export FORMATION_MAILBOX="$FORMATION_HOME/mailbox/log.jsonl"
   export FORMATION_REQUEST_DIR="$FORMATION_HOME/requests"
   export FORMATION_REQUEST_LOG="$FORMATION_REQUEST_DIR/events.jsonl"
+  # The home changes after formation was sourced, so create the registry that
+  # formation would have created at load; a missing registry is a refusal.
+  mkdir -p "$FORMATION_HOME/formation"
+  : >"$FORMATION_HOME/formation/registry.jsonl"
   export TMUX_PANE=%171
   unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE
   STALE_TMUX_LOG="$FIXTURE/stale-pane-tmux.log"

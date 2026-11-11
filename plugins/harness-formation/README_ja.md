@@ -97,11 +97,13 @@ formation msg refactor-1 "approach B に切り替えて"
 formation reap refactor-1
 ```
 
-`formation register` は pane-local な `$TMUX_PANE` と、process ancestry /
-controlling TTY から独立解決した pane、targeted tmux lookup の一致を要求する。
-重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity との衝突、
-共有 Codex daemon 配下の shell からの登録 (`codex --no-daemon` で起動すること。
-`formation spawn` は worker をこの形で起動する、#335) は fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
+`formation register` は pane-local な `$TMUX_PANE` と、process ancestry
+から独立解決した pane、targeted tmux lookup の一致を要求する。
+pane 不一致、重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity
+との衝突は exit 2、共有 Codex daemon 配下の shell からの登録
+(`codex --no-daemon` で起動すること。`formation spawn` は worker をこの形で
+起動する、#335) と、`FORMATION_HOME` / `FORMATION_REGISTRY` が正規の home 以外を
+指している場合は exit 8 で fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
 live `@formation_exclusive_input` option も解除する。relay は
 `DEAD/manual-registration-no-relay` と記録し、sender は既存の
 zero-keystroke direct signal fallback を使う。credential-shaped な `--task`
@@ -203,9 +205,10 @@ spawn は semantic parent identity と parent pane route を分離して worker
 append を先に確定し、同じ zero-keystroke の relay-or-direct signal policy
 を通る。relay が死んでいても badge の direct fallback が働き、本文を
 prompt へ注入しない。
-parent pane は `TMUX_PANE` を信用せず process ancestry から解決し、wrapper
-で root PID chain が切れる場合だけ caller の controlling TTY と
-`pane_tty` の一意一致を安全な fallback として使う。stale/inherited な
+parent pane は `TMUX_PANE` を信用せず process ancestry だけで解決する。
+wrapper で root PID chain が切れる場合に controlling TTY の一致を使う
+fallback (#216) は #335 で削除した。その caller は拒否されるので、process chain
+を保つか tmux の外で実行する。stale/inherited な
 sibling id と mutable window name は無視し、valid な locked/legacy identity
 を持つ実 parent pane も明示 `FORMATION_SELF` も証明できなければ、返信不能
 worker を作らないよう spawn を fail-closed にする。

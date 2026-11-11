@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # The mail-nudge watch loop re-applies the Formation window-status format after
 # a tmux server restart (#283): tmux global options are server-memory only, and
 # the watcher is the one process that outlives server restarts. Gates under
