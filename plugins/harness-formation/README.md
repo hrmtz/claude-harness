@@ -123,8 +123,9 @@ formation register --cli claude --task coordination lead
 
 Registration requires the pane-local `$TMUX_PANE` to agree with independent
 process-ancestry/TTY resolution and with a targeted tmux lookup. It refuses a
-duplicate id, duplicate pane, inherited `FORMATION_SELF` mismatch, or existing
-pane identity conflict. A pre-existing pane is always registered with
+duplicate id, duplicate pane, inherited `FORMATION_SELF` mismatch, existing
+pane identity conflict, or a shell served by a shared Codex daemon (start Codex
+with `codex --no-daemon`; `formation spawn` does this for its workers, #335). A pre-existing pane is always registered with
 `exclusive_input=false`, and the live `@formation_exclusive_input` option is
 removed. Its relay state is explicitly `DEAD` with reason
 `manual-registration-no-relay`; mailbox senders therefore use the existing

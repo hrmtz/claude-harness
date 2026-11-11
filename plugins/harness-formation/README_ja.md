@@ -99,8 +99,9 @@ formation reap refactor-1
 
 `formation register` は pane-local な `$TMUX_PANE` と、process ancestry /
 controlling TTY から独立解決した pane、targeted tmux lookup の一致を要求する。
-重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity との衝突は
-fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
+重複 id、重複 pane、`FORMATION_SELF` 不一致、既存 locked identity との衝突、
+共有 Codex daemon 配下の shell からの登録 (`codex --no-daemon` で起動すること。
+`formation spawn` は worker をこの形で起動する、#335) は fail-closed。既存 pane は必ず `exclusive_input=false` で登録し、
 live `@formation_exclusive_input` option も解除する。relay は
 `DEAD/manual-registration-no-relay` と記録し、sender は既存の
 zero-keystroke direct signal fallback を使う。credential-shaped な `--task`

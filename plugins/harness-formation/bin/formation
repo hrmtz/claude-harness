@@ -573,7 +573,9 @@ Worker-side commands (invoked by the worker agent via Bash):
 
 Env:
   FORMATION_HOME   default ~/.formation
-  FORMATION_SELF   override caller id (else tmux @formation_id, else pane-%N)
+  FORMATION_SELF   caller id claim (else tmux @formation_id, else pane-%N).
+                   Ignored with a warning inside a registered worker's pane:
+                   the pane lock wins (#335). Exit 8 = identity unverifiable.
   TMUX_PANE        register requires this pane id to match ancestry/TTY proof
 
 Credential safety:
@@ -667,6 +669,10 @@ cmd_register() {
   if is_credential_like "$task" || is_credential_like "$goal"; then
     refuse_credential register "$worker_id" "task/goal metadata refused"
     return 3
+  fi
+  if mailbox_caller_behind_detached_server; then
+    echo "formation: REFUSED (exit 8): register cannot verify a pane from a shell served by a shared Codex daemon. Start Codex with --no-daemon in this pane, then register." >&2
+    return 8
   fi
   if [[ -n "${FORMATION_SELF:-}" && "$FORMATION_SELF" != "$worker_id" ]]; then
     echo "formation: refusing registration: FORMATION_SELF=$FORMATION_SELF does not match requested id=$worker_id" >&2
@@ -859,6 +865,14 @@ resolve_bypass_default() {
   if [[ -n "$bypass" ]]; then echo "$bypass"; return; fi
   : "$cli"
   echo 1
+}
+
+# Each Codex worker runs its own in-process app server. Without this the TUI
+# attaches to one per-user daemon started by the first worker, and every later
+# worker's tool shells and hooks inherit that worker's FORMATION_SELF,
+# FORMATION_PARENT, FORMATION_SESSION_ID and TMUX_PANE (#335).
+codex_isolation_flags() {
+  echo "--no-daemon"
 }
 
 codex_launch_flags() {
@@ -1233,7 +1247,8 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     else
       echo "formation: spawning codex worker '$name' with EXPLICIT workspace-write sandbox (--sandbox), approvals disabled, and scoped mailbox write access at $FORMATION_HOME." >&2
     fi
-    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $codex_sandbox_flag $codex_model_flag $codex_effort_flag $(printf '%q' "$seed")" Enter
+    tmux set-option -p -t "$pane_id" @formation_codex_isolated 1 >/dev/null
+    tmux send-keys -t "$pane_id" "$guard_command $(printf '%q' "$CODEX_LAUNCH_BIN") $(codex_isolation_flags) $codex_sandbox_flag $codex_model_flag $codex_effort_flag $(printf '%q' "$seed")" Enter
     sleep 2
   elif [[ "$cli" == "kimi" ]]; then
     # Kimi: launch the interactive TUI, then inject the seed. Kimi has no
@@ -2063,6 +2078,11 @@ cmd_resolve() {
 # without spawning tmux panes).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   cmd="${1:-help}"; shift || true
+  # Every command that acts as the caller passes the identity gate first (#335).
+  case "$cmd" in
+    help|-h|--help|status|remote-check) ;;
+    *) mailbox_guard_identity "$REGISTRY" || exit $? ;;
+  esac
   case "$cmd" in
     spawn)  cmd_spawn  "$@" ;;
     register) cmd_register "$@" ;;
