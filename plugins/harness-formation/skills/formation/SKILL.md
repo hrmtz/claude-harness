@@ -232,39 +232,78 @@ Do not rely on it to spread load; choose by the table above from the start.
   `FORMATION_PARENT`, `FORMATION_PARENT_PANE`, `FORMATION_SESSION_ID` and
   `TMUX_PANE`. `formation spawn --cli codex` therefore starts Codex with
   `--no-daemon` (one in-process server per worker), and everything that acts as
-  the caller passes an identity gate first: every `formation` verb except
-  `help`, `status` and `remote-check`, `mailbox-send`, the goal statusline, the
-  PR receipt hook and `formation-window-status --task`.
-  - The gate proves the caller's pane from process ancestry: the pane's own
-    process must be an ancestor, with at most one foreign process session in
-    between (a CLI gives a tool call one session of its own; a detached server
-    adds more). Terminals are not consulted on the way, so a tool shell with
-    its own PTY is judged the same.
-  - Proven pane is a registered worker's pane: identity, parent, parent pane
-    and session id are all taken from that registry row; the environment's
-    values are discarded together. A contradicting `FORMATION_SELF` is named on
-    stderr and each row sent is tagged
-    `identity_note: "env-claimed:<claimed id>"`. Workers never need to prefix
-    `FORMATION_SELF=` by hand, and doing so in a worker pane has no effect.
-    `mailbox-send --from <other>` is refused there (exit 8).
-  - Any other proven pane (a lead, a plain shell), and a non-Codex shell
-    outside tmux, keep the explicit `FORMATION_SELF=<id>` / `--from` override.
-    That keeps the operator recovery below working.
-  - A caller that cannot be proven is refused with exit 8 and nothing is sent
-    or read, whatever the registry says: a shell that reaches a pane only
-    through a detached server (the shared Codex daemon), and a Codex tool shell
-    with no provable pane at all. There is no warn-and-continue mode. A worker
-    in that state cannot be repaired in place; `formation reap` it and spawn it
-    again. A hand-launched Codex must be started with `codex --no-daemon`
-    before `formation register`.
-  - `formation whoami [--pane]` prints the verified identity and pane; it is
-    the supported way for an agent to ask who it is. Do not read `$TMUX_PANE`
-    or `$FORMATION_SELF` for that.
+  the caller runs an identity gate first, in its own shell: every `formation`
+  verb except `help`, `status` and `remote-check`, `mailbox-send`, the goal
+  statusline, the PR receipt hook and `formation-window-status --task`.
+  The gate has three outcomes, shown by `formation whoami` as `context=`:
+  - `worker`: the caller's pane is proven and the registry has a row for that
+    pane with the pane's lock. Identity, parent, parent pane and session id are
+    all taken from that row; the environment's values are discarded together.
+    A contradicting `FORMATION_SELF` is named on stderr and each row sent is
+    tagged `identity_note: "env-claimed:<claimed id>"`. Workers never prefix
+    `FORMATION_SELF=` by hand; in a worker pane it has no effect, and
+    `mailbox-send --from <other>` is refused.
+  - `lead`: the pane is proven, its lock and the registry were both read
+    successfully, and the pane has no registry row and no spawn marker. Only
+    here, and for `operator`, do `FORMATION_SELF=<id>` and `--from` apply. Lead
+    status is a finding, never what is left over when a lookup fails.
+  - `operator`: the caller is in no tmux pane at all (cron, a plain terminal).
+    The environment applies.
+  Everything else is refused with exit 8 and nothing is sent or read, for
+  every CLI type and whatever the registry says:
+  - the pane cannot be established: the process table or the tmux server named
+    by `$TMUX` cannot be read, `$TMUX` is set but no pane of that server is an
+    ancestor of the shell, or the shell is in a pane while `$TMUX` is unset or
+    names another server;
+  - the pane is reached only through a detached server (the shared Codex
+    daemon);
+  - the pane's lock or the registry cannot be read, or the pane is marked as a
+    worker pane but has no matching row;
+  - the caller is in a pane and points `FORMATION_HOME` / `FORMATION_REGISTRY`
+    away from the canonical home. The gate reads the registry under the home
+    directory from the account database; the caller does not choose the
+    evidence that identifies it.
+  A refused worker cannot be repaired in place: `formation reap` it and spawn
+  it again. A hand-launched Codex must be started with `codex --no-daemon`
+  before `formation register`.
+  - **How the pane is proven.** The caller's ancestors come from the process
+    table. Every tmux server with a socket in `/tmp/tmux-<uid>`, plus the one
+    `$TMUX` names, is asked for its panes; a pane counts when its own process
+    is an ancestor of the caller. Unsetting `TMUX` in a pane therefore does not
+    make a shell an operator: the pane is still found and the mismatch is
+    refused. There is no controlling-terminal fallback (#216's fallback was
+    removed): a shell that only holds a pane's terminal is unproven. Limit: a
+    tmux server on a socket outside that directory is only seen through
+    `$TMUX`.
+  - **What the session count shows, and what it does not.** A CLI that owns the
+    pane gives a tool call at most one process session of its own; Codex's
+    shared daemon adds its own sessions, so two or more foreign sessions
+    between the caller and the pane are refused. This rejects the shared
+    daemon as it exists in codex-cli 0.167. It is a property of the path, not
+    an attribution proof: a shared server that served several panes while
+    adding only one session would pass. That residual is why spawn removes the
+    shared server with `--no-daemon` instead of relying on the count.
+  - Known cost: a job that a worker detaches into its own session (`setsid`),
+    an orphaned background job, and a `codex exec` child of another CLI's tool
+    shell are all unprovable and refused. They hand their result to the
+    worker's own shell, which reports.
+  - `formation whoami [--pane]` is the supported way for an agent to ask who
+    it is. Do not read `$TMUX_PANE` or `$FORMATION_SELF` for that.
   - The Codex SessionStart hook assigns no identity from a daemon-served
     session; it tells the session to use the identity in its bootstrap message.
-  - Known cost: a job that a worker detaches into its own session (`setsid`)
-    and that later calls `formation` crosses two sessions and is refused too.
-    Report from the worker's own shell instead.
+  - **Test fixtures.** A test cannot use the canonical home. It sets
+    `FORMATION_TEST_FIXTURE=1` and points `FORMATION_HOME` (and any mailbox,
+    registry, request or review path it overrides) at its own directory; the
+    gate then reads the fixture's registry and looks for tmux sockets under
+    `$FORMATION_HOME/tmux`. The declaration is void as soon as one of those
+    paths lies inside the canonical home, so a command run with it can only
+    read and write fixture state: a worker shell gains nothing from setting
+    it, because nothing it sends that way reaches the live mailbox, registry
+    or request log. `FORMATION_TEST_OPERATOR=1` (inert without an active
+    fixture) lets a test's driver process, which talks to the fixture's tmux
+    server from outside its panes, count as an operator. Neither variable
+    protects against a shell that edits `~/.formation` directly; no check in
+    this CLI can.
 - **Pane visibility (#93)**: the worker window gets a `pane-border-status`
   strip showing `<locked-id> · <task> — <live-status>` — blue for claude,
   orange for codex, magenta for kimi, plus a
@@ -413,8 +452,10 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   tmux/server recovery changes the lead's fallback identity, the local
   operator can recover without weakening the gate:
   `FORMATION_SELF=<original-parent-id> formation ack <request-id> <summary>`.
-  The override is honoured because the lead's pane carries no worker lock; it
-  is ignored (with a warning) inside a registered worker's pane.
+  The override is honoured only when the gate finds a lead pane (proven, lock
+  and registry readable, no worker row, no spawn marker) or an operator
+  outside tmux; inside a registered worker's pane it is ignored with a
+  warning.
   Use `formation status`, whose sticky ASK row remains caller-independent and
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
@@ -693,12 +734,14 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   -t <pane>`). If missing, the worker sent to `lead` (default) — read that
   mailbox explicitly: `FORMATION_SELF=lead formation inbox` (from the lead's
   pane or a plain shell, not from a worker pane).
-- **`formation: REFUSED (exit 8)` in a Codex worker**: the worker's shell is
-  served by the shared Codex daemon (or cannot be traced to a pane), so its
-  inherited identity may be another worker's. It cannot be repaired in place.
-  `formation reap` it and spawn it again (spawn uses `--no-daemon`). A row
-  tagged `identity_note` in the mailbox log marks mail whose sender was
-  corrected from a contradicting environment.
+- **`formation: REFUSED (exit 8)`**: the identity gate could not prove whose
+  shell this is; the message names the reason. For a Codex worker served by
+  the shared daemon the inherited identity may be another worker's and it
+  cannot be repaired in place: `formation reap` it and spawn it again (spawn
+  uses `--no-daemon`). For a lead it usually means `$TMUX` does not match the
+  pane the shell runs in, or the registry is unreadable. A row tagged
+  `identity_note` in the mailbox log marks mail whose sender was corrected
+  from a contradicting environment.
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).

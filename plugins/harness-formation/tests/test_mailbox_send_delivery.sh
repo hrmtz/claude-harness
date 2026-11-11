@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+# The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
+export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Regression: mailbox-send M0 delivery contract (#166).
 #
 # Default path: append + non-destructive signal only (pane option / display-
@@ -423,7 +426,7 @@ rm -f "$REGISTRY" "$FORMATION_HOME_FIXTURE/formation/worker-42.relay_pid"
 
 # --- all writers share one lock and one seq allocator ---
 for i in $(seq 1 12); do
-  FORMATION_MAILBOX="$MAILBOX" \
+  FORMATION_HOME="$FORMATION_HOME_FIXTURE" FORMATION_MAILBOX="$MAILBOX" \
     PATH="$FAKE_BIN:/usr/bin:/bin" \
     "$FAKE_BIN/mailbox-send" %42 "cli concurrent $i" \
       --no-nudge --from "cli-$i" >/dev/null &

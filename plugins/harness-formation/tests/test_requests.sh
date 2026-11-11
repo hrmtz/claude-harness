@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+# The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
+export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Durable semantic ASK/ACK state (#136). Transport receipt remains separate.
 
 set -euo pipefail

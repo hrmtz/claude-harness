@@ -1,4 +1,5 @@
 #!/bin/bash
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
 # Exercise pane_option_snapshot against tmux's real value quoting.
 
 set -euo pipefail
