@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
 # Durable review request/verdict tracking (#221).
 
 set -euo pipefail

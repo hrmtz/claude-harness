@@ -24,7 +24,7 @@ REGISTRY="$FORMATION_HOME/formation/registry.jsonl"
 # this really is, and nothing when that cannot be verified.
 # shellcheck source=/dev/null
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/mailbox_delivery.sh"
-mailbox_guard_identity "$REGISTRY" 2>/dev/null || exit 0
+mailbox_require_identity 2>/dev/null || exit 0
 [[ -n "${FORMATION_SELF:-}" ]] || exit 0
 
 row="$(jq -Rc --arg id "$FORMATION_SELF" 'fromjson? | select(.id == $id)' "$REGISTRY" 2>/dev/null | tail -n1)"

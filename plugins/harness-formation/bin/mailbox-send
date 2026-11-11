@@ -73,12 +73,12 @@ REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
 
 # --- resolve sender codename ---
 # The inherited environment is only a claim (#335). Every send passes the
-# identity gate; an explicit --from is honoured where the FORMATION_SELF
-# override is (outside a registered worker's pane), and the pane lock is read
-# from the proven pane, not from $TMUX_PANE.
-mailbox_guard_identity "$REGISTRY" || exit $?
-if [[ -n "$FROM" && -n "$MAILBOX_CALLER_WORKER" && "$FROM" != "$MAILBOX_CALLER_WORKER" ]]; then
-  echo "mailbox-send: REFUSED (exit 8): --from $FROM from the pane of worker $MAILBOX_CALLER_WORKER. A worker sends as itself; --from is for panes without a worker lock." >&2
+# identity gate. In a worker's pane the sender is that worker; --from and
+# FORMATION_SELF apply only where the gate positively found a lead pane or an
+# operator outside tmux. The gate reads the canonical registry, not $REGISTRY.
+mailbox_require_identity || exit $?
+if [[ "$MAILBOX_CALLER_CONTEXT" == "worker" && -n "$FROM" && "$FROM" != "$MAILBOX_CALLER_WORKER" ]]; then
+  echo "mailbox-send: REFUSED (exit 8): --from $FROM from the pane of worker $MAILBOX_CALLER_WORKER. A worker sends as itself; --from is for a lead pane or an operator outside tmux." >&2
   exit 8
 fi
 [[ -n "$MAILBOX_CALLER_PANE" ]] && TMUX_PANE="$MAILBOX_CALLER_PANE"

@@ -1,4 +1,7 @@
 #!/bin/bash
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+# The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
+export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Regression tests for locked caller-pane parent fallback and legacy repair.
 # Synthetic only: no live tmux server or Formation state is touched.
 
@@ -18,7 +21,7 @@ export TMUX_PANE="%42"
 printf '# parent route fixture\n' >"$TMP/briefing.md"
 
 CALLER_TTY="pts/216"
-PANE_ROWS='%42|1|/dev/pts/216'
+PANE_ROWS="%42|$$|/dev/pts/216"
 TMUX_LOCKED_ID="lead-locked"
 TMUX_NEW_WINDOW_LOG="$TMP/new-window.log"
 TMUX_OPTION_DIR="$TMP/tmux-options"
@@ -36,15 +39,18 @@ mkdir -p "$TMUX_OPTION_DIR"
 : >"$TMUX_PARENT_ID_READ_COUNT"
 : >"$TMUX_CHILD_ID_READ_COUNT"
 
-# The caller's controlling TTY proves %42 even though the pane root PID is not
-# in this wrapper process's ancestry. This is the real 104dbdc gap: a locked
-# identity exists, but the PID-only resolver refuses the spawn.
+# The caller is proven to be in %42 by ancestry: this shell is the pane's own
+# process in the mocked pane list. The controlling-TTY fallback that #216
+# added for wrappers that break the pid chain was removed again in
+# claude-harness#335 (a pane is proven by ancestry or not at all), so a caller
+# that only holds the pane's terminal is now refused; see the block below.
+# CALLER_TTY="?" / "" and PS_FAIL_TTY=1 keep their meaning for the rest of
+# this file: a caller whose process chain cannot be read, i.e. unproven.
 ps() {
   case "$*" in
-    *"-o ppid="*) printf '1\n' ;;
-    *"-o tty="*)
-      [[ "$PS_FAIL_TTY" == "0" ]] || return 1
-      printf '%s\n' "$CALLER_TTY"
+    *"-o ppid=,sid="*)
+      [[ "$PS_FAIL_TTY" == "0" && -n "$CALLER_TTY" && "$CALLER_TTY" != "?" ]] || return 1
+      printf '1 %s\n' "$$"
       ;;
     *) return 1 ;;
   esac
@@ -81,7 +87,11 @@ tmux() {
       ;;
     display-message)
       [[ "$target" != "$TMUX_DEAD_PANE" ]] || return 1
-      if [[ "$target" == "%42" ]]; then
+      if [[ " ${args[*]} " == *formation_parent_id* ]]; then
+        # The identity gate's own read (lock|spawn marker). %42 is the lead:
+        # locked, no marker. Not counted as one of the reads raced below.
+        if [[ "$target" == "%42" ]]; then printf '%s|\n' "$TMUX_LOCKED_ID"; else printf '|\n'; fi
+      elif [[ "$target" == "%42" ]]; then
         read_count="$(cat "$TMUX_PARENT_ID_READ_COUNT" 2>/dev/null || echo 0)"
         read_count=$((read_count + 1))
         printf '%s\n' "$read_count" >"$TMUX_PARENT_ID_READ_COUNT"
@@ -207,41 +217,35 @@ TMUX_LOCKED_ID="lead-locked"
 # Existing two-field list-panes mocks retain their ancestry proof.
 PANE_ROWS="%55|$$"
 [[ "$(mailbox_resolve_caller_pane)" == "%55" ]]
-PANE_ROWS='%42|1|/dev/pts/216'
+PANE_ROWS="%42|$$|/dev/pts/216"
 
-# A stale inherited pane id cannot redirect the TTY proof to a sibling.
+# A stale inherited pane id cannot redirect the proof to a sibling.
 TMUX_PANE="%77"
 [[ "$(mailbox_resolve_caller_pane)" == "%42" ]]
 TMUX_PANE="%42"
 
-# Duplicate TTY matches, an unrelated pane, and headless callers all remain
-# unverified even if TMUX_PANE names a live-looking target.
-PANE_ROWS=$'%42|1|/dev/pts/216\n%43|1|/dev/pts/216'
+# Holding a pane's terminal without descending from its own process proves
+# nothing (#335; this was the #216 fallback), and neither does a pane id in
+# the environment. An unreadable process chain is unproven too.
+PANE_ROWS='%42|1|/dev/pts/216'
 if mailbox_resolve_caller_pane >/dev/null; then
-  echo "FAIL: ambiguous duplicate TTY match acquired a parent route" >&2
+  echo "FAIL: controlling-TTY match without ancestry acquired a parent route" >&2
   exit 1
 fi
-PANE_ROWS='%42|1|/dev/pts/999'
-if mailbox_resolve_caller_pane >/dev/null; then
-  echo "FAIL: unrelated pane passed the controlling-TTY proof" >&2
-  exit 1
-fi
+PANE_ROWS="%42|$$|/dev/pts/216"
 CALLER_TTY="?"
 if mailbox_resolve_caller_pane >/dev/null; then
-  echo "FAIL: headless caller acquired a parent route" >&2
+  echo "FAIL: caller with an unreadable process chain acquired a parent route" >&2
   exit 1
 fi
-CALLER_TTY=""
-if mailbox_resolve_caller_pane >/dev/null; then
-  echo "FAIL: empty controlling TTY acquired a parent route" >&2
-  exit 1
-fi
+CALLER_TTY="pts/216"
 PS_FAIL_TTY=1
 if mailbox_resolve_caller_pane >/dev/null; then
-  echo "FAIL: failed ps TTY lookup acquired a parent route" >&2
+  echo "FAIL: failed ps lookup acquired a parent route" >&2
   exit 1
 fi
 PS_FAIL_TTY=0
+CALLER_TTY=""   # the next section runs as an unproven, headless caller
 
 # Explicit FORMATION_SELF remains the intentional pull-only/headless route.
 FORMATION_SELF="cron-lead"
@@ -256,7 +260,7 @@ registry_remove pull-only-worker
 unset FORMATION_SELF
 
 CALLER_TTY="pts/216"
-PANE_ROWS='%42|1|/dev/pts/216'
+PANE_ROWS="%42|$$|/dev/pts/216"
 
 # A legacy null route is visibly unhealthy, and status remains read-only.
 registry_remove tty-parent-worker

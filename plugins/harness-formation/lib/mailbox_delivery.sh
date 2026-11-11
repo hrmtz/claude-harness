@@ -132,59 +132,13 @@ mailbox_resolve_recipient() {
   [[ -n "$MAILBOX_RECIPIENT_LABEL" && -n "$MAILBOX_RECIPIENT_PANE" ]]
 }
 
-# Resolve the caller's actual pane by matching pane root pids against this
-# process's ancestry. A resolving $TMUX_PANE is not sufficient: wrappers and
-# tmux run-shell can inherit a live sibling pane id (#59). This check is
-# read-only and uses no process-name inference.
+# The caller's proven pane, or failure. Kept for the existing call sites; the
+# proof itself (and the reason there is no controlling-TTY fallback any more)
+# lives in mailbox_prove_caller_pane.
 mailbox_resolve_caller_pane() {
-  local pid="$$" next guard=0 line pane pane_pid pane_tty rank
-  local best_rank=999 best_pane="" caller_tty="" tty_pane="" tty_matches=0
-  declare -A ancestor_rank=()
-
-  while [[ "$guard" -lt 64 && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]]; do
-    ancestor_rank["$pid"]="$guard"
-    next="$(ps -o ppid= -p "$pid" 2>/dev/null | awk 'NR==1 { print $1 }')"
-    [[ -n "$next" && "$next" != "$pid" ]] || break
-    pid="$next"
-    guard=$((guard + 1))
-  done
-
-  caller_tty="$(ps -o tty= -p "$$" 2>/dev/null |
-    awk 'NR == 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' || true)"
-  case "$caller_tty" in
-    ""|"?"|"??") caller_tty="" ;;
-    /dev/*) ;;
-    *) caller_tty="/dev/$caller_tty" ;;
-  esac
-
-  while IFS= read -r line; do
-    IFS='|' read -r pane pane_pid pane_tty <<<"$line"
-    [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ ]] || continue
-    if [[ -n "${ancestor_rank[$pane_pid]+x}" ]]; then
-      rank="${ancestor_rank[$pane_pid]}"
-      if [[ "$rank" -lt "$best_rank" ]]; then
-        best_rank="$rank"
-        best_pane="$pane"
-      fi
-    fi
-    if [[ -n "$caller_tty" && "$pane_tty" == "$caller_tty" ]]; then
-      tty_pane="$pane"
-      tty_matches=$((tty_matches + 1))
-    fi
-  done < <(tmux list-panes -a -F '#{pane_id}|#{pane_pid}|#{pane_tty}' 2>/dev/null || true)
-
-  if [[ -n "$best_pane" ]]; then
-    printf '%s\n' "$best_pane"
-    return
-  fi
-
-  # Wrappers such as CLI launch guards can break the pane-root PID ancestry
-  # chain while the caller still owns the pane's controlling TTY. Accept only
-  # an exact, unique pane_tty match. This does not consult inherited
-  # TMUX_PANE, mutable window names, or pane titles, so a live sibling cannot
-  # become the reply route merely because its id is present in the environment.
-  [[ "$tty_matches" -eq 1 && -n "$tty_pane" ]] || return 1
-  printf '%s\n' "$tty_pane"
+  mailbox_prove_caller_pane || return 1
+  [[ -n "$MAILBOX_CALLER_PANE" ]] || return 1
+  printf '%s\n' "$MAILBOX_CALLER_PANE"
 }
 
 # Return only the immutable Formation identity locked on a verified pane.
@@ -213,121 +167,282 @@ mailbox_resolve_formation_pane_identity() {
   printf '%s\n' "$identity"
 }
 
-# Prove which pane the caller belongs to (#335). Sets, in the current shell:
-#   MAILBOX_CALLER_PANE      nearest live pane whose own process is an ancestor
-#                            of the caller (or whose terminal the caller holds),
-#                            "" when there is none
-#   MAILBOX_CALLER_SESSIONS  number of distinct process sessions on the path
-#                            between the caller and that pane's own session
+# --- caller identity (#335) ---------------------------------------------------
 #
-# A CLI that owns the pane runs in the pane's session and gives a tool call at
-# most one session of its own, so a caller that really belongs to the pane
-# crosses at most ONE foreign session on the way up. Codex's shared app-server
-# daemon adds its own sessions in between, and every session attached to that
-# daemon then descends from the single pane that started it: the path exists
-# but proves nothing about which worker is calling. Terminals are not
-# consulted on the path at all, so a tool shell that was given its own PTY is
-# judged exactly like one without. No process names are consulted either.
+# FORMATION_SELF / FORMATION_PARENT / FORMATION_PARENT_PANE /
+# FORMATION_SESSION_ID / TMUX_PANE are claims: a Codex tool shell attached to
+# the shared app-server daemon inherits all of them from another worker. The
+# functions below decide who the caller is from things the caller's
+# environment does not get to choose.
+
+# The Formation home that the identity gate reads its registry from. It comes
+# from the account database, not from $HOME or $FORMATION_HOME.
+# ponytail: getent only; hosts without it fall back to $HOME.
+mailbox_canonical_home() {
+  local home=""
+  home="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+  printf '%s/.formation\n' "${home:-$HOME}"
+}
+
+# Test fixtures. A test cannot use the canonical home, so it declares
+# FORMATION_TEST_FIXTURE=1 and points FORMATION_HOME (and, if it sets them,
+# the mailbox / registry / request / review paths) somewhere else. The
+# declaration is honoured only when NONE of those paths is inside the
+# canonical home: whatever a command then reads or writes is fixture state.
+# That is why a worker shell gains nothing from it: it can forge mail in a
+# scratch directory nobody reads, never in the live mailbox, registry or
+# request log. (A shell that can write those files directly needs no gate to
+# forge them; this gate covers what the CLI does on a caller's behalf.)
+mailbox_test_fixture_active() {
+  local canonical path
+  [[ "${FORMATION_TEST_FIXTURE:-}" == "1" && -n "${FORMATION_HOME:-}" ]] || return 1
+  canonical="$(realpath -m "$(mailbox_canonical_home)")"
+  for path in "$FORMATION_HOME" "${FORMATION_MAILBOX:-}" "${FORMATION_REGISTRY:-}" \
+              "${FORMATION_REQUEST_DIR:-}" "${FORMATION_REQUEST_LOG:-}" \
+              "${FORMATION_REVIEW_DIR:-}" "${FORMATION_REVIEW_LOG:-}"; do
+    [[ -n "$path" ]] || continue
+    path="$(realpath -m "$path")"
+    [[ "$path" != "$canonical" && "$path" != "$canonical"/* ]] || return 1
+  done
+  return 0
+}
+
+# Prove which pane the caller belongs to. Sets, in the current shell:
+#   MAILBOX_CALLER_PANE      the pane whose own process is the caller's nearest
+#                            pane ancestor, "" when the caller is in no pane
+#   MAILBOX_CALLER_SESSIONS  distinct process sessions on the path between the
+#                            caller and that pane's own session
+# Returns 0 when the answer is established (including "in no pane"), 1 when it
+# could not be established; MAILBOX_CALLER_PROOF_ERROR then says why.
+#
+# What is checked, and from where:
+#   - The process chain comes from the process table. If it cannot be read,
+#     nothing is established.
+#   - Whether the caller is inside tmux does not depend on $TMUX. Every tmux
+#     server with a socket in the user's socket directory (/tmp/tmux-<uid>),
+#     plus the one $TMUX names, is asked for its panes, and a pane counts when
+#     its own process is an ancestor of the caller. So a shell in a pane
+#     cannot become "outside tmux" by unsetting TMUX: the pane is still found,
+#     and a caller that is in a pane while $TMUX is unset or names another
+#     server is not established. Limit: a server on a socket outside that
+#     directory is only seen through $TMUX.
+#   - There is no controlling-terminal fallback and terminals are not looked
+#     at on the path: a pane is proven by ancestry or not at all.
+#   - A caller nested inside panes of two servers is not established.
+#
+# What the session count does and does not show: a CLI that owns the pane runs
+# in the pane's session and gives a tool call at most one session of its own.
+# Codex's shared app-server daemon puts its own sessions in between, and every
+# session attached to it descends from the one pane that started it. Refusing
+# two or more foreign sessions therefore rejects that daemon as it exists in
+# codex-cli 0.167. It is a property of the path, not an attribution proof: a
+# shared server that served several panes while adding only one session would
+# pass. Formation's own Codex workers are started with --no-daemon, which
+# removes the shared server instead of relying on this count.
 mailbox_prove_caller_pane() {
-  local pid="$$" guard=0 next sid line pane pane_pid pane_tty dead index root_sid
-  local caller_tty="" tty_pane="" tty_matches=0
-  local -a chain_pid=() chain_sid=()
-  local -A pane_by_pid=() seen_sid=()
+  local pid="$$" guard=0 next sid line pane pane_pid dead index root_sid socket
+  local tmux_socket="" socket_dir out matched_socket=""
+  local -a chain_pid=() chain_sid=() sockets=()
+  local -A pane_by_pid=() socket_by_pid=() seen_sid=() matched=()
   MAILBOX_CALLER_PANE=""
   MAILBOX_CALLER_SESSIONS=0
+  MAILBOX_CALLER_PROOF_ERROR=""
 
   while [[ "$guard" -lt 64 && "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 ]]; do
-    read -r next sid < <(ps -o ppid=,sid= -p "$pid" 2>/dev/null) || break
-    [[ "$next" =~ ^[0-9]+$ && "$sid" =~ ^[0-9]+$ ]] || break
+    read -r next sid < <(ps -o ppid=,sid= -p "$pid" 2>/dev/null) || true
+    if [[ ! "${next:-}" =~ ^[0-9]+$ || ! "${sid:-}" =~ ^[0-9]+$ ]]; then
+      MAILBOX_CALLER_PROOF_ERROR="the process table could not be read for pid $pid"
+      return 1
+    fi
     chain_pid+=("$pid")
     chain_sid+=("$sid")
     pid="$next"
+    next="" sid=""
     guard=$((guard + 1))
   done
 
-  caller_tty="$(ps -o tty= -p "$$" 2>/dev/null |
-    awk 'NR == 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' || true)"
-  case "$caller_tty" in
-    ""|"?"|"??") caller_tty="" ;;
-    /dev/*) ;;
-    *) caller_tty="/dev/$caller_tty" ;;
-  esac
+  [[ -n "${TMUX:-}" ]] && tmux_socket="$(realpath -m "${TMUX%%,*}")"
+  if mailbox_test_fixture_active; then
+    socket_dir="$FORMATION_HOME/tmux"
+  else
+    socket_dir="/tmp/tmux-$(id -u)"
+  fi
+  [[ -n "$tmux_socket" ]] && sockets+=("$tmux_socket")
+  # Only sockets with a listening server behind them are worth asking; test
+  # runs leave many dead socket files behind. Linux lists bound sockets in
+  # /proc/net/unix; elsewhere every socket file is tried.
+  local listening=""
+  [[ -r /proc/net/unix ]] && listening="$(grep -F " $socket_dir/" /proc/net/unix 2>/dev/null || true)"
+  for socket in "$socket_dir"/*; do
+    [[ -S "$socket" ]] || continue
+    [[ ! -r /proc/net/unix || "$listening" == *" $socket"* ]] || continue
+    socket="$(realpath -m "$socket")"
+    [[ "$socket" == "$tmux_socket" ]] || sockets+=("$socket")
+  done
 
-  # Outside tmux there is no pane to prove and nothing to ask the server:
-  # offline callers (cron, --no-nudge appends) stay tmux-free.
-  [[ -n "${TMUX:-}" ]] || return 0
-
-  while IFS= read -r line; do
-    IFS='|' read -r pane pane_pid pane_tty dead <<<"$line"
-    [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ && "$dead" == "0" ]] || continue
-    pane_by_pid["$pane_pid"]="$pane"
-    if [[ -n "$caller_tty" && "$pane_tty" == "$caller_tty" ]]; then
-      tty_pane="$pane"
-      tty_matches=$((tty_matches + 1))
+  for socket in "${sockets[@]}"; do
+    if [[ "$socket" == "$tmux_socket" ]]; then
+      # The server the rest of the command will talk to must answer.
+      if ! out="$(tmux list-panes -a -F '#{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}' 2>/dev/null)"; then
+        MAILBOX_CALLER_PROOF_ERROR="the tmux server named by \$TMUX did not answer"
+        return 1
+      fi
+    else
+      # A socket file without a server behind it is common and harmless.
+      out="$(tmux -S "$socket" list-panes -a -F '#{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}' 2>/dev/null)" || continue
     fi
-  done < <(tmux list-panes -a -F '#{pane_id}|#{pane_pid}|#{pane_tty}|#{pane_dead}' 2>/dev/null || true)
+    while IFS= read -r line; do
+      IFS='|' read -r pane pane_pid _ dead <<<"$line"
+      [[ "$pane" =~ ^%[0-9]+$ && "$pane_pid" =~ ^[0-9]+$ && "$dead" != "1" ]] || continue
+      [[ -n "${pane_by_pid[$pane_pid]+x}" ]] && continue
+      pane_by_pid["$pane_pid"]="$pane"
+      socket_by_pid["$pane_pid"]="$socket"
+    done <<<"$out"
+  done
 
   for index in "${!chain_pid[@]}"; do
-    [[ -n "${pane_by_pid[${chain_pid[$index]}]+x}" ]] || continue
-    MAILBOX_CALLER_PANE="${pane_by_pid[${chain_pid[$index]}]}"
+    pid="${chain_pid[$index]}"
+    [[ -n "${pane_by_pid[$pid]+x}" ]] || continue
+    matched["${socket_by_pid[$pid]}"]=1
+    [[ -z "$MAILBOX_CALLER_PANE" ]] || continue
+    MAILBOX_CALLER_PANE="${pane_by_pid[$pid]}"
+    matched_socket="${socket_by_pid[$pid]}"
     root_sid="${chain_sid[$index]}"
     for sid in "${chain_sid[@]:0:$index}"; do
       [[ "$sid" != "$root_sid" ]] && seen_sid["$sid"]=1
     done
     MAILBOX_CALLER_SESSIONS="${#seen_sid[@]}"
-    return 0
   done
 
-  # A launch wrapper can break the pid chain while the caller itself still
-  # holds the pane's terminal. Holding it is direct proof; a server-side shell
-  # never has a pane's terminal as its controlling terminal.
-  if [[ "$tty_matches" -eq 1 ]]; then
-    MAILBOX_CALLER_PANE="$tty_pane"
+  if [[ -z "$MAILBOX_CALLER_PANE" ]]; then
+    [[ -z "$tmux_socket" ]] && return 0
+    MAILBOX_CALLER_PROOF_ERROR="\$TMUX is set but no pane of that server is an ancestor of this shell"
+    return 1
+  fi
+  if [[ "${#matched[@]}" -gt 1 ]]; then
+    MAILBOX_CALLER_PANE=""
+    MAILBOX_CALLER_PROOF_ERROR="this shell is nested inside panes of more than one tmux server"
+    return 1
+  fi
+  if [[ "$matched_socket" != "$tmux_socket" ]]; then
+    line="$MAILBOX_CALLER_PANE"
+    MAILBOX_CALLER_PANE=""
+    MAILBOX_CALLER_PROOF_ERROR="this shell runs in pane $line of the tmux server at $matched_socket, but \$TMUX ${tmux_socket:+names another server}${tmux_socket:-is unset}"
+    return 1
   fi
   return 0
 }
 
-# Identity gate for everything that sends, reads or changes state as the
-# caller (#335). FORMATION_SELF / FORMATION_PARENT / FORMATION_PARENT_PANE /
-# FORMATION_SESSION_ID / TMUX_PANE are claims: a Codex tool shell can inherit
-# all of them from another worker. Run this in the main shell before anything
-# consumes them. There is no "probably fine" branch:
+_mailbox_refuse_identity() {
+  echo "formation: REFUSED (exit 8): $1. Caller identity (FORMATION_SELF=${FORMATION_SELF:-<unset>}) cannot be verified; nothing was sent or read." >&2
+  return 8
+}
+
+# Identity gate. Run it in the calling shell before anything consumes the
+# caller's identity; mailbox_require_identity does that for you.
 #
-#   - The caller reaches a pane only through a second foreign session (a
-#     detached server), or is a Codex tool shell with no provable pane at all:
-#     REFUSE. Nothing is sent or read, whatever the registry says.
-#   - The proven pane is a registered worker's pane: self, parent, parent pane
-#     and session id are all taken from that registry row and the environment's
-#     values are discarded together. A contradicting FORMATION_SELF is reported
-#     on stderr and tagged on every row the command sends.
-#   - Any other proven pane (a lead, a plain shell) and callers outside tmux
-#     that are not Codex tool shells keep the explicit FORMATION_SELF override;
-#     that is the documented operator recovery.
+# Outcomes (MAILBOX_CALLER_CONTEXT):
+#   worker    the proven pane is a registered worker's pane. Self, parent,
+#             parent pane and session id are all set from that registry row;
+#             the environment's values are discarded together. A contradicting
+#             FORMATION_SELF is named on stderr and tagged on rows sent.
+#   lead      the pane is proven, its lock and the registry were read
+#             successfully, and the pane has no worker row and no worker
+#             marker. Only here, and for "operator", do FORMATION_SELF and
+#             --from apply. Lead status is a finding, never a default.
+#   operator  the caller is in no tmux pane at all (see
+#             mailbox_prove_caller_pane for why unsetting TMUX does not get a
+#             pane shell here).
+# Everything else is refused with exit 8, for every CLI type: a pane that
+# cannot be established, a detached server on the path, a lock or registry
+# that cannot be read, a worker pane without its row, and a caller in a pane
+# that points FORMATION_HOME / FORMATION_REGISTRY away from the canonical home
+# (the caller does not choose the registry that judges it).
 #
-# Sets MAILBOX_CALLER_WORKER to the verified worker id ("" if not a worker).
-# Args: <registry.jsonl>. Returns 0 to proceed, 8 to refuse.
+# The registry is always the canonical one (or the fixture's, see
+# mailbox_test_fixture_active). No arguments.
 mailbox_guard_identity() {
-  local registry="$1" claimed="${FORMATION_SELF:-}" pane locked row key value
-  export MAILBOX_IDENTITY_GATED=1
+  local claimed="${FORMATION_SELF:-}" pane locked parent_marker registry canonical
+  local rows row key value fixture=0
   MAILBOX_CALLER_WORKER=""
-  mailbox_prove_caller_pane
+  MAILBOX_CALLER_CONTEXT=""
+  _MAILBOX_GATE_PASSED=""
+  unset MAILBOX_IDENTITY_NOTE
+
+  mailbox_test_fixture_active && fixture=1
+  if ! mailbox_prove_caller_pane; then
+    # Test-only: a fixture's driver process that talks to the fixture's tmux
+    # server from outside its panes. Inert without an active fixture.
+    if [[ "$fixture" == "1" && "${FORMATION_TEST_OPERATOR:-}" == "1" ]]; then
+      MAILBOX_CALLER_CONTEXT="operator"
+      _MAILBOX_GATE_PASSED="$$"
+      return 0
+    fi
+    _mailbox_refuse_identity "$MAILBOX_CALLER_PROOF_ERROR"
+    return 8
+  fi
   pane="$MAILBOX_CALLER_PANE"
   if [[ -z "$pane" ]]; then
-    [[ -n "${CODEX_THREAD_ID:-}" ]] || return 0
-    echo "formation: REFUSED (exit 8): this Codex shell cannot be traced to a tmux pane, so its identity (FORMATION_SELF=${claimed:-<unset>}) cannot be verified. Nothing was sent or read. Run the worker in a pane started by 'formation spawn' (Codex with --no-daemon)." >&2
-    return 8
+    MAILBOX_CALLER_CONTEXT="operator"
+    _MAILBOX_GATE_PASSED="$$"
+    return 0
   fi
   if [[ "$MAILBOX_CALLER_SESSIONS" -ge 2 ]]; then
-    echo "formation: REFUSED (exit 8): this shell reaches pane $pane only through a detached server ($MAILBOX_CALLER_SESSIONS sessions in between, e.g. the shared Codex daemon), so it may belong to another worker and FORMATION_SELF=${claimed:-<unset>} cannot be verified. Nothing was sent or read. Respawn the worker ('formation spawn' starts Codex with --no-daemon)." >&2
+    _mailbox_refuse_identity "this shell reaches pane $pane only through a detached server ($MAILBOX_CALLER_SESSIONS process sessions in between, e.g. the shared Codex daemon), so it may belong to another worker. It cannot be repaired in place: respawn the worker ('formation spawn' starts Codex with --no-daemon)"
     return 8
   fi
-  locked="$(mailbox_resolve_locked_pane_identity "$pane" || true)"
-  [[ -n "$locked" && -s "$registry" ]] || return 0
-  row="$(jq -Rc --arg id "$locked" --arg pane "$pane" \
-    'fromjson? | select(.id == $id and .pane_id == $pane)' "$registry" 2>/dev/null |
-    tail -n1)"
-  [[ -n "$row" ]] || return 0
+
+  canonical="$(mailbox_canonical_home)"
+  if [[ "$fixture" == "1" ]]; then
+    registry="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
+  else
+    registry="$canonical/formation/registry.jsonl"
+    for value in "${FORMATION_HOME:-}" "${FORMATION_REGISTRY:-}"; do
+      [[ -n "$value" ]] || continue
+      value="$(realpath -m "$value")"
+      if [[ "$value" != "$(realpath -m "$canonical")" && "$value" != "$(realpath -m "$registry")" ]]; then
+        _mailbox_refuse_identity "FORMATION_HOME / FORMATION_REGISTRY point away from $canonical while this shell runs in pane $pane; a caller does not choose the registry that identifies it"
+        return 8
+      fi
+    done
+  fi
+
+  # One read for the lock and the marker that formation spawn leaves on a
+  # worker's pane.
+  if ! locked="$(tmux display-message -p -t "$pane" \
+         '#{@formation_identity_locked}|#{@formation_parent_id}' 2>/dev/null)"; then
+    _mailbox_refuse_identity "the identity lock of pane $pane could not be read"
+    return 8
+  fi
+  locked="$(printf '%s' "$locked" | tr -d '\000-\037\177')"
+  parent_marker=""
+  [[ "$locked" == *"|"* ]] && parent_marker="${locked#*|}"
+  locked="${locked%%|*}"
+  rows="[]"
+  if [[ -e "$registry" ]] && ! rows="$(jq -sc . "$registry" 2>/dev/null)"; then
+    _mailbox_refuse_identity "the registry $registry could not be read"
+    return 8
+  fi
+
+  row="$(jq -c --arg id "$locked" --arg pane "$pane" \
+    'map(select(.id == $id and .pane_id == $pane)) | last // empty' <<<"$rows")"
+  if [[ -z "$row" ]]; then
+    if [[ -n "$parent_marker" ]] || jq -e --arg id "$locked" --arg pane "$pane" \
+         'any(.[]; .pane_id == $pane or ($id != "" and .id == $id))' <<<"$rows" >/dev/null; then
+      _mailbox_refuse_identity "pane $pane is marked as a worker pane (lock '${locked:-<none>}') but the registry has no matching row for it"
+      return 8
+    fi
+    MAILBOX_CALLER_CONTEXT="lead"
+    _MAILBOX_GATE_PASSED="$$"
+    return 0
+  fi
+
+  [[ "$locked" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+    _mailbox_refuse_identity "pane $pane carries an invalid identity lock"
+    return 8
+  }
   MAILBOX_CALLER_WORKER="$locked"
+  MAILBOX_CALLER_CONTEXT="worker"
   if [[ -n "$claimed" && "$claimed" != "$locked" ]]; then
     echo "formation: warning: environment claims FORMATION_SELF=$claimed but this shell runs in pane $pane, locked to worker $locked; acting as $locked." >&2
     export MAILBOX_IDENTITY_NOTE="env-claimed:$claimed"
@@ -342,7 +457,20 @@ mailbox_guard_identity() {
       unset "${key##*:}"
     fi
   done
+  _MAILBOX_GATE_PASSED="$$"
   return 0
+}
+
+# Every identity-consuming command starts with mailbox_require_identity, in
+# its own shell, before it reads the caller's identity. The pass marker is a
+# plain shell variable holding this process's pid: the gate clears it first
+# and sets it only after it succeeded, it is never exported, and a value
+# inherited through the environment (another pid) is not accepted.
+mailbox_identity_gated() {
+  [[ "${_MAILBOX_GATE_PASSED:-}" == "$$" ]]
+}
+mailbox_require_identity() {
+  mailbox_guard_identity
 }
 
 # Signal a durable row. A healthy relay remains the single signal owner;
