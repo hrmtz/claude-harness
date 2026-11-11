@@ -54,8 +54,10 @@ mailbox_append() {
     seq=$((seq + 1))
     line=$(jq -cn --arg seq "$seq" --arg ts "$ts" --arg from "$from" \
                  --arg to "$to" --arg body "$body" --arg sid "$session_id" \
+                 --arg note "${MAILBOX_IDENTITY_NOTE:-}" \
                  '{seq: ($seq|tonumber), ts: $ts, from: $from, to: $to, body: $body,
-                   session_id: (if $sid == "" then null else $sid end)}')
+                   session_id: (if $sid == "" then null else $sid end)}
+                  + (if $note == "" then {} else {identity_note: $note} end)')
     echo "$line" >> "$MAILBOX_LOG"
     state_tmp="${MAILBOX_SEQ_STATE}.$$"
     printf '%s\n' "$seq" > "$state_tmp"

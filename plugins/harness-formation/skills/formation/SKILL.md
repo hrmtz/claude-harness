@@ -90,8 +90,9 @@ formation register --cli claude|codex|kimi|grok \
 
 This command is self-registration only. It requires `$TMUX_PANE` to match both
 process-ancestry/TTY resolution and a targeted tmux lookup. It fails closed on
-duplicate ids or panes, inherited `FORMATION_SELF` mismatch, and existing pane
-identity conflicts. Never substitute untargeted
+duplicate ids or panes, inherited `FORMATION_SELF` mismatch, existing pane
+identity conflicts, and (exit 8) a shell served by a shared Codex daemon —
+start a hand-launched Codex with `codex --no-daemon` first. Never substitute untargeted
 `tmux display-message -p '#{pane_id}'`; that reports the session's active pane
 and can silently register a sibling agent.
 
@@ -225,6 +226,34 @@ Do not rely on it to spread load; choose by the table above from the start.
   `--inject` is refused after the durable row is appended and signaled.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
+- **The environment is a claim, the pane lock is the proof (#335):** a Codex
+  TUI normally attaches to one per-user app-server daemon, and every tool shell
+  and hook of a later session then inherits the first session's
+  `FORMATION_SELF`, `FORMATION_PARENT`, `FORMATION_SESSION_ID` and `TMUX_PANE`.
+  `formation spawn --cli codex` therefore starts Codex with `--no-daemon` (one
+  in-process server per worker, marked `@formation_codex_isolated=1`), and
+  every command that acts as the caller (`report`, `done`, `ask`, `msg`,
+  `inbox`, `ack`, `resolve`, `review-request`, `verdict`, `spawn`, `reap`,
+  `mailbox-send` without `--from`) passes an identity gate first:
+  - The caller's pane is resolved from process ancestry / controlling TTY. If
+    that pane is a registered worker's pane and the environment names someone
+    else, Formation acts as the pane's worker (identity, parent, parent pane and
+    session id come from the registry row), prints both ids on stderr and tags
+    each row it sends with `identity_note: "env-claimed:<claimed id>"`. Workers
+    never need to prefix `FORMATION_SELF=` by hand, and doing so in a worker
+    pane has no effect.
+  - The explicit `FORMATION_SELF=<id>` override applies only in panes without a
+    worker lock (a lead pane, a plain shell). That keeps the operator recovery
+    below working.
+  - A shell served by a shared Codex daemon cannot be verified at all (its
+    ancestry leads to whichever pane started the daemon). With at most one
+    non-isolated Codex worker alive it proceeds with a stderr warning and rows
+    tagged `identity_note: "unverified:codex-shared-daemon"`; with two or more
+    it is refused with exit 8 and nothing is sent or read. `formation register`
+    always refuses from such a shell. The fix is to respawn the worker, or to
+    start a hand-launched Codex with `codex --no-daemon` before registering.
+  - The Codex SessionStart hook assigns no identity from a daemon-served
+    session; it tells the session to use the identity in its bootstrap message.
 - **Identity is unified and locked (#101):** `FORMATION_SELF` /
   `@formation_identity_locked` is the routing, header, and self-reference source
   of truth. `@formation_id` remains a compatibility alias, but later task/status
@@ -380,6 +409,8 @@ Drop these patterns into the briefing so the worker knows its own protocol:
   tmux/server recovery changes the lead's fallback identity, the local
   operator can recover without weakening the gate:
   `FORMATION_SELF=<original-parent-id> formation ack <request-id> <summary>`.
+  The override is honoured because the lead's pane carries no worker lock; it
+  is ignored (with a warning) inside a registered worker's pane.
   Use `formation status`, whose sticky ASK row remains caller-independent and
   shows both `request=` and the stored `parent=` id. Do not treat `lead` as a
   wildcard.
@@ -656,7 +687,14 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
 - **Parent `formation inbox` empty but worker claims it reported**: check
   `FORMATION_PARENT` is set in the worker's pane env (`tmux show-environment
   -t <pane>`). If missing, the worker sent to `lead` (default) — read that
-  mailbox explicitly: `FORMATION_SELF=lead formation inbox`.
+  mailbox explicitly: `FORMATION_SELF=lead formation inbox` (from the lead's
+  pane or a plain shell, not from a worker pane).
+- **`formation: REFUSED (exit 8)` in a Codex worker**: the worker's shell is
+  served by the shared Codex daemon while two or more non-isolated Codex
+  workers are alive, so its inherited identity may be another worker's. It
+  cannot be repaired in place. `formation reap` it and spawn it again (spawn
+  uses `--no-daemon`). A row tagged `identity_note` in the mailbox log marks
+  mail whose sender was overridden or could not be verified.
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).

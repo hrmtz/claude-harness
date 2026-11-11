@@ -65,13 +65,22 @@ done
 [[ ${#posargs[@]} -eq 2 ]] || { usage; exit 2; }
 TO="${posargs[0]}"; BODY="${posargs[1]}"
 
+REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
+
 # --- resolve sender codename ---
+# An explicit --from is the operator's tmux-free override. Otherwise the
+# inherited environment is only a claim (#335): pass the identity gate and
+# read the pane lock from the ancestry-verified pane, not from $TMUX_PANE.
+if [[ -z "$FROM" ]]; then
+  mailbox_guard_identity "$REGISTRY" || exit $?
+  VERIFIED_PANE="$(mailbox_resolve_caller_pane || true)"
+  [[ -n "$VERIFIED_PANE" ]] && TMUX_PANE="$VERIFIED_PANE"
+fi
 FROM="$(mailbox_resolve_sender "$FROM" unknown)"
 SESSION="${SESSION:-${MAILBOX_SESSION:-unknown}}"
 
 # Prefer registered ids; normal sends can discover a live locked identity.
 # --no-nudge remains tmux-free when the sender is explicit.
-REGISTRY="${FORMATION_REGISTRY:-$FORMATION_HOME/formation/registry.jsonl}"
 if ! mailbox_resolve_recipient "$TO" "$REGISTRY" 1 "$NUDGE"; then
   echo "mailbox-send: unknown recipient '$TO' (use a live locked identity, numeric pane id, or registered worker id; --no-nudge requires pane/id)" >&2
   exit 2
