@@ -544,7 +544,7 @@ Parent (lead) commands:
   formation register --cli claude|codex|kimi|grok [--task <label>] [--goal <text>] <id>
                                           Register the current pre-existing tmux pane.
                                           Requires $TMUX_PANE to agree with process
-                                          ancestry/TTY resolution; refuses duplicate ids,
+                                          ancestry resolution; refuses duplicate ids,
                                           duplicate panes, and identity conflicts.
                                           Manual panes are always nonexclusive and have
                                           relay=DEAD until separately spawned/recovered.
@@ -583,13 +583,16 @@ Worker-side commands (invoked by the worker agent via Bash):
 
 Env:
   FORMATION_HOME   default ~/.formation
-  FORMATION_SELF   caller id claim. Applies only where the identity gate
-                   finds a lead pane or an operator outside tmux ('formation
-                   whoami' shows context=). In a registered worker's pane the
-                   registry row wins and the claim is ignored with a warning.
+  FORMATION_SELF   caller id claim. Applies only in a pane without an
+                   identity lock or outside tmux ('formation whoami' shows
+                   context=lead|operator). In a locked pane the lock (and a
+                   worker's registry row) wins; the claim is overridden with
+                   a warning.
                    Exit 8 = the caller could not be proven (e.g. a shell
                    served by the shared Codex daemon); nothing is sent or read.
-  TMUX_PANE        register requires this pane id to match ancestry/TTY proof
+  TMUX_PANE        register requires this pane id to match the ancestry proof
+                   (exit 2 on mismatch; exit 8 from a daemon-served shell or
+                   with a non-canonical FORMATION_HOME)
 
 Credential safety:
   spawn / msg / report / done / ask all run is_credential_like on their body.
@@ -695,7 +698,7 @@ cmd_register() {
   local pane="$TMUX_PANE" verified_pane reported_pane session_name session_id
   verified_pane="$(mailbox_resolve_caller_pane || true)"
   [[ "$verified_pane" == "$pane" ]] || {
-    echo "formation: refusing registration: TMUX_PANE=$pane disagrees with ancestry/TTY pane=${verified_pane:-unresolved}" >&2
+    echo "formation: refusing registration: TMUX_PANE=$pane disagrees with ancestry-proven pane=${verified_pane:-unresolved}" >&2
     return 2
   }
   # The ancestry match above is also true for a shell served by the shared
@@ -703,6 +706,13 @@ cmd_register() {
   if ! mailbox_prove_caller_pane ||
      [[ "$MAILBOX_CALLER_PANE" != "$pane" || "$MAILBOX_CALLER_SESSIONS" -ge 2 ]]; then
     echo "formation: REFUSED (exit 8): register cannot prove that this shell belongs to pane $pane (it reaches it through a detached server, e.g. the shared Codex daemon). Start Codex with --no-daemon in this pane, then register." >&2
+    return 8
+  fi
+  # Same registry rule as the identity gate, before any pane option changes:
+  # registering into another home would rewrite this pane's options while the
+  # canonical registry keeps its old row (#335).
+  if ! mailbox_identity_registry >/dev/null; then
+    echo "formation: REFUSED (exit 8): register from pane $pane with FORMATION_HOME / FORMATION_REGISTRY pointing away from the canonical Formation home (a stale variable?). Nothing was changed." >&2
     return 8
   fi
   reported_pane="$(tmux display-message -p -t "$pane" '#{pane_id}' 2>/dev/null || true)"

@@ -4,10 +4,10 @@
 # shared app-server daemon. Formation must act as the worker whose pane the
 # caller provably runs in, and must refuse every caller it cannot prove.
 #
-# Fixture mode (FORMATION_TEST_FIXTURE=1, see mailbox_test_fixture_active)
-# points the gate at this test's registry and at tmux sockets under
-# $FORMATION_HOME/tmux. FORMATION_TEST_OPERATOR is deliberately NOT set
-# globally here: commands run inside fixture panes get the strict rules.
+# Fixture mode (FORMATION_TEST_FIXTURE=1, see mailbox_identity_registry)
+# points the gate at this test's registry. FORMATION_TEST_OPERATOR is
+# deliberately NOT set globally here: commands run inside fixture panes get
+# the production rules.
 set -euo pipefail
 trap 'echo "FAIL: test_codex_identity_leak line $LINENO" >&2' ERR
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -51,10 +51,11 @@ worker_pane() { # pane id parent  -> the options formation spawn sets
 }
 pane_b="$(new_pane)"
 pane_lead="$(new_pane)"
+pane_plain="$(new_pane)"   # a plain shell pane: no identity lock at all
 worker_pane "$pane_a" worker-a lead-x
 worker_pane "$pane_b" worker-b lead-y
 # A lead pane carries a lock from its own session-start hook but is not a
-# worker: no registry row, no parent marker.
+# worker: no registry row, no spawn marker. It acts as its lock only.
 tmux set-option -p -t "$pane_lead" @formation_identity_locked lead-now
 
 row() { # id pane parent sid goal
@@ -151,6 +152,28 @@ refused_in "$pane_b" lib_self "$(poison)" \
   "export _MAILBOX_GATE_PASSED=1 MAILBOX_IDENTITY_GATED=1" \
   "bash -c \"source '$CLI'; self_id\""
 [[ ! -s "$FIXTURE/lib_self.out" ]]
+# ...not even when it carries this very pid across an exec (r3 #5).
+refused_in "$pane_b" lib_exec "$(poison)" \
+  "export _MAILBOX_GATE_PASSED=\$\$ _MAILBOX_PROOF_PID=\$\$ MAILBOX_CALLER_PROOF_ERROR=" \
+  "exec bash -c \"source '$CLI'; self_id\""
+[[ ! -s "$FIXTURE/lib_exec.out" ]]
+
+# Cost: one command proves its pane once (one pane listing, one lock read).
+mkdir -p "$FIXTURE/shim"
+cat >"$FIXTURE/shim/tmux" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >>"$FIXTURE/tmux-calls.log"
+exec "$(command -v tmux)" "\$@"
+SH
+chmod +x "$FIXTURE/shim/tmux"
+for verb in "report 'counted report'" "inbox --count" "whoami"; do
+  : >"$FIXTURE/tmux-calls.log"
+  echo "PATH='$FIXTURE/shim':\"\$PATH\" bash '$CLI' $verb" >"$FIXTURE/count.sh"
+  run_in_pane "$pane_b" count
+  [[ "$(grep -c '^list-panes -a -F #{pane_id}|#{pane_pid}' "$FIXTURE/tmux-calls.log")" == 1 ]] ||
+    { echo "FAIL: '$verb' proved its pane more than once" >&2; cat "$FIXTURE/tmux-calls.log" >&2; exit 1; }
+  [[ "$(grep -c 'formation_parent_id' "$FIXTURE/tmux-calls.log")" == 1 ]]
+done
 
 # --- 2. inbox: read the proven worker's mail, leave the claimed one alone -----
 driver env FORMATION_SELF=lead-x bash "$CLI" msg worker-a 'mail for a' >/dev/null 2>&1 || true
@@ -172,62 +195,92 @@ jq -se --arg id "$request_id" \
   "$FORMATION_REQUEST_LOG" >/dev/null
 refute jq -e 'select(.worker_id == "worker-a")' "$FORMATION_REQUEST_LOG"
 
-# --- 4. lead status is a positive finding (rule A) ----------------------------
-# Operator recovery from SKILL.md still works from a proven lead pane: lock
-# read, registry read, no worker row, no worker marker.
+# --- 4. who may act as someone else -------------------------------------------
+# Operator recovery from SKILL.md works from a pane without an identity lock
+# (and outside tmux, section 5): registry read, expected shape, no row, no lock.
 cat >"$FIXTURE/recover.sh" <<SH
 FORMATION_SELF=lead-y bash '$CLI' ack '$request_id' 'recovered'
 bash '$SEND' '$pane_a' 'operator send' --from lead-x --no-nudge
-bash '$CLI' whoami
+FORMATION_SELF=lead-y bash '$CLI' whoami
 SH
-run_in_pane "$pane_lead" recover
+run_in_pane "$pane_plain" recover
 grep -Fq "request=$request_id" "$FIXTURE/recover.out"
 refute grep -Fq 'REFUSED' "$FIXTURE/recover.err"
-grep -Fxq "lead-now pane=$pane_lead context=lead" "$FIXTURE/recover.out"
+grep -Fxq "lead-y pane=$pane_plain context=lead" "$FIXTURE/recover.out"
 last_row | jq -e '.from == "lead-x" and .body == "operator send"' >/dev/null
 
-# --from is not a way around the gate from a worker's pane.
+# A locked pane without a registry row (a hook-named lead, an ordinary named
+# CLI pane) acts as its lock and nothing else: the claim is overridden with a
+# message that names the recovery, and --from another id is refused.
+cat >"$FIXTURE/locked.sh" <<SH
+FORMATION_SELF=lead-y bash '$CLI' whoami
+FORMATION_SELF=lead-y bash '$CLI' report 'from the locked lead pane'
+SH
+run_in_pane "$pane_lead" locked
+grep -Fxq "lead-now pane=$pane_lead context=pane" "$FIXTURE/locked.out"
+grep -Fq 'plain shell pane' "$FIXTURE/locked.err"
+last_row | jq -e '.from == "lead-now" and .identity_note == "env-claimed:lead-y"' >/dev/null
 forge="bash '$SEND' '$pane_lead' 'forged' --from worker-a --no-nudge"
+refused_in "$pane_lead" forge_locked "$forge"
+grep -Fq 'plain shell pane' "$FIXTURE/forge_locked.err"
 refused_in "$pane_b" forge "$forge"
 echo "bash '$SEND' '$pane_lead' 'own name' --from worker-b --no-nudge" >"$FIXTURE/own.sh"
 run_in_pane "$pane_b" own
 [[ "$(rc_of own)" == 0 ]]
 
-# Review r2 #1: a worker pane must not fall through to lead status because its
-# lock or its registry row cannot be found. Each case used to append as
-# worker-a from worker-b's pane.
+# Review r3 #3: losing the registry row, or the registry, must never turn a
+# worker into something that may act as someone else.
+cp "$REGISTRY" "$FIXTURE/registry.good"
+# - spawned worker (spawn marker on the pane): row gone, lock gone or changed
 tmux set-option -p -u -t "$pane_b" @formation_identity_locked
 refused_in "$pane_b" lock_gone "$forge"
 tmux set-option -p -t "$pane_b" @formation_identity_locked somebody-else
 refused_in "$pane_b" lock_changed "$forge"
 tmux set-option -p -t "$pane_b" @formation_identity_locked worker-b
-cp "$REGISTRY" "$FIXTURE/registry.good"
 grep -v '"worker-b"' "$FIXTURE/registry.good" >"$REGISTRY"
 refused_in "$pane_b" row_gone "$forge"
-: >"$REGISTRY"
-refused_in "$pane_b" registry_empty "$forge"
-{ cat "$FIXTURE/registry.good"; printf '%s\n' '{"id": "half-written", "pane_id": '; } >"$REGISTRY"
-refused_in "$pane_b" registry_corrupt "$(poison)" "bash '$CLI' report 'corrupt registry'"
-refused_in "$pane_lead" registry_corrupt_lead "FORMATION_SELF=lead-x bash '$CLI' report 'corrupt registry'"
-# A pane that the registry assigns to a worker is not a lead pane, whatever
-# its lock says and even without the spawn marker.
-{ cat "$FIXTURE/registry.good"; row hand-registered "$pane_lead" lead-x sid-h goal-h; } >"$REGISTRY"
-refused_in "$pane_lead" row_other_id "FORMATION_SELF=lead-x bash '$CLI' report 'not a lead'"
+grep -Fq 'formation register' "$FIXTURE/row_gone.err"
+refused_in "$pane_b" row_gone_report "bash '$CLI' report 'worker without its row'"
+# - hand-registered worker (formation register: lock, no spawn marker): with
+#   its row gone it is a locked pane, so the forged send is still refused...
+tmux set-option -p -u -t "$pane_b" @formation_parent_id
+refused_in "$pane_b" row_gone_registered "$forge"
+tmux set-option -p -t "$pane_b" @formation_parent_id lead-y
+# - ...and a registry that is missing, not JSON, or JSON of the wrong shape
+#   is a refusal for everyone in a pane, with the way out in the message.
+for broken in missing corrupt scalar wrong_shape; do
+  case "$broken" in
+    missing) rm "$REGISTRY" ;;
+    corrupt) { cat "$FIXTURE/registry.good"; printf '%s\n' '{"id": "half-written", "pane_id": '; } >"$REGISTRY" ;;
+    scalar) printf '42\n' >"$REGISTRY" ;;
+    wrong_shape) printf '%s\n' '{"id": 7, "pane_id": "%1"}' >"$REGISTRY" ;;
+  esac
+  refused_in "$pane_plain" "reg_${broken}_plain" "FORMATION_SELF=lead-x bash '$SEND' '$pane_a' 'x' --no-nudge"
+  refused_in "$pane_lead" "reg_${broken}_lead" "bash '$SEND' '$pane_a' 'x' --no-nudge"
+  grep -Fq 'formation register' "$FIXTURE/reg_${broken}_lead.err"
+done
+# - a pane the registry assigns to a worker, or a lock that is registered to
+#   another pane, is not a free pane either.
+{ cat "$FIXTURE/registry.good"; row hand-registered "$pane_plain" lead-x sid-h goal-h; } >"$REGISTRY"
+refused_in "$pane_plain" row_other_id "FORMATION_SELF=lead-x bash '$CLI' report 'not a lead'"
 cp "$FIXTURE/registry.good" "$REGISTRY"
-# Rule B: outside fixture mode the registry is the canonical one, and a caller
-# in a pane that points FORMATION_HOME / FORMATION_REGISTRY elsewhere is
-# refused. (This is the reviewer's FORMATION_REGISTRY=/dev/null reproduction.)
+tmux set-option -p -t "$pane_lead" @formation_identity_locked worker-a
+refused_in "$pane_lead" lock_registered_elsewhere "bash '$CLI' report 'second worker-a'"
+tmux set-option -p -t "$pane_lead" @formation_identity_locked lead-now
+
+# The registry that judges a caller in a pane is the canonical one. A stale
+# FORMATION_HOME / FORMATION_REGISTRY is refused (the reviewer's
+# FORMATION_REGISTRY=/dev/null reproduction), also by register, which must
+# not touch pane options first (r3 #4).
 refused_in "$pane_b" evidence "unset FORMATION_TEST_FIXTURE" \
   "FORMATION_REGISTRY=/dev/null $forge"
-grep -Fq 'does not choose the registry' "$FIXTURE/evidence.err"
-
-# Fixture mode is void as soon as one state path lies inside the canonical
-# home (nothing is written by whoami; the path is never created).
-canonical_home="$(getent passwd "$(id -u)" | cut -d: -f6)/.formation"
-refused_in "$pane_lead" fixture_void \
-  "FORMATION_REQUEST_DIR='$canonical_home/identity-leak-test-probe' bash '$CLI' whoami"
-[[ ! -e "$canonical_home/identity-leak-test-probe" ]]
-# The test-driver declaration is inert without an active fixture.
+grep -Fq 'canonical Formation home' "$FIXTURE/evidence.err"
+refused_in "$pane_b" register_other_home "unset FORMATION_TEST_FIXTURE" \
+  "export TMUX_PANE=$pane_b FORMATION_HOME='$FIXTURE/other-home'" \
+  "bash '$CLI' register --cli codex worker-b"
+[[ "$(tmux show-options -pqv -t "$pane_b" @formation_parent_id)" == lead-y ]]
+[[ ! -s "$FIXTURE/other-home/formation/registry.jsonl" ]]
+# The test-driver declaration is inert without a fixture.
 if env -u FORMATION_TEST_FIXTURE FORMATION_TEST_OPERATOR=1 FORMATION_SELF=lead-x \
      bash "$SEND" "$pane_a" 'driver without fixture' --no-nudge >/dev/null 2>&1; then
   echo "FAIL: FORMATION_TEST_OPERATOR worked without a fixture" >&2; exit 1
@@ -235,7 +288,7 @@ else
   [[ "$?" == 8 ]]
 fi
 
-# --- 5. no pane proof, no service - for every CLI type (rule A, r2 #2) --------
+# --- 5. $TMUX set and no pane proof: no service, for every CLI type -----------
 # None of these set CODEX_THREAD_ID: refusal must not depend on a marker the
 # caller's environment supplies.
 report="bash '$CLI' report 'unproven'"
@@ -244,13 +297,6 @@ mkdir -p "$FIXTURE/nops"
 printf '%s\n' '#!/bin/bash' 'exit 1' >"$FIXTURE/nops/ps"
 chmod +x "$FIXTURE/nops/ps"
 refused_in "$pane_b" ps_down "$(poison)" "PATH='$FIXTURE/nops':\$PATH $report"
-# ...also with TMUX unset: an unreadable process table cannot show that the
-# caller is outside tmux, so it is not an operator.
-refused_in "$pane_b" ps_down_no_tmux "$(poison)" "unset TMUX" "PATH='$FIXTURE/nops':\$PATH $report"
-# Rule C: unsetting TMUX inside a pane is not "outside tmux". The pane is
-# found through the socket directory and the mismatch is refused.
-refused_in "$pane_b" tmux_unset "$(poison)" "env -u TMUX $report"
-grep -Fq 'is unset' "$FIXTURE/tmux_unset.err"
 # Rule D: holding the pane's terminal is not proof. An orphaned child keeps
 # the controlling terminal but has no pane process among its ancestors.
 cat >"$FIXTURE/orphan.sh" <<SH
@@ -382,5 +428,22 @@ refute grep -Fq 'worker-a' "$FIXTURE/hook.out"
 { echo "$a_env"; detached "script -qec \"printf '{}' | bash '$HOOK'\" /dev/null"; } >"$FIXTURE/hook_pty.sh"
 run_in_pane "$pane_a" hook_pty
 grep -Fq 'cannot be verified' "$FIXTURE/hook_pty.out"
+
+# --- 10. a refused probe is throttled like any other --------------------------
+# The unread advisor records the probe before running it; otherwise a worker
+# whose identity is refused re-runs the probe on every tool boundary.
+mkdir -p "$FIXTURE/fakeform" "$FIXTURE/run"
+cat >"$FIXTURE/fakeform/formation" <<SH
+#!/bin/bash
+echo probe >>"$FIXTURE/probes.log"
+exit 8
+SH
+chmod +x "$FIXTURE/fakeform/formation"
+for _ in 1 2; do
+  printf '%s' '{"hook_event_name":"PostToolUse","session_id":"identity-leak-test"}' |
+    XDG_RUNTIME_DIR="$FIXTURE/run" PATH="$FIXTURE/fakeform:$PATH" \
+      bash "$HERE/../hooks/mailbox_unread_advisor.sh" >/dev/null 2>&1 || true
+done
+[[ "$(wc -l <"$FIXTURE/probes.log")" == 1 ]]
 
 echo "PASS: test_codex_identity_leak"

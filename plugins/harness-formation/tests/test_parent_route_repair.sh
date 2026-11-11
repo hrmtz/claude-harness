@@ -1,5 +1,5 @@
 #!/bin/bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1  # fixture registry only; see mailbox_identity_registry (#335). No test-driver exception here.
 # The pane proof asks the tmux server that $TMUX names; here that is this file's tmux stub.
 export TMUX="${TMUX:-/nonexistent/formation-test-stub-tmux,1,0}"
 # Regression tests for locked caller-pane parent fallback and legacy repair.
@@ -170,6 +170,13 @@ tmux() {
 
 # shellcheck source=/dev/null
 source "$BIN"
+
+# This file changes the simulated caller between calls inside one process.
+# Production proves its pane once per process, so drop the cached proof before
+# every gate run and every direct pane lookup here.
+eval "_cached_$(declare -f mailbox_resolve_caller_pane)"
+mailbox_resolve_caller_pane() { _MAILBOX_PROOF_PID=""; _cached_mailbox_resolve_caller_pane; }
+mailbox_require_identity() { _MAILBOX_PROOF_PID=""; mailbox_guard_identity; }
 codex_cache_preflight() {
   CODEX_LAUNCH_BIN=/bin/true
 }
@@ -245,7 +252,8 @@ if mailbox_resolve_caller_pane >/dev/null; then
   exit 1
 fi
 PS_FAIL_TTY=0
-CALLER_TTY=""   # the next section runs as an unproven, headless caller
+SAVED_TMUX="$TMUX"
+unset TMUX   # the next section runs outside tmux: the operator route
 
 # Explicit FORMATION_SELF remains the intentional pull-only/headless route.
 FORMATION_SELF="cron-lead"
@@ -258,6 +266,7 @@ pull_status="$(cmd_status)"
 grep -E '^pull-only-worker .*parent=UNROUTABLE' <<<"$pull_status" >/dev/null
 registry_remove pull-only-worker
 unset FORMATION_SELF
+export TMUX="$SAVED_TMUX"
 
 CALLER_TTY="pts/216"
 PANE_ROWS="%42|$$|/dev/pts/216"
@@ -416,11 +425,12 @@ capture_repair conflict-worker
 registry_add invalid-lock-worker %97 formation-invalid "$TMP/briefing.md"
 TMUX_LOCKED_ID="invalid identity"
 capture_repair invalid-lock-worker
-[[ "$REPAIR_RC" -eq 2 ]]
+[[ "$REPAIR_RC" -eq 8 ]]   # the identity gate refuses an invalid lock first
 TMUX_LOCKED_ID="lead-locked"
+# A caller whose pane cannot be proven is refused by the identity gate.
 CALLER_TTY="?"
 capture_repair invalid-lock-worker
-[[ "$REPAIR_RC" -eq 2 ]]
+[[ "$REPAIR_RC" -eq 8 ]]
 CALLER_TTY="pts/216"
 registry_add duplicate-worker %95 formation-duplicate-a "$TMP/briefing.md"
 registry_add duplicate-worker %96 formation-duplicate-b "$TMP/briefing.md"

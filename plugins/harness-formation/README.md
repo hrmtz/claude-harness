@@ -122,10 +122,12 @@ formation register --cli claude --task coordination lead
 ```
 
 Registration requires the pane-local `$TMUX_PANE` to agree with independent
-process-ancestry/TTY resolution and with a targeted tmux lookup. It refuses a
+process-ancestry resolution and with a targeted tmux lookup. It refuses a
 duplicate id, duplicate pane, inherited `FORMATION_SELF` mismatch, existing
-pane identity conflict, or a shell served by a shared Codex daemon (start Codex
-with `codex --no-daemon`; `formation spawn` does this for its workers, #335). A pre-existing pane is always registered with
+pane identity conflict (exit 2), and a shell served by a shared Codex daemon
+or a `FORMATION_HOME` / `FORMATION_REGISTRY` that points away from the
+canonical home (exit 8; start Codex with `codex --no-daemon`, which
+`formation spawn` does for its workers, #335). A pre-existing pane is always registered with
 `exclusive_input=false`, and the live `@formation_exclusive_input` option is
 removed. Its relay state is explicitly `DEAD` with reason
 `manual-registration-no-relay`; mailbox senders therefore use the existing
@@ -225,9 +227,11 @@ the parent's pane route separately from its semantic identity: worker
 `report`/`done`/`ask` and parent `ack`/`resolve` all append first, then use the
 same zero-keystroke relay-or-direct signal policy. A dead relay therefore does
 not silently remove the badge fallback, and the body never enters a prompt.
-The parent pane is discovered by process ancestry, with a unique controlling
-TTY ↔ `pane_tty` match as the safe fallback for wrapper processes that break
-the root-PID chain. `TMUX_PANE` and mutable window names are never proof;
+The parent pane is discovered by process ancestry only. The controlling-TTY
+fallback that #216 added for wrapper processes that break the root-PID chain
+was removed in #335: such a caller is refused, so keep the process chain
+intact or run the command outside tmux. `TMUX_PANE` and mutable window names
+are never proof;
 stale/inherited sibling ids are ignored. Spawn fails closed when it can prove
 neither a real parent pane with a valid locked/legacy identity nor an explicit
 `FORMATION_SELF`, because replies would otherwise be unaddressable.

@@ -61,6 +61,9 @@ if [[ -z "$formation_bin" && -n "${HOME:-}" &&
 fi
 [[ -n "$formation_bin" ]] || exit 0
 
+# Record the probe before running it: a probe that is refused or times out
+# must not be retried on every tool boundary (#335).
+write_state "$last_seq" "$last_epoch" "$now" || true
 count_line="$(timeout 3 "$formation_bin" inbox --count 2>/dev/null)" || exit 0
 read -r count max_seq oldest_ts extra <<<"$count_line"
 [[ -z "${extra:-}" &&

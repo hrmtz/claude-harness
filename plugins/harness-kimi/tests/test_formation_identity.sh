@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 # Regression coverage for gh #101/#104: Formation routing, self-reference, and
 # tmux display identity must share FORMATION_SELF; nested non-interactive Codex
 # must not overwrite its parent; standalone Kimi remains random.

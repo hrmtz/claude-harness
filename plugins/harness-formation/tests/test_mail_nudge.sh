@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_test_fixture_active (#335)
+export FORMATION_TEST_FIXTURE=1 FORMATION_TEST_OPERATOR=1  # fixture state only; see mailbox_identity_registry (#335)
 set -euo pipefail
 trap 'echo "FAIL: test_mail_nudge line $LINENO" >&2' ERR
 HERE="$(cd "$(dirname "$0")" && pwd)"
