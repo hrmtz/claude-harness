@@ -347,6 +347,8 @@ Do not rely on it to spread load; choose by the table above from the start.
 
 ```bash
 formation status          # all workers: task, age, last mailbox report (or last pane line)
+formation registry-check  # read-only: each registry row vs live panes (ok | stale_dead_pane | stale_pane_reused)
+formation registry-prune --stale [--apply]   # remove only stale rows; dry run without --apply
 formation inbox           # reports addressed to you
 formation inbox --history # last 50 addressed rows; does not move the unread cursor
 formation msg <id> "<x>"  # send instruction to worker
@@ -752,6 +754,17 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   -t <pane>`). If missing, the worker sent to `lead` (default) — read that
   mailbox explicitly: `FORMATION_SELF=lead formation inbox` (from the lead's
   pane or a plain shell, not from a worker pane).
+- **Stale registry rows after a tmux restart**: pane ids start again at `%0`
+  when the tmux server restarts, so a row from the old server can name a pane
+  that now belongs to someone else. The identity gate then refuses that pane
+  ("worker pane but no matching row"). Do NOT use `formation reap` for this:
+  it closes the pane the row names, which is now an unrelated live pane.
+  `formation registry-check` lists every row as `ok`, `stale_dead_pane` or
+  `stale_pane_reused` without changing anything; `formation registry-prune
+  --stale` shows which rows it would remove and `--apply` removes exactly
+  those after copying the registry to `registry.jsonl.bak-<time>`. It never
+  touches a pane and never removes a row whose pane carries the row's id.
+  Both commands work from a refused pane.
 - **`formation: REFUSED (exit 8)`**: the identity gate could not prove whose
   shell this is; the message names the reason. For a Codex worker served by
   the shared daemon the inherited identity may be another worker's and it

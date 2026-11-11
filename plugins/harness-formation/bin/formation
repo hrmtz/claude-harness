@@ -574,6 +574,11 @@ Parent (lead) commands:
                                           keystrokes. --inject sends only a short
                                           pull nudge and requires --exclusive-input.
   formation status                        List active workers: task, age, last mailbox report
+  formation registry-check                Read-only: classify each registry row against live panes
+                                          (ok | stale_dead_pane | stale_pane_reused)
+  formation registry-prune --stale [--apply]
+                                          Remove only stale rows (dry run without --apply; a
+                                          backup is written first). Never closes a pane.
                                           (falls back to last pane line if no report yet)
   formation repair-parent <worker_id>     Repair one legacy null parent route from the
                                           verified current caller pane's locked identity
@@ -1652,6 +1657,106 @@ ensure_request_mailbox_message() {
   ) 203>"$notify_lock"
 }
 
+# Classify every registry line against the live tmux server. One output line
+# per registry line: <class>|<id>|<pane>|<lock on that pane>
+#   ok                 the pane exists and its lock is the row's id
+#   stale_dead_pane    no such live pane
+#   stale_pane_reused  the pane exists but is locked to something else (or to
+#                      nothing): after a tmux restart pane ids start again at
+#                      %0, so an old row can sit on a pane that now belongs to
+#                      someone else (#335 go-live finding)
+#   unparsable         not a JSON object with an id and a pane_id
+# Fails without output when tmux cannot list panes: nothing may be called
+# stale on a failed lookup.
+registry_classify() {
+  local panes line id pane lock dead found
+  panes="$(tmux list-panes -a -F '#{pane_id}|#{pane_dead}|#{@formation_identity_locked}' 2>/dev/null)"
+  [[ -n "$panes" ]] || return 1   # failed or empty: classify nothing
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    if ! id="$(jq -er 'select(type == "object") | .id | strings' <<<"$line" 2>/dev/null)" ||
+       ! pane="$(jq -er '.pane_id | strings' <<<"$line" 2>/dev/null)"; then
+      printf 'unparsable|||\n'
+      continue
+    fi
+    found="" lock=""
+    while IFS='|' read -r found_pane dead found_lock; do
+      [[ "$found_pane" == "$pane" && "$dead" != "1" ]] || continue
+      found=1
+      lock="$found_lock"
+    done <<<"$panes"
+    if [[ -z "$found" ]]; then
+      printf 'stale_dead_pane|%s|%s|\n' "$id" "$pane"
+    elif [[ "$lock" == "$id" ]]; then
+      printf 'ok|%s|%s|%s\n' "$id" "$pane" "$lock"
+    else
+      printf 'stale_pane_reused|%s|%s|%s\n' "$id" "$pane" "$lock"
+    fi
+  done <"$REGISTRY"
+}
+
+# Read-only. Not identity-gated: it is the tool for a lead whose own pane is
+# refused because an old row sits on it.
+cmd_registry_check() {
+  local out
+  out="$(registry_classify)" || {
+    echo "formation: registry-check needs the tmux server that holds the workers (tmux list-panes failed or returned nothing)." >&2
+    return 4
+  }
+  if [[ -z "$out" ]]; then echo "(registry is empty)"; return 0; fi
+  awk -F'|' '{ printf "%-18s %-24s %-6s lock=%s\n", $1, ($2 == "" ? "-" : $2), ($3 == "" ? "-" : $3), ($4 == "" ? "-" : $4) }' <<<"$out"
+}
+
+# Remove ONLY rows classified stale. Never touches a pane (formation reap
+# would close the pane a row names, which for a reused pane id is someone
+# else's pane) and never removes a row whose pane carries the row's id.
+# Dry run unless --apply; --apply copies the registry next to itself first.
+cmd_registry_prune() {
+  local apply=0 stale=0 arg classes backup tmp removed=0 kept=0 index=0 line class
+  for arg in "$@"; do
+    case "$arg" in
+      --stale) stale=1 ;;
+      --apply) apply=1 ;;
+      *) echo "usage: formation registry-prune --stale [--apply]" >&2; return 2 ;;
+    esac
+  done
+  [[ "$stale" == "1" ]] || { echo "usage: formation registry-prune --stale [--apply]" >&2; return 2; }
+  (
+    flock -x 202
+    classes="$(registry_classify)" || {
+      echo "formation: registry-prune needs the tmux server that holds the workers (tmux list-panes failed or returned nothing). Nothing was changed." >&2
+      exit 4
+    }
+    tmp="$(mktemp "$FORMATION_DIR/.registry.prune.XXXXXX")"
+    local -a class_list=()
+    [[ -z "$classes" ]] || mapfile -t class_list <<<"$classes"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -n "$line" ]] || continue
+      class="${class_list[$index]%%|*}"
+      index=$((index + 1))
+      case "$class" in
+        stale_dead_pane|stale_pane_reused)
+          removed=$((removed + 1))
+          echo "remove ${class_list[$((index - 1))]}"
+          ;;
+        *)
+          kept=$((kept + 1))
+          printf '%s\n' "$line" >>"$tmp"
+          ;;
+      esac
+    done <"$REGISTRY"
+    if [[ "$apply" != "1" ]]; then
+      rm -f "$tmp"
+      echo "dry run: $removed stale row(s) would be removed, $kept kept. Re-run with --apply to write."
+      exit 0
+    fi
+    backup="$REGISTRY.bak-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    cp -p "$REGISTRY" "$backup"
+    mv "$tmp" "$REGISTRY"
+    echo "removed $removed stale row(s), kept $kept. Backup: $backup"
+  ) 202>"$REGISTRY_LOCK"
+}
+
 cmd_status() {
   if [[ ! -s "$REGISTRY" ]]; then
     echo "(no workers)"; return
@@ -2165,6 +2270,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     register) cmd_register "$@" ;;
     msg)    cmd_msg    "$@" ;;
     status) cmd_status "$@" ;;
+    registry-check) cmd_registry_check "$@" ;;
+    registry-prune) cmd_registry_prune "$@" ;;
     repair-parent) cmd_repair_parent "$@" ;;
     inbox)  cmd_inbox  "$@" ;;
     remote-check) cmd_remote_check "$@" ;;
