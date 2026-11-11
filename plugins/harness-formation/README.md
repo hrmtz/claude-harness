@@ -278,7 +278,7 @@ ln -sfn ~/.claude/plugins/harness-formation/bin/formation ~/.local/bin/formation
 ln -sfn ~/.claude/plugins/harness-formation/skills/formation ~/.claude/skills/formation
 ```
 
-New installs use `~/.formation/` runtime state (mailbox/log.jsonl, formation/registry.jsonl). Existing legacy runtime dirs can keep working by setting `FORMATION_HOME` to the old state path.
+New installs use `~/.formation/` runtime state (mailbox/log.jsonl, formation/registry.jsonl). `FORMATION_HOME` can point elsewhere only for callers outside tmux (cron, an operator's terminal); from inside a tmux pane the identity gate reads the registry under `~/.formation/` and refuses a `FORMATION_HOME` that points away from it (#335), so move a legacy runtime dir to `~/.formation/` instead.
 
 ## Why bundled (vs companion)
 

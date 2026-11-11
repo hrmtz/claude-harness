@@ -108,6 +108,27 @@ registry_add() {
   ) 202>"$REGISTRY_LOCK"
 }
 
+# Append a row only if neither its id nor its pane is registered yet, checked
+# under the registry lock. spawn uses this: the existence check at the top of
+# cmd_spawn and this append are a minute apart, so two concurrent spawns with
+# the same name both pass that check (#335).
+registry_add_unique() {
+  local row
+  if ! row="$(registry_row_json "$@")" || [[ -z "$row" ]]; then
+    echo "formation: registry row generation failed" >&2
+    return 2
+  fi
+  (
+    flock -x 202
+    if jq -c --arg id "$1" --arg pane "$2" 'select(.id == $id or .pane_id == $pane)' \
+         "$REGISTRY" 2>/dev/null | grep -q .; then
+      echo "formation: REFUSED: id '$1' or pane $2 was registered while this spawn was starting; no row added." >&2
+      exit 2
+    fi
+    printf '%s\n' "$row" >> "$REGISTRY"
+  ) 202>"$REGISTRY_LOCK"
+}
+
 registry_get() {
   local worker_id="$1"
   jq -c --arg id "$worker_id" 'select(.id == $id)' "$REGISTRY" | tail -n1
@@ -696,7 +717,8 @@ cmd_register() {
   }
 
   local pane="$TMUX_PANE" verified_pane reported_pane session_name session_id
-  verified_pane="$(mailbox_resolve_caller_pane || true)"
+  mailbox_prove_caller_pane || true   # in this shell: the later checks reuse it
+  verified_pane="$MAILBOX_CALLER_PANE"
   [[ "$verified_pane" == "$pane" ]] || {
     echo "formation: refusing registration: TMUX_PANE=$pane disagrees with ancestry-proven pane=${verified_pane:-unresolved}" >&2
     return 2
@@ -1359,7 +1381,13 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
     tmux_send_submit "$pane_id" "$seed"
   fi
 
-  registry_add "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli" "$task_label" "$goal" "$exclusive_input" "$parent_id" "$parent_pane"
+  if ! registry_add_unique "$name" "$pane_id" "$session_name" "$briefing" "$spawn_id" "$cli" "$task_label" "$goal" "$exclusive_input" "$parent_id" "$parent_pane"; then
+    # The other spawn owns the name; this pane would be a second worker with
+    # the same identity, which the identity gate refuses anyway.
+    tmux kill-pane -t "$pane_id" 2>/dev/null || true
+    echo "formation: spawn of '$name' lost a race with another spawn of the same name; its pane $pane_id was closed." >&2
+    return 2
+  fi
 
   # Auto-start mailbox relay daemon: inotifywait on mailbox and signal messages
   # addressed to this worker without touching its TUI prompt. The worker pulls

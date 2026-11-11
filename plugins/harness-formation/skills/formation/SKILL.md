@@ -261,9 +261,11 @@ Do not rely on it to spread load; choose by the table above from the start.
     **The `FORMATION_SELF` recovery path works only from a pane without an
     identity lock or outside tmux.**
   - `pane` and `lead` are findings, never what is left over when a lookup
-    fails. They need the registry to exist, to parse and to be a list of
-    worker rows, no row for this pane, the lock not registered to another
-    pane, and no spawn marker on the pane.
+    fails. They need the registry to parse and to be a list of worker rows, no
+    row for this pane and no spawn marker on the pane. In every context one id
+    belongs to one pane: a lock that is registered to another pane as well is
+    refused (`formation spawn` also refuses to add a second row for a name or
+    pane that was registered while it was starting, and closes its pane).
   - Refused with exit 8, nothing sent or read, for every CLI type:
     - `$TMUX` is set and no pane can be established: the process table or the
       tmux server cannot be read, or no pane's own process is an ancestor of
@@ -271,10 +273,18 @@ Do not rely on it to spread load; choose by the table above from the start.
       chain);
     - the pane is reached through two or more foreign process sessions (the
       shared Codex daemon);
-    - the pane's lock cannot be read; the registry is missing, unreadable or
-      not a list of worker rows; the pane is a worker pane (spawn marker, a row
-      for the pane, or a lock registered elsewhere) without its matching row.
-      After an approved registry reset, register the pane again;
+    - the pane's lock cannot be read; the registry is unreadable or not a
+      list of worker rows; the pane is a worker pane (spawn marker, or a row
+      for the pane under another id) without its matching row; the lock is
+      registered to another pane. After an approved registry reset, register
+      the pane again;
+    - a missing registry file: only standalone `mailbox-send` refuses on it.
+      `formation` itself creates an empty registry at start-up (that is the
+      bootstrap for the first `register` / `spawn`), so there "missing"
+      behaves as "empty": an unlocked pane is a lead, a locked pane acts as
+      its lock, and a pane with a spawn marker is still refused. Protection
+      against a lost row rests on the spawn marker and the lock, not on the
+      file's absence;
     - the caller is in a pane and `FORMATION_HOME` / `FORMATION_REGISTRY` point
       away from the canonical home (a stale variable). The gate reads the
       registry under the home directory from the account database.
@@ -286,7 +296,7 @@ Do not rely on it to spread load; choose by the table above from the start.
     fallback (#216's was removed). `$TMUX` unset means "not in tmux"; a shell
     that lost `TMUX` inside a pane, or runs under a tmux server the variable
     does not name, is not detected (deliberate or exotic, outside the threat
-    model). The proof runs once per process.
+    model). The proof runs once per command.
   - **What the session count shows, and what it does not.** A CLI that owns the
     pane gives a tool call at most one process session of its own; Codex's
     shared daemon adds its own sessions, so two or more foreign sessions
@@ -746,7 +756,7 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   shell this is; the message names the reason. For a Codex worker served by
   the shared daemon the inherited identity may be another worker's and it
   cannot be repaired in place: `formation reap` it and spawn it again (spawn
-  uses `--no-daemon`). For a lead it usually means the registry is missing or
+  uses `--no-daemon`). For a lead it usually means the registry is
   unreadable, or the pane's row was lost (register the pane again). A row tagged
   `identity_note` in the mailbox log marks mail whose sender was corrected
   from a contradicting environment.

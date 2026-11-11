@@ -257,6 +257,9 @@ unset TMUX   # the next section runs outside tmux: the operator route
 
 # Explicit FORMATION_SELF remains the intentional pull-only/headless route.
 FORMATION_SELF="cron-lead"
+# The tmux mock hands every spawn pane %99, and spawn now refuses to add a
+# second row for a pane that is already registered (#335), so free it first.
+registry_remove tty-parent-worker
 cmd_spawn --cli codex "$TMP/briefing.md" pull-only-worker
 row="$(registry_get pull-only-worker)"
 [[ "$(printf '%s\n' "$row" | jq -r '.parent_id')" == "cron-lead" ]]
