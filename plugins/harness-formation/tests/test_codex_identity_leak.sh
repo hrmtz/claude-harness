@@ -267,6 +267,24 @@ cp "$FIXTURE/registry.good" "$REGISTRY"
 tmux set-option -p -t "$pane_lead" @formation_identity_locked worker-a
 refused_in "$pane_lead" lock_registered_elsewhere "bash '$CLI' report 'second worker-a'"
 tmux set-option -p -t "$pane_lead" @formation_identity_locked lead-now
+# - one id, one pane, also when this pane does have its own row (review r4
+#   P1): two rows with the same id means two panes sharing one mailbox.
+{ cat "$FIXTURE/registry.good"; row worker-b "$pane_plain" lead-y sid-dup goal-dup; } >"$REGISTRY"
+refused_in "$pane_b" duplicate_id "bash '$CLI' report 'one of two worker-b'"
+grep -Fq 'registered to another pane' "$FIXTURE/duplicate_id.err"
+cp "$FIXTURE/registry.good" "$REGISTRY"
+# ...and spawn does not create that state: its registry append re-checks id
+# and pane under the registry lock.
+before_rows="$(wc -l <"$REGISTRY")"
+for dup in "worker-b %991" "brand-new $pane_b"; do
+  if driver bash -c "source '$CLI'; registry_add_unique $dup codex-x '$FIXTURE/brief.md'" >/dev/null 2>&1; then
+    echo "FAIL: registry_add_unique accepted a duplicate ($dup)" >&2; exit 1
+  fi
+done
+[[ "$(wc -l <"$REGISTRY")" == "$before_rows" ]]
+driver bash -c "source '$CLI'; registry_add_unique brand-new %992 codex-x '$FIXTURE/brief.md'"
+[[ "$(wc -l <"$REGISTRY")" == "$((before_rows + 1))" ]]
+cp "$FIXTURE/registry.good" "$REGISTRY"
 
 # The registry that judges a caller in a pane is the canonical one. A stale
 # FORMATION_HOME / FORMATION_REGISTRY is refused (the reviewer's
@@ -349,6 +367,17 @@ refused_in "$pane_a" d_marker "$a_env" \
 # One live worker left is no proof either.
 tmux kill-pane -t "$pane_b"
 refused d_lone "bash '$CLI' report 'lone daemon report'"
+
+# register proves its pane once as well.
+pane_once="$(new_pane)"
+: >"$FIXTURE/tmux-calls.log"
+printf '%s\n' "export TMUX_PANE=$pane_once" \
+  "PATH='$FIXTURE/shim':\"\$PATH\" bash '$CLI' register --cli codex reg-once" >"$FIXTURE/reg_once.sh"
+run_in_pane "$pane_once" reg_once
+[[ "$(rc_of reg_once)" == 0 ]]
+[[ "$(grep -c '^list-panes -a -F #{pane_id}|#{pane_pid}' "$FIXTURE/tmux-calls.log")" == 1 ]]
+grep -v '"reg-once"' "$REGISTRY" >"$FIXTURE/registry.tmp" && cp "$FIXTURE/registry.tmp" "$REGISTRY"
+tmux kill-pane -t "$pane_once"
 
 # register never accepts such a shell.
 pane_new="$(new_pane)"

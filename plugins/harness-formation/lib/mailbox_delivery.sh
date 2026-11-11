@@ -300,9 +300,13 @@ _mailbox_refuse_identity() {
 #   lead      the proven pane has no lock at all. Only here, and for
 #             "operator", do FORMATION_SELF and --from apply.
 # "pane" and "lead" are findings, never defaults: they need the registry to
-# exist, to parse and to have the expected shape, no row for this pane, the
-# lock not registered to another pane, and no spawn marker on the pane.
-# Everything else is refused with exit 8, for every CLI type.
+# parse and to have the expected shape, no row for this pane and no spawn
+# marker on the pane. In every context a lock that is registered to another
+# pane is refused. Everything else is refused with exit 8, for every CLI type.
+# A missing registry file is refused here; bin/formation creates an empty one
+# at start-up (the bootstrap for the first register/spawn), so through the
+# CLI "missing" behaves as "empty" and the lost-row protection rests on the
+# spawn marker and the lock.
 mailbox_guard_identity() {
   local claimed="${FORMATION_SELF:-}" pane locked parent_marker registry rows row key value
   local reregister="If the registry was reset on purpose, register this pane again: formation register --cli <cli> <id>"
@@ -355,11 +359,18 @@ mailbox_guard_identity() {
     return 8
   fi
 
+  # One id, one pane. Two concurrent spawns with the same name used to leave
+  # two rows; both panes would then share a mailbox identity.
+  if [[ -n "$locked" ]] && jq -e --arg id "$locked" --arg pane "$pane" \
+       'any(.[]; .id == $id and .pane_id != $pane)' <<<"$rows" >/dev/null; then
+    _mailbox_refuse_identity "identity '$locked' is registered to another pane as well as locked on pane $pane. $reregister"
+    return 8
+  fi
   row="$(jq -c --arg id "$locked" --arg pane "$pane" \
     'map(select(.id == $id and .pane_id == $pane)) | last // empty' <<<"$rows")"
   if [[ -z "$row" ]]; then
-    if [[ -n "$parent_marker" ]] || jq -e --arg id "$locked" --arg pane "$pane" \
-         'any(.[]; .pane_id == $pane or ($id != "" and .id == $id))' <<<"$rows" >/dev/null; then
+    if [[ -n "$parent_marker" ]] || jq -e --arg pane "$pane" \
+         'any(.[]; .pane_id == $pane)' <<<"$rows" >/dev/null; then
       _mailbox_refuse_identity "pane $pane is a worker pane (lock '${locked:-<none>}') but the registry has no matching row for it. $reregister"
       return 8
     fi
