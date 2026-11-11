@@ -88,7 +88,7 @@ backup 先: `~/sanada_backup_persistent/<task>_<YYYYMMDD_HHMMSS>/` (persistent�
 tmux pane 内で動作している場合、起動時に window name が `<chassis>-<codename>` 形式で設定されている（例: `kimi-rust-fox` / `codex-iron-petal`）。
 
 - Formation worker では pane option `@formation_identity_locked`（通常は `FORMATION_SELF` と同値）を routing / self-reference の source of truth とし、window name や互換 alias の `@formation_id` より優先する。window name は `<chassis>-<formation_identity_locked>` と表示する。
-- session 開始時（または identity が曖昧になった時）、まず `tmux display-message -p -t "$TMUX_PANE" '#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'` を実行して自分の routing identity と表示名を確認する。`-t "$TMUX_PANE"` は省略しない（省略すると detached worker が親 client の current window を読む）。
+- session 開始時（または identity が曖昧になった時）、まず `formation whoami` を実行して自分の routing identity と pane を確認する。`$TMUX_PANE` / `$FORMATION_SELF` を自分で読んで判断しない: 共有 daemon 配下の Codex shell は別 worker の値を継承する（#335）。`formation whoami` は process ancestry で pane を証明し、証明できない shell では exit 8 で拒否する。拒否されたら名乗らず、bootstrap message の identity を使って lead に再起動を依頼する。formation が無い環境でのみ `tmux display-message -p -t "$TMUX_PANE" '#{window_name}'` で表示名を確認する（`-t` は省略しない）。
 - 名前が `<chassis>-<codename>` 形式なら、self-reference 時は **<codename>** を使う。
 - codename が取得できない場合は、**実行中の実モデルと異なる固有名（Kimi 等）を名乗らない**。中立に self-reference する。
 - user への第一声は、codename があれば「ドーモ、 **<codename>** デス」と名乗る（例: `kimi-rust-fox` → 「ドーモ、rust-fox デス」）。codename が無ければ通常応答から始める。

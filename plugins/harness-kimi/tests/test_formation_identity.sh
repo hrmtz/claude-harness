@@ -226,7 +226,11 @@ else
   bad "Formation initial window drifted ($got)"
 fi
 
-if grep -Fq -- 'tmux display-message -p -t "$TMUX_PANE" '\''#{?#{@formation_identity_locked},#{@formation_identity_locked},#{@formation_id}}|#{window_name}'\''' "$AGENTS_TEMPLATE"; then
+# The self-check goes through `formation whoami`, which proves the pane from
+# process ancestry; reading the lock via $TMUX_PANE returns another worker's
+# name in a shell that inherited its environment (claude-harness#335).
+if grep -Fq -- '`formation whoami`' "$AGENTS_TEMPLATE" &&
+   ! grep -Fq -- '"$TMUX_PANE" '"'"'#{?#{@formation_identity_locked}' "$AGENTS_TEMPLATE"; then
   ok "Kimi identity self-check targets its own pane and prefers the lock"
 else
   bad "Kimi identity self-check can ignore the locked pane identity"

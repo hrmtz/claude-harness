@@ -27,21 +27,28 @@ command -v tmux >/dev/null 2>&1 || exit 0
 # of the daemon, with the environment and TMUX_PANE of whichever worker started
 # it (#335). Claiming that pane or asserting an anchor from that environment
 # names the wrong worker, and the model ranks the anchor above its briefing.
-# Same test as formation's mailbox_caller_behind_detached_server: two or more
-# session leaders between this hook and the terminal-owning process.
-_detached_leaders=0 _detached_tty=0 _pid=$$ _guard=0
+# Same proof as formation's mailbox_prove_caller_pane: a hook that belongs to
+# the pane crosses at most one foreign process session on the way up to the
+# pane's own process; a daemon adds its own. Terminals are not consulted. A
+# pane that is not in our ancestry at all is left to the ownership core, which
+# refuses it as stale.
+_pane_pid=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}' 2>/dev/null || true)
+_pid=$$ _guard=0 _sids="" _root_sid=""
 while [ "$_guard" -lt 64 ] && [ "${_pid:-0}" -gt 1 ] 2>/dev/null; do
-    read -r _ppid _sid _tty <<EOF
-$(ps -o ppid=,sid=,tty= -p "$_pid" 2>/dev/null)
-EOF
-    case "$_tty" in ''|'?'|'??') ;; *) _detached_tty=1; break ;; esac
-    [ "$_sid" = "$_pid" ] && _detached_leaders=$((_detached_leaders + 1))
+    read -r _ppid _sid <<<"$(ps -o ppid=,sid= -p "$_pid" 2>/dev/null)"
+    [ -n "${_sid:-}" ] || break
+    if [ "$_pid" = "$_pane_pid" ]; then _root_sid=$_sid; break; fi
+    _sids="$_sids $_sid"
     _pid=$_ppid; _guard=$((_guard + 1))
 done
-if [ "$_detached_leaders" -ge 2 ] && [ "$_detached_tty" = 1 ]; then
-    jq -n '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext:
-      "## Identity cannot be verified\n\nThis Codex session is not attached directly to its terminal pane (shared app-server daemon), so the pane and Formation identity in its environment may belong to another session. No identity is assigned here. Use the identity given in your bootstrap or briefing message, and tell your lead that this session must be restarted with `codex --no-daemon`."}}'
-    exit 0
+if [ -n "$_root_sid" ]; then
+    # shellcheck disable=SC2086
+    _foreign=$(printf '%s\n' $_sids | grep -vx "$_root_sid" | sort -u | grep -c . || true)
+    if [ "${_foreign:-0}" -ge 2 ]; then
+        jq -n '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext:
+          "## Identity cannot be verified\n\nThis Codex session is not attached directly to its terminal pane (shared app-server daemon), so the pane and Formation identity in its environment may belong to another session. No identity is assigned here. Use the identity given in your bootstrap or briefing message, and tell your lead that this session must be restarted with `codex --no-daemon`: formation commands are refused from it."}}'
+        exit 0
+    fi
 fi
 
 # shellcheck source=./identity_owner.sh

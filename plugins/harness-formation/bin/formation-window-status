@@ -242,9 +242,14 @@ def apply(args: argparse.Namespace, pid: int, path: Path) -> None:
         mutations.append(("set", args.lead, "@harness_role=lead"))
 
     if args.task is not None:
-        pane = args.pane or os.getenv("TMUX_PANE", "")
+        # $TMUX_PANE is a claim a Codex tool shell can inherit from another
+        # worker (#335); the default target is the caller's proven pane.
+        pane = args.pane or subprocess.run(
+            [str(Path(__file__).resolve().parent / "formation"), "whoami", "--pane"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
         if not PANE_RE.fullmatch(pane):
-            raise ValueError("--task needs --pane (or a valid TMUX_PANE)")
+            raise ValueError("--task needs --pane (the caller's own pane could not be verified)")
         task = sanitize_task(args.task)
         remember_pane(journal, pane, "@harness_task")
         mutations.append(("set" if task else "unset", pane, f"@harness_task={task}"))

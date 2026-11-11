@@ -226,41 +226,45 @@ Do not rely on it to spread load; choose by the table above from the start.
   `--inject` is refused after the durable row is appended and signaled.
 - `FORMATION_SELF=<name>` and `FORMATION_PARENT=<parent_id>` are exported into
   the worker's pane env; the worker uses those to address the parent.
-- **The environment is a claim, the pane lock is the proof (#335):** a Codex
-  TUI normally attaches to one per-user app-server daemon, and every tool shell
-  and hook of a later session then inherits the first session's
-  `FORMATION_SELF`, `FORMATION_PARENT`, `FORMATION_SESSION_ID` and `TMUX_PANE`.
-  `formation spawn --cli codex` therefore starts Codex with `--no-daemon` (one
-  in-process server per worker, marked `@formation_codex_isolated=1`), and
-  every command that acts as the caller (`report`, `done`, `ask`, `msg`,
-  `inbox`, `ack`, `resolve`, `review-request`, `verdict`, `spawn`, `reap`,
-  `mailbox-send` without `--from`) passes an identity gate first:
-  - The caller's pane is resolved from process ancestry / controlling TTY. If
-    that pane is a registered worker's pane and the environment names someone
-    else, Formation acts as the pane's worker (identity, parent, parent pane and
-    session id come from the registry row), prints both ids on stderr and tags
-    each row it sends with `identity_note: "env-claimed:<claimed id>"`. Workers
-    never need to prefix `FORMATION_SELF=` by hand, and doing so in a worker
-    pane has no effect.
-  - The explicit `FORMATION_SELF=<id>` override applies only in panes without a
-    worker lock (a lead pane, a plain shell). That keeps the operator recovery
-    below working.
-  - A shell served by a shared Codex daemon cannot be verified at all (its
-    ancestry leads to whichever pane started the daemon). With at most one
-    non-isolated Codex worker alive it proceeds with a stderr warning and rows
-    tagged `identity_note: "unverified:codex-shared-daemon"`; with two or more
-    it is refused with exit 8 and nothing is sent or read. `formation register`
-    always refuses from such a shell. The fix is to respawn the worker, or to
-    start a hand-launched Codex with `codex --no-daemon` before registering.
+- **The environment is a claim, the pane is the proof (#335):** a Codex TUI
+  normally attaches to one per-user app-server daemon, and every tool shell and
+  hook of a later session then inherits the first session's `FORMATION_SELF`,
+  `FORMATION_PARENT`, `FORMATION_PARENT_PANE`, `FORMATION_SESSION_ID` and
+  `TMUX_PANE`. `formation spawn --cli codex` therefore starts Codex with
+  `--no-daemon` (one in-process server per worker), and everything that acts as
+  the caller passes an identity gate first: every `formation` verb except
+  `help`, `status` and `remote-check`, `mailbox-send`, the goal statusline, the
+  PR receipt hook and `formation-window-status --task`.
+  - The gate proves the caller's pane from process ancestry: the pane's own
+    process must be an ancestor, with at most one foreign process session in
+    between (a CLI gives a tool call one session of its own; a detached server
+    adds more). Terminals are not consulted on the way, so a tool shell with
+    its own PTY is judged the same.
+  - Proven pane is a registered worker's pane: identity, parent, parent pane
+    and session id are all taken from that registry row; the environment's
+    values are discarded together. A contradicting `FORMATION_SELF` is named on
+    stderr and each row sent is tagged
+    `identity_note: "env-claimed:<claimed id>"`. Workers never need to prefix
+    `FORMATION_SELF=` by hand, and doing so in a worker pane has no effect.
+    `mailbox-send --from <other>` is refused there (exit 8).
+  - Any other proven pane (a lead, a plain shell), and a non-Codex shell
+    outside tmux, keep the explicit `FORMATION_SELF=<id>` / `--from` override.
+    That keeps the operator recovery below working.
+  - A caller that cannot be proven is refused with exit 8 and nothing is sent
+    or read, whatever the registry says: a shell that reaches a pane only
+    through a detached server (the shared Codex daemon), and a Codex tool shell
+    with no provable pane at all. There is no warn-and-continue mode. A worker
+    in that state cannot be repaired in place; `formation reap` it and spawn it
+    again. A hand-launched Codex must be started with `codex --no-daemon`
+    before `formation register`.
+  - `formation whoami [--pane]` prints the verified identity and pane; it is
+    the supported way for an agent to ask who it is. Do not read `$TMUX_PANE`
+    or `$FORMATION_SELF` for that.
   - The Codex SessionStart hook assigns no identity from a daemon-served
     session; it tells the session to use the identity in its bootstrap message.
-- **Identity is unified and locked (#101):** `FORMATION_SELF` /
-  `@formation_identity_locked` is the routing, header, and self-reference source
-  of truth. `@formation_id` remains a compatibility alias, but later task/status
-  updates cannot change the locked identity. A dedicated worker window is named
-  `<cli>-<name>`; SessionStart/compact/resume reassert that same identity instead
-  of generating a second random codename. Standalone CLI auto-naming remains
-  independent.
+  - Known cost: a job that a worker detaches into its own session (`setsid`)
+    and that later calls `formation` crosses two sessions and is refused too.
+    Report from the worker's own shell instead.
 - **Pane visibility (#93)**: the worker window gets a `pane-border-status`
   strip showing `<locked-id> · <task> — <live-status>` — blue for claude,
   orange for codex, magenta for kimi, plus a
@@ -690,11 +694,11 @@ convention holds from the first turn (e.g. "child tasks go to subagents;
   mailbox explicitly: `FORMATION_SELF=lead formation inbox` (from the lead's
   pane or a plain shell, not from a worker pane).
 - **`formation: REFUSED (exit 8)` in a Codex worker**: the worker's shell is
-  served by the shared Codex daemon while two or more non-isolated Codex
-  workers are alive, so its inherited identity may be another worker's. It
-  cannot be repaired in place. `formation reap` it and spawn it again (spawn
-  uses `--no-daemon`). A row tagged `identity_note` in the mailbox log marks
-  mail whose sender was overridden or could not be verified.
+  served by the shared Codex daemon (or cannot be traced to a pane), so its
+  inherited identity may be another worker's. It cannot be repaired in place.
+  `formation reap` it and spawn it again (spawn uses `--no-daemon`). A row
+  tagged `identity_note` in the mailbox log marks mail whose sender was
+  corrected from a contradicting environment.
 - **`/rc` attach fails**: confirm the worker's claude started with the
   `--session-name formation-<id>` flag (visible in `formation status` registry
   row).
