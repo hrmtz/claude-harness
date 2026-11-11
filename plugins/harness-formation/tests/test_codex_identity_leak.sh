@@ -458,7 +458,59 @@ refute grep -Fq 'worker-a' "$FIXTURE/hook.out"
 run_in_pane "$pane_a" hook_pty
 grep -Fq 'cannot be verified' "$FIXTURE/hook_pty.out"
 
-# --- 10. a refused probe is throttled like any other --------------------------
+# --- 10. stale registry rows after a tmux restart (go-live finding) -----------
+# Pane ids start again at %0 when the tmux server restarts, so an old row can
+# sit on a pane that now belongs to someone else. registry-check classifies,
+# registry-prune --stale removes only stale rows and never touches a pane.
+{
+  row worker-a "$pane_a" lead-x sid-a goal-of-a           # live, lock matches
+  row old-dead %987 lead-x sid-o goal-o                   # pane is gone
+  row old-reused "$pane_lead" lead-x sid-o goal-o         # pane now locked lead-now
+  row old-unlocked "$pane_plain" lead-x sid-o goal-o      # pane now has no lock
+} >"$REGISTRY"
+# The pane an old row sits on is refused, and the message names the tool.
+refused_in "$pane_lead" stale_row_on_lead "bash '$CLI' whoami"
+grep -Fq 'formation registry-check' "$FIXTURE/stale_row_on_lead.err"
+printf '%s\n' '{"id": "half-written", "pane_id": ' >>"$REGISTRY"   # not a row: left alone
+cp "$REGISTRY" "$FIXTURE/registry.stale"
+# Both tools work from that refused pane.
+echo "bash '$CLI' registry-check" >"$FIXTURE/check.sh"
+run_in_pane "$pane_lead" check
+[[ "$(rc_of check)" == 0 ]]
+grep -Eq "^ok +worker-a +$pane_a +lock=worker-a$" "$FIXTURE/check.out"
+grep -Eq '^stale_dead_pane +old-dead +%987 ' "$FIXTURE/check.out"
+grep -Eq "^stale_pane_reused +old-reused +$pane_lead +lock=lead-now$" "$FIXTURE/check.out"
+grep -Eq "^stale_pane_reused +old-unlocked +$pane_plain +lock=-$" "$FIXTURE/check.out"
+grep -Eq '^unparsable ' "$FIXTURE/check.out"
+cmp -s "$REGISTRY" "$FIXTURE/registry.stale"
+# Dry run by default: nothing written, no backup.
+echo "bash '$CLI' registry-prune --stale" >"$FIXTURE/prune_dry.sh"
+run_in_pane "$pane_lead" prune_dry
+grep -Fq '3 stale row(s) would be removed, 2 kept' "$FIXTURE/prune_dry.out"
+cmp -s "$REGISTRY" "$FIXTURE/registry.stale"
+refute compgen -G "$REGISTRY.bak-*"
+# A failed pane lookup classifies nothing and changes nothing.
+if TMUX="$FIXTURE/no-such-socket,1,0" bash "$CLI" registry-prune --stale --apply >/dev/null 2>&1; then
+  echo "FAIL: registry-prune ran without a tmux server" >&2; exit 1
+else
+  [[ "$?" == 4 ]]
+fi
+cmp -s "$REGISTRY" "$FIXTURE/registry.stale"
+# --apply: backup first, then exactly the stale rows go; no pane is touched.
+panes_before="$(tmux list-panes -a -F '#{pane_id}|#{pane_dead}' | sort)"
+echo "bash '$CLI' registry-prune --stale --apply" >"$FIXTURE/prune.sh"
+run_in_pane "$pane_lead" prune
+[[ "$(rc_of prune)" == 0 ]]
+cmp -s "$(compgen -G "$REGISTRY.bak-*")" "$FIXTURE/registry.stale"
+[[ "$(wc -l <"$REGISTRY")" == 2 ]]
+jq -e 'select(.id == "worker-a")' "$REGISTRY" >/dev/null 2>&1 || grep -Fq '"worker-a"' "$REGISTRY"
+grep -Fq '"half-written"' "$REGISTRY"
+refute grep -Eq '"old-(dead|reused|unlocked)"' "$REGISTRY"
+[[ "$(tmux list-panes -a -F '#{pane_id}|#{pane_dead}' | sort)" == "$panes_before" ]]
+rm -f "$REGISTRY".bak-*
+cp "$FIXTURE/registry.good" "$REGISTRY"
+
+# --- 11. a refused probe is throttled like any other --------------------------
 # The unread advisor records the probe before running it; otherwise a worker
 # whose identity is refused re-runs the probe on every tool boundary.
 mkdir -p "$FIXTURE/fakeform" "$FIXTURE/run"

@@ -371,7 +371,7 @@ mailbox_guard_identity() {
   if [[ -z "$row" ]]; then
     if [[ -n "$parent_marker" ]] || jq -e --arg pane "$pane" \
          'any(.[]; .pane_id == $pane)' <<<"$rows" >/dev/null; then
-      _mailbox_refuse_identity "pane $pane is a worker pane (lock '${locked:-<none>}') but the registry has no matching row for it. $reregister"
+      _mailbox_refuse_identity "pane $pane is a worker pane (lock '${locked:-<none>}') but the registry has no matching row for it. A row left over from an earlier tmux server may sit on this pane id: run 'formation registry-check' (read-only), then 'formation registry-prune --stale'. $reregister"
       return 8
     fi
     if [[ -z "$locked" ]]; then
