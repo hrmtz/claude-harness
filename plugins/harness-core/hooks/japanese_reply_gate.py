@@ -22,7 +22,7 @@ LATIN = re.compile(r"[A-Za-z]")
 
 
 def strip_code(text: str) -> str:
-    """Drop fenced blocks (CommonMark: close needs same char, length >= open) and table rows."""
+    """Drop fenced blocks (CommonMark: close needs same char, length >= open)."""
     out, fence = [], None
     for line in text.splitlines():
         m = FENCE_OPEN.match(line)
@@ -30,10 +30,9 @@ def strip_code(text: str) -> str:
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end():].strip():
                 fence = None
             continue
-        if m:
+        # A backtick fence's info string cannot contain a backtick (```foo``` is inline code).
+        if m and not (m.group(1)[0] == "`" and "`" in line[m.end():]):
             fence = m.group(1)
-            continue
-        if line.lstrip().startswith("|"):
             continue
         out.append(line)
     return "\n".join(out)
@@ -41,7 +40,7 @@ def strip_code(text: str) -> str:
 
 def code_like(run: str) -> bool:
     """URL, path, file name or identifier: not prose. Linear, no regex backtracking."""
-    word = run.rstrip(".,;:!?)").lstrip("(")
+    word = run.strip("*_~").rstrip(".,;:!?)").lstrip("(").strip("*_~")  # markdown emphasis is prose
     if not word:
         return False
     if any(c in CODE_CHARS or c.isdigit() for c in word) or "." in word:
@@ -67,7 +66,7 @@ def last_assistant_text(path: str) -> str | None:
         for line in f:
             try:
                 rec = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(rec, dict) or rec.get("type") != "assistant":
                 continue
@@ -126,6 +125,9 @@ def self_test() -> None:
     assert ja_ratio("関数 parse_the_complete_assistant_transcript_and_validate_language を修正。")[0] >= THRESHOLD
     assert ja_ratio("結果:\n```\nlong English text here\n````\n全部通った。")[0] >= THRESHOLD
     assert ja_ratio("``a `b` English words inside``を確認した。")[0] >= THRESHOLD
+    assert ja_ratio("**Please review** /tmp/a and /tmp/b.")[0] < THRESHOLD
+    assert ja_ratio("```foo``` This is an English explanation of the fix and its behavior.")[0] < THRESHOLD
+    assert ja_ratio("Summary: tests passed\n|構文検査|通過|\n|機能検査|通過|")[0] >= THRESHOLD
     print("self-test ok")
 
 
