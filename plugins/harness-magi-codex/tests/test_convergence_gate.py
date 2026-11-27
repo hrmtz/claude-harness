@@ -1741,7 +1741,7 @@ print("incremental fixture")
         self.assertEqual(blocked["decision"], "BLOCKED")
         self.assertEqual(blocked["reason_code"], "UNSAFE_OR_INCOMPLETE_INPUT")
         self.assertFalse(blocked["authorizes_shipping"])
-        self.assertIn("Symlink loop", blocked["detail"])
+        self.assertRegex(blocked["detail"], r"Symlink loop|Too many levels of symbolic links")
         self.assertNotIn("Traceback", result.stdout)
 
     def test_resampling_oserror_is_stable_blocked_json(self) -> None:
