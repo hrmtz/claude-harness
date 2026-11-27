@@ -17,6 +17,7 @@ SEND="$HERE/../bin/mailbox-send"
 HOOK="$HERE/../../harness-core/hooks/codex_tmux_self_name.sh"
 FIXTURE="$(mktemp -d)"
 export FORMATION_HOME="$FIXTURE/home"
+export TMUX_TMPDIR="$FIXTURE"  # A shell without TMUX must never reach the host default server.
 SOCK="$FORMATION_HOME/tmux/sock"
 cleanup() {
   # The spawn in section 8 starts a real relay for its worker.
@@ -109,6 +110,26 @@ refused_in() { # pane label script-line...
 # The test driver itself talks to the fixture server from outside its panes.
 driver() { FORMATION_TEST_OPERATOR=1 "$@"; }
 
+# #341: a tool shell can retain another campaign's worker environment even
+# without a usable tmux context. Refuse before writing ASK state or mail.
+stale_route="export FORMATION_SELF=caller-preempt FORMATION_PARENT=lead-now FORMATION_PARENT_PANE=$pane_lead FORMATION_SESSION_ID=stale-session"
+# Help must also work from a shell without worker proof.
+for help_pane in "$pane_b" "$pane_plain"; do
+  printf '%s\n' "$stale_route" "bash '$CLI' ask --help" >"$FIXTURE/ask-help.sh"
+  run_in_pane "$help_pane" ask-help
+  [[ "$(rc_of ask-help)" == 0 ]]
+  grep -Fq 'formation ask [--next-state <state>] <question>' "$FIXTURE/ask-help.out"
+  [[ "$(rows)" == 0 && ! -s "$FORMATION_REQUEST_LOG" ]]
+done
+for verb in report ask done 'msg lead-now'; do
+  label="misroute-${verb%% *}"
+  refused_in "$pane_plain" "$label" "$stale_route" "unset TMUX" "bash '$CLI' $verb 'wrong campaign'"
+  refused_in "$pane_plain" "$label-plain" "$stale_route" "bash '$CLI' $verb 'wrong campaign'"
+  refused_in "$pane_lead" "$label-locked" "$stale_route" "bash '$CLI' $verb 'wrong campaign'"
+done
+[[ ! -s "$FORMATION_REQUEST_LOG" ]]
+[[ -z "$(tmux show-options -pqv -t "$pane_lead" @formation_mail_pending)" ]]
+
 # --- 1. send: the proven pane's worker row outranks the inherited env ---------
 { poison; echo "bash '$CLI' report 'poisoned report'"; } >"$FIXTURE/send.sh"
 run_in_pane "$pane_b" send
@@ -134,6 +155,17 @@ SH
 run_in_pane "$pane_b" half
 tail -n2 "$FORMATION_MAILBOX" | jq -se 'length == 2 and all(.from == "worker-b"
   and .to == "lead-y" and .session_id == "sid-b" and (has("identity_note") | not))' >/dev/null
+
+# A tool shell may drop every Formation routing variable and the pane hint.
+# The socket and the process ancestry still identify the registered worker.
+cat >"$FIXTURE/stripped.sh" <<SH
+unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE FORMATION_SESSION_ID TMUX_PANE
+bash '$CLI' done 'routing environment stripped'
+SH
+run_in_pane "$pane_b" stripped
+[[ "$(rc_of stripped)" == 0 ]]
+last_row | jq -e '.from == "worker-b" and .to == "lead-y" and .session_id == "sid-b"
+                  and .body == "[DONE] routing environment stripped"' >/dev/null
 
 # The supported "who am I" answers from the proven pane, not from the env.
 { poison; echo "bash '$CLI' whoami"; } >"$FIXTURE/whoami.sh"
@@ -175,6 +207,17 @@ for verb in "report 'counted report'" "inbox --count" "whoami"; do
   [[ "$(grep -c 'formation_parent_id' "$FIXTURE/tmux-calls.log")" == 1 ]]
 done
 
+# A msg target expanded from the wrong parent is already an argument when
+# Formation recovers the correct worker. Refuse it before looking it up.
+refused_in "$pane_b" expanded_parent "$stale_route" "bash '$CLI' msg \"\$FORMATION_PARENT\" 'wrong campaign'"
+# A worker with no recorded parent may receive direct mail but cannot guess
+# a recipient for its lifecycle events.
+cp "$REGISTRY" "$FIXTURE/with-parent"
+jq -c 'if .id == "worker-b" then .parent_id = null else . end' "$FIXTURE/with-parent" >"$REGISTRY"
+refused_in "$pane_b" no_parent "$(poison)" "bash '$CLI' ask 'missing parent'"
+[[ ! -s "$FORMATION_REQUEST_LOG" ]]
+cp "$FIXTURE/with-parent" "$REGISTRY"
+
 # --- 2. inbox: read the proven worker's mail, leave the claimed one alone -----
 driver env FORMATION_SELF=lead-x bash "$CLI" msg worker-a 'mail for a' >/dev/null 2>&1 || true
 driver env FORMATION_SELF=lead-y bash "$CLI" msg worker-b 'mail for b' >/dev/null 2>&1 || true
@@ -214,7 +257,7 @@ last_row | jq -e '.from == "lead-x" and .body == "operator send"' >/dev/null
 # message that names the recovery, and --from another id is refused.
 cat >"$FIXTURE/locked.sh" <<SH
 FORMATION_SELF=lead-y bash '$CLI' whoami
-FORMATION_SELF=lead-y bash '$CLI' report 'from the locked lead pane'
+FORMATION_SELF=lead-y bash '$CLI' msg worker-b 'from the locked lead pane'
 SH
 run_in_pane "$pane_lead" locked
 grep -Fxq "lead-now pane=$pane_lead context=pane" "$FIXTURE/locked.out"

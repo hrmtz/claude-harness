@@ -30,10 +30,22 @@ TMUX_LOAD_LOG="$FIXTURE/tmux-load.log"
 tmux() {
   printf 'tmux %s\n' "$*" >>"$TMUX_LOG"
   case "${1:-}" in
+    list-panes)
+      case "${FORMATION_SELF:-}" in
+        worker-a) printf '%%999|%s\n' "$$" ;;
+        worker-lead-child) printf '%%997|%s\n' "$$" ;;
+        worker-legacy) printf '%%996|%s\n' "$$" ;;
+      esac
+      ;;
+    display-message)
+      if [[ "${*: -1}" == '#{@formation_identity_locked}|#{@formation_parent_id}' ]]; then
+        printf '%s|\n' "$FORMATION_SELF"
+      fi
+      ;;
     show-options) return 0 ;;
     set-option) [[ "${TMUX_FAIL_SET_OPTION:-0}" != "1" ]] ;;
     load-buffer) cat >>"$TMUX_LOAD_LOG" ;;
-    display-message|capture-pane|kill-pane) return 0 ;;
+    capture-pane|kill-pane) return 0 ;;
   esac
 }
 
@@ -75,6 +87,7 @@ wait "$LOCK_HOLDER_PID"
   exit 1
 }
 
+registry_add worker-a %999 formation-worker-a "$FIXTURE/brief.md" sid codex task goal 0 parent-a %100
 request_id="$(FORMATION_PARENT_PANE=%100 cmd_ask 'Choose rollout A or B')"
 [[ "$request_id" == req-* ]]
 [[ "$(request_unresolved worker-a parent-a | jq -r '.request_id')" == "$request_id" ]]
@@ -126,7 +139,8 @@ rm -f "$FORMATION_DIR/parent-a.relay_pid"
 
 # Pre-upgrade workers without FORMATION_PARENT_PANE remain pull-only and
 # successful; the row is durable and no badge success is claimed.
-FORMATION_PARENT_PANE="" cmd_report 'legacy pull-only report' \
+registry_add worker-legacy %996 formation-worker-legacy "$FIXTURE/brief.md" sid codex task goal 0 parent-a
+(FORMATION_SELF=worker-legacy cmd_report 'legacy pull-only report') \
   2>"$FIXTURE/pull-only-report.err"
 grep -Fq 'signal=unavailable' "$FIXTURE/pull-only-report.err"
 grep -Fq 'receipt=unconfirmed recipient_activity=unknown' \
@@ -156,7 +170,6 @@ concurrent_id="$(head -n1 "$FIXTURE/concurrent.1")"
   "$MAILBOX_LOG")" -eq 1 ]]
 
 # Later ordinary reports cannot replace the sticky WAITING_PARENT status.
-registry_add worker-a %999 formation-worker-a "$FIXTURE/brief.md" sid codex task goal 0
 cmd_report 'later progress report'
 status="$(cmd_status)"
 grep -Fq "WAITING_PARENT worker=worker-a request=$request_id" <<<"$status"
@@ -188,9 +201,9 @@ request_current_one "$request_id" | jq -e \
 # The legacy literal parent id "lead" is still an identity, not a wildcard.
 FORMATION_SELF=worker-lead-child
 FORMATION_PARENT=lead
-lead_id="$(cmd_ask 'Only literal lead may close this')"
 registry_add worker-lead-child %997 formation-worker-lead-child \
-  "$FIXTURE/brief.md" lead-sid codex task goal 0
+  "$FIXTURE/brief.md" lead-sid codex task goal 0 lead %100
+lead_id="$(cmd_ask 'Only literal lead may close this')"
 FORMATION_SELF=intruder
 set +e
 cmd_ack "$lead_id" stolen >"$FIXTURE/intruder-lead.out" 2>&1
@@ -265,7 +278,7 @@ assert_request_nudge_refused "$valid_waiting" "$concurrent_id" worker-a wrong-pa
 # Ordinary formation msg remains badge-only for a nonexclusive worker.
 : >"$TMUX_LOG"
 : >"$TMUX_LOAD_LOG"
-cmd_msg worker-a 'ordinary parent message'
+FORMATION_PARENT= FORMATION_PARENT_PANE= FORMATION_SESSION_ID= cmd_msg worker-a 'ordinary parent message'
 if grep -Eq 'paste-buffer|load-buffer|send-keys' "$TMUX_LOG"; then
   echo "FAIL: ordinary formation msg gained the ASK reply exception" >&2
   exit 1
@@ -273,6 +286,7 @@ fi
 
 # Every lifecycle caller preserves the durable row/state and returns the shared
 # honest exit 4 when a known pane cannot be badged.
+FORMATION_SELF=worker-a
 set +e
 TMUX_FAIL_SET_OPTION=1 FORMATION_PARENT_PANE=%100 \
   cmd_report 'report survives signal failure' \
@@ -459,21 +473,23 @@ grep -Fq '== MAILBOX HISTORY (last 50 addressed rows) ==' <<<"$history"
   export FORMATION_MAILBOX="$FORMATION_HOME/mailbox/log.jsonl"
   export FORMATION_REQUEST_DIR="$FORMATION_HOME/requests"
   export FORMATION_REQUEST_LOG="$FORMATION_REQUEST_DIR/events.jsonl"
-  # The home changes after formation was sourced, so create the registry that
-  # formation would have created at load; a missing registry is a refusal.
-  mkdir -p "$FORMATION_HOME/formation"
-  : >"$FORMATION_HOME/formation/registry.jsonl"
+  source "$HERE/../bin/formation"
   export TMUX_PANE=%171
   unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE
+  caller_pane=%209
   STALE_TMUX_LOG="$FIXTURE/stale-pane-tmux.log"
   : >"$STALE_TMUX_LOG"
   tmux() {
     printf 'tmux %s\n' "$*" >>"$STALE_TMUX_LOG"
     case "${1:-}" in
-      list-panes) printf '%%209|%s\n' "$$" ;;
+      list-panes) printf '%s|%s\n' "$caller_pane" "$$" ;;
       display-message)
         if [[ " $* " == *" -p "* && " $* " == *formation_identity_locked* ]]; then
-          if [[ " $* " == *" -t %171 "* ]]; then printf 'stale-worker\n'; else printf '\n'; fi
+          case " $* " in
+            *" -t %171 "*) echo stale-worker ;;
+            *" -t %300 "*) echo "stale-child|$actual_parent" ;;
+            *) echo ;;
+          esac
         elif [[ " $* " == *" -p "* ]]; then
           printf '0\n'
         fi
@@ -483,13 +499,14 @@ grep -Fq '== MAILBOX HISTORY (last 50 addressed rows) ==' <<<"$history"
     esac
   }
 
+  mailbox_require_identity
   actual_parent="$(self_id)"
   [[ "$actual_parent" == "pane-209" ]]
   registry_add stale-child %300 formation-stale-child \
-    "$FIXTURE/brief.md" stale-sid codex stale-task stale-goal 0
+    "$FIXTURE/brief.md" stale-sid codex stale-task stale-goal 0 "$actual_parent" %209
   export FORMATION_SELF=stale-child FORMATION_PARENT="$actual_parent"
   export FORMATION_PARENT_PANE=%209
-  stale_request_id="$(cmd_ask 'Stale pane routing decision')"
+  stale_request_id="$(caller_pane=%300 _MAILBOX_PROOF_PID= cmd_ask 'Stale pane routing decision')"
   [[ "$stale_request_id" == req-* ]]
 
   unset FORMATION_SELF FORMATION_PARENT FORMATION_PARENT_PANE

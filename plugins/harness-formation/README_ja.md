@@ -205,6 +205,10 @@ spawn は semantic parent identity と parent pane route を分離して worker
 append を先に確定し、同じ zero-keystroke の relay-or-direct signal policy
 を通る。relay が死んでいても badge の direct fallback が働き、本文を
 prompt へ注入しない。
+worker の `report` / `done` / `ask` には、呼出元 pane の lock と一致する
+registry row と、その row に記録された parent ID が必要。経路を確定できなければ
+mailbox / ASK state への書き込み前に exit `8` を返す。parent ID が記録済みで
+parent pane だけが欠ける場合は pull-only で配信する。
 parent pane は `TMUX_PANE` を信用せず process ancestry だけで解決する。
 wrapper で root PID chain が切れる場合に controlling TTY の一致を使う
 fallback (#216) は #335 で削除した。その caller は拒否されるので、process chain

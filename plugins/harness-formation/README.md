@@ -227,6 +227,10 @@ the parent's pane route separately from its semantic identity: worker
 `report`/`done`/`ask` and parent `ack`/`resolve` all append first, then use the
 same zero-keystroke relay-or-direct signal policy. A dead relay therefore does
 not silently remove the badge fallback, and the body never enters a prompt.
+Worker `report`, `done`, and `ask` require the caller's proven pane lock to
+match its registry row and the row to name its parent. Exit 8 means the route
+check stopped the command before it wrote mail or ASK state. An absent parent
+pane with a known parent ID still permits pull-only delivery.
 The parent pane is discovered by process ancestry only. The controlling-TTY
 fallback that #216 added for wrapper processes that break the root-PID chain
 was removed in #335: such a caller is refused, so keep the process chain

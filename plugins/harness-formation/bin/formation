@@ -1400,7 +1400,18 @@ Read it, then run 'formation report \"<1-line status>\"' to acknowledge receipt 
   start_mailbox_relay "$name" "$pane_id" "$session_name" "$cli"
 }
 
+require_worker_parent() {
+  mailbox_require_identity || return $?
+  if [[ "$MAILBOX_CALLER_CONTEXT" != worker ||
+        ! "${FORMATION_PARENT:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ||
+        "$FORMATION_PARENT" == "$FORMATION_SELF" ]]; then
+    echo "formation: REFUSED (exit 8): $1 needs a registered worker with a non-self parent in its registry row. Nothing was sent." >&2
+    return 8
+  fi
+}
+
 cmd_msg() {
+  local claimed_parent="${FORMATION_PARENT:-}"
   mailbox_require_identity || return $?
   local inject=0
   if [[ "${1:-}" == "--inject" ]]; then
@@ -1409,6 +1420,16 @@ cmd_msg() {
   fi
   [[ $# -ge 2 ]] || { echo "usage: formation msg [--inject] <worker_id> <text>" >&2; exit 2; }
   local worker_id="$1"; shift
+  if [[ "$MAILBOX_CALLER_CONTEXT" != worker &&
+        -n "${FORMATION_PARENT:-}${FORMATION_PARENT_PANE:-}${FORMATION_SESSION_ID:-}" ]]; then
+    _mailbox_refuse_identity "worker routing variables are present but the caller has no matching worker registration"
+    return 8
+  fi
+  # The calling shell may already have expanded a stale $FORMATION_PARENT.
+  if [[ "$worker_id" == "$claimed_parent" && "$worker_id" != "${FORMATION_PARENT:-}" ]]; then
+    echo "formation: REFUSED (exit 8): msg target '$worker_id' is the inherited parent. The registry names '${FORMATION_PARENT:-<none>}'. Nothing was sent." >&2
+    return 8
+  fi
   local text="$*"
   local from; from="$(self_id)"
   if is_credential_like "$text"; then
@@ -2130,10 +2151,10 @@ cmd_whoami() {
 }
 
 cmd_report() {
-  mailbox_require_identity || return $?
+  require_worker_parent report || return $?
   [[ $# -ge 1 ]] || { echo "usage: formation report <text>" >&2; exit 2; }
   local from; from="$(self_id)"
-  local to="${FORMATION_PARENT:-lead}"
+  local to="$FORMATION_PARENT"
   local seq signal_rc=0
   seq="$(mailbox_append "$from" "$to" "$*")"
   mailbox_signal_durable_row "$to" "${FORMATION_PARENT_PANE:-}" "$seq" "$from" \
@@ -2143,10 +2164,10 @@ cmd_report() {
 }
 
 cmd_done() {
-  mailbox_require_identity || return $?
+  require_worker_parent done || return $?
   [[ $# -ge 1 ]] || { echo "usage: formation done <summary>" >&2; exit 2; }
   local from; from="$(self_id)"
-  local to="${FORMATION_PARENT:-lead}"
+  local to="$FORMATION_PARENT"
   local msg="[DONE] $*"
   local seq signal_rc=0
   seq="$(mailbox_append "$from" "$to" "$msg")"
@@ -2157,19 +2178,23 @@ cmd_done() {
 }
 
 cmd_ask() {
-  mailbox_require_identity || return $?
+  local ask_usage="usage: formation ask [--next-state <state>] <question>"
   local next_state="RUNNING"
   if [[ "${1:-}" == "--next-state" ]]; then
-    [[ $# -ge 3 ]] || { echo "usage: formation ask [--next-state <state>] <question>" >&2; return 2; }
+    [[ $# -ge 3 ]] || { echo "$ask_usage" >&2; return 2; }
     next_state="$2"; shift 2
   fi
+  case "${1:-}" in
+    -h|--help) echo "$ask_usage"; return 0 ;;
+  esac
   [[ "$next_state" =~ ^[A-Z][A-Z0-9_-]{0,31}$ ]] || {
     echo "invalid --next-state: use 1-32 uppercase letters/digits/_/-" >&2
     return 2
   }
-  [[ $# -ge 1 ]] || { echo "usage: formation ask [--next-state <state>] <question>" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "$ask_usage" >&2; return 2; }
+  require_worker_parent ask || return $?
   local from; from="$(self_id)"
-  local to="${FORMATION_PARENT:-lead}"
+  local to="$FORMATION_PARENT"
   local question="$*"
   if is_credential_like "$question"; then
     refuse_credential ask "$from" "request refused"

@@ -254,6 +254,13 @@ Do not rely on it to spread load; choose by the table above from the start.
       as that lock and nothing else.
     - `lead`: the proven pane has no identity lock at all (a plain shell
       pane). `FORMATION_SELF=<id>` and `--from` apply.
+  - `report`, `ask` and `done` require `context=worker` and a parent ID in
+    the worker's registry row. An unproven sender or missing parent gets
+    exit 8 before any mailbox row or ASK event. A registered parent ID
+    without a pane still supports pull-only delivery.
+  - For explicit `msg`, a caller carrying worker parent or session variables
+    needs a matching worker registration. A target that matches a stale
+    inherited parent also gets exit 8 when the registry names another parent.
   - In `worker` and `pane` a contradicting `FORMATION_SELF` is overridden,
     named on stderr and tagged on each row sent
     (`identity_note: "env-claimed:<claimed id>"`), and `mailbox-send --from
