@@ -113,6 +113,14 @@ driver() { FORMATION_TEST_OPERATOR=1 "$@"; }
 # #341: a tool shell can retain another campaign's worker environment even
 # without a usable tmux context. Refuse before writing ASK state or mail.
 stale_route="export FORMATION_SELF=caller-preempt FORMATION_PARENT=lead-now FORMATION_PARENT_PANE=$pane_lead FORMATION_SESSION_ID=stale-session"
+# Help must also work from a shell without worker proof.
+for help_pane in "$pane_b" "$pane_plain"; do
+  printf '%s\n' "$stale_route" "bash '$CLI' ask --help" >"$FIXTURE/ask-help.sh"
+  run_in_pane "$help_pane" ask-help
+  [[ "$(rc_of ask-help)" == 0 ]]
+  grep -Fq 'formation ask [--next-state <state>] <question>' "$FIXTURE/ask-help.out"
+  [[ "$(rows)" == 0 && ! -s "$FORMATION_REQUEST_LOG" ]]
+done
 for verb in report ask done 'msg lead-now'; do
   label="misroute-${verb%% *}"
   refused_in "$pane_plain" "$label" "$stale_route" "unset TMUX" "bash '$CLI' $verb 'wrong campaign'"

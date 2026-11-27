@@ -2178,17 +2178,21 @@ cmd_done() {
 }
 
 cmd_ask() {
-  require_worker_parent ask || return $?
+  local ask_usage="usage: formation ask [--next-state <state>] <question>"
   local next_state="RUNNING"
   if [[ "${1:-}" == "--next-state" ]]; then
-    [[ $# -ge 3 ]] || { echo "usage: formation ask [--next-state <state>] <question>" >&2; return 2; }
+    [[ $# -ge 3 ]] || { echo "$ask_usage" >&2; return 2; }
     next_state="$2"; shift 2
   fi
+  case "${1:-}" in
+    -h|--help) echo "$ask_usage"; return 0 ;;
+  esac
   [[ "$next_state" =~ ^[A-Z][A-Z0-9_-]{0,31}$ ]] || {
     echo "invalid --next-state: use 1-32 uppercase letters/digits/_/-" >&2
     return 2
   }
-  [[ $# -ge 1 ]] || { echo "usage: formation ask [--next-state <state>] <question>" >&2; exit 2; }
+  [[ $# -ge 1 ]] || { echo "$ask_usage" >&2; return 2; }
+  require_worker_parent ask || return $?
   local from; from="$(self_id)"
   local to="$FORMATION_PARENT"
   local question="$*"
