@@ -53,6 +53,30 @@ def test_bad_stdin_is_ignored():
     assert out.returncode == 0 and not out.stdout.strip()
 
 
+def test_japanese_with_paths_identifiers_and_fences():
+    for text in [
+        "修正作業完了。対象はsrc/index.tsを確認。 Status check passed.",
+        "関数 parse_the_complete_assistant_transcript_and_validate_language を修正。",
+        "結果:\n```\nlong English text in the fence\n````\n全部通った。",
+        "``a `b` English words inside``を確認した。",
+    ]:
+        assert run({"last_assistant_message": text}) is None, text
+
+
+def test_records_without_id_are_separate_messages():
+    fd, path = tempfile.mkstemp(suffix=".jsonl")
+    with os.fdopen(fd, "w") as f:
+        f.write('{"type":"assistant","message":"oops"}\n')
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": 42}]}}) + "\n")
+        for text in ["This was a long English reply from an earlier turn of the chat.", "修正完了。全部通った。"]:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
+    try:
+        out = subprocess.run(["python3", HOOK], input=json.dumps({"transcript_path": path}), capture_output=True, text=True)
+    finally:
+        os.unlink(path)
+    assert out.returncode == 0 and not out.stdout.strip(), out
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

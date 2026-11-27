@@ -13,17 +13,48 @@ import sys
 THRESHOLD = 0.3
 MIN_LETTERS = 8  # below this there is nothing to judge
 
-FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[ \t]*$", re.M | re.S)
-INLINE = re.compile(r"`[^`\n]*`")
-URL = re.compile(r"https?://\S+|\S*/\S+|\S+\.\w{1,5}\b")
-JA = re.compile(r"[぀-ヿ㐀-鿿ｦ-ﾟ]")
+FENCE_OPEN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
+INLINE = re.compile(r"(`{1,3})[^`\n]+?\1")
+ASCII_RUN = re.compile(r"[!-~]+")
+CODE_CHARS = set("/\\_:#=<>(){}[]@$%&*+|~^`'\"")
+JA = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]")
 LATIN = re.compile(r"[A-Za-z]")
 
 
+def strip_code(text: str) -> str:
+    """Drop fenced blocks (CommonMark: close needs same char, length >= open) and table rows."""
+    out, fence = [], None
+    for line in text.splitlines():
+        m = FENCE_OPEN.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line[m.end():].strip():
+                fence = None
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        if line.lstrip().startswith("|"):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def code_like(run: str) -> bool:
+    """URL, path, file name or identifier: not prose. Linear, no regex backtracking."""
+    word = run.rstrip(".,;:!?)").lstrip("(")
+    if not word:
+        return False
+    if any(c in CODE_CHARS or c.isdigit() for c in word) or "." in word:
+        return True
+    if any(a.islower() and b.isupper() for a, b in zip(word, word[1:])):
+        return True  # camelCase
+    return len(word) >= 2 and word.isupper()  # ALLCAPS / acronyms
+
+
 def ja_ratio(text: str) -> tuple[float, int]:
-    text = FENCE.sub(" ", text)
+    text = strip_code(text)
     text = INLINE.sub(" ", text)
-    text = URL.sub(" ", text)
+    text = ASCII_RUN.sub(lambda m: " " if code_like(m.group()) else m.group(), text)
     ja = len(JA.findall(text))
     latin = len(LATIN.findall(text))
     total = ja + latin
@@ -40,10 +71,15 @@ def last_assistant_text(path: str) -> str | None:
                 continue
             if not isinstance(rec, dict) or rec.get("type") != "assistant":
                 continue
-            msg = rec.get("message") or {}
-            texts = [c.get("text", "") for c in msg.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"]
-            if msg.get("id") != last_id:
-                last_id, parts = msg.get("id"), []
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            texts = [c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str)] if isinstance(content, list) else []
+            mid = msg.get("id")
+            # A record without an id is its own message; only records sharing an id are joined.
+            if mid is None or mid != last_id:
+                last_id, parts = mid, []
             parts += texts
     return "\n".join(parts) or None
 
@@ -86,6 +122,10 @@ def self_test() -> None:
     assert ja_ratio("修正は `workers/i18n-sync/src/index.ts` と https://example.com/a/b の通り")[0] >= THRESHOLD
     assert ja_ratio("結果:\n```\nAll tests passed in the English output block\n```\n全部通った。")[0] >= THRESHOLD
     assert ja_ratio("ok")[1] < MIN_LETTERS
+    assert ja_ratio("修正作業完了。対象はsrc/index.tsを確認。 Status check passed.")[0] >= THRESHOLD
+    assert ja_ratio("関数 parse_the_complete_assistant_transcript_and_validate_language を修正。")[0] >= THRESHOLD
+    assert ja_ratio("結果:\n```\nlong English text here\n````\n全部通った。")[0] >= THRESHOLD
+    assert ja_ratio("``a `b` English words inside``を確認した。")[0] >= THRESHOLD
     print("self-test ok")
 
 
