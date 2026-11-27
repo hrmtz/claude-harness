@@ -33,6 +33,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || { python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/japanese_reply_gate.py\" 2>/dev/null || exit 0; exit 0; }; \"${HOME}/.local/bin/harness-hook\" harness-core hooks/japanese_reply_gate.py 2>/dev/null || exit 0",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "test -x \"${HOME}/.local/bin/harness-hook\" && grep -Fqx '# HARNESS_HOOK_DISPATCHER_ID=claude-harness/v1' \"${HOME}/.local/bin/harness-hook\" 2>/dev/null || exec python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_lifecycle.py\"; exec \"${HOME}/.local/bin/harness-hook\" harness-core hooks/context_lifecycle.py",
             "timeout": 5
           }
